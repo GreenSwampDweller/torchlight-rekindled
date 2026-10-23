@@ -8,10 +8,33 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace tl::core {
 namespace {
+
+NSWindow* game_window = nil;
+
+void prepare_game_window(std::map<std::string, std::string>& params) {
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    const NSRect frame = NSMakeRect(0, 0, 1280, 720);
+    game_window = [[NSWindow alloc] initWithContentRect:frame
+                                              styleMask:(NSWindowStyleMaskTitled |
+                                                         NSWindowStyleMaskClosable |
+                                                         NSWindowStyleMaskMiniaturizable |
+                                                         NSWindowStyleMaskResizable)
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+    [game_window setTitle:@"Torchlight Rekindled"];
+    [game_window center];
+    NSView* content = [[NSView alloc] initWithFrame:frame];
+    [game_window setContentView:content];
+    [game_window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    params["externalWindowHandle"] = std::to_string(reinterpret_cast<std::uintptr_t>(content));
+}
 
 constexpr std::uint16_t kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;
 constexpr std::uint16_t kStart = 0x0010, kBack = 0x0020, kL3 = 0x0040, kR3 = 0x0080;
@@ -130,6 +153,33 @@ void map_keyboard(InputState& in, float& x, float& y) {
     in.pet_stance |= key_down(Key::O);
 }
 }  // namespace
+
+void platform_window_params(std::map<std::string, std::string>& params) {
+    prepare_game_window(params);
+}
+
+void pump_events() {
+    @autoreleasepool {
+        NSEvent* event = nil;
+        while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                           untilDate:[NSDate distantPast]
+                                              inMode:NSDefaultRunLoopMode
+                                             dequeue:YES])) {
+            [NSApp sendEvent:event];
+        }
+    }
+}
+
+extern "C" void tl_macos_error_message(const char* summary, const char* detail) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        NSAlert* alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithUTF8String:summary != nullptr ? summary : "Error"];
+        alert.informativeText = [NSString stringWithUTF8String:detail != nullptr ? detail : ""];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    }
+}
 
 InputState poll_platform_input() {
     InputState in;

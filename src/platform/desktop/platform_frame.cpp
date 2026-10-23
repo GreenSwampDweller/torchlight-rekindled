@@ -6,6 +6,8 @@
 #include "platform/desktop/typed_keys.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <thread>
 
 #if !defined(_WIN32)
@@ -23,12 +25,30 @@
 #include <windows.h>
 #endif
 
+#if defined(TL_PLATFORM_MACOS)
+extern "C" void tl_macos_error_message(const char* summary, const char* detail);
+#endif
+
 namespace tl::core {
 
 // The working directory: `--game-data game_data`, `torchlight.log`, `save/`.
 const std::string& platform_data_root() {
+#if defined(TL_PLATFORM_MACOS)
+    static const std::string root = [] {
+        const char* home = std::getenv("HOME");
+        if (home == nullptr || *home == '\0') return std::string();
+        std::filesystem::path path(home);
+        path /= "Library/Application Support/Torchlight Rekindled";
+        std::error_code error;
+        std::filesystem::create_directories(path, error);
+        if (error) return std::string();
+        return path.string() + "/";
+    }();
+    return root;
+#else
     static const std::string root;
     return root;
+#endif
 }
 
 std::string platform_program_folder() {
@@ -55,7 +75,8 @@ std::string platform_program_folder() {
     return slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
 }
 
-// OGRE makes the window itself.
+#if !defined(TL_PLATFORM_MACOS)
+// OGRE makes the window itself on other desktop platforms.
 void platform_window_params(std::map<std::string, std::string>& params) {
     (void)params;
 #if defined(_WIN32)
@@ -75,6 +96,7 @@ void platform_window_params(std::map<std::string, std::string>& params) {
     if (set_context == nullptr || set_context(per_monitor_v2) == 0) SetProcessDPIAware();
 #endif
 }
+#endif
 
 // In the log and on stderr, and on Windows in a message box: a player who
 // double-clicked the program has no terminal to read.
@@ -84,9 +106,12 @@ void platform_error_message(const std::string& summary, const std::string& detai
 #if defined(_WIN32)
     const std::string text = summary + "\n\n" + detail;
     MessageBoxA(nullptr, text.c_str(), "Torchlight Rekindled", MB_OK | MB_ICONERROR);
+#elif defined(TL_PLATFORM_MACOS)
+    tl_macos_error_message(summary.c_str(), detail.c_str());
 #endif
 }
 
+#if !defined(TL_PLATFORM_MACOS)
 void pump_events() {
     note_events_pumped();
 #if defined(_WIN32)
@@ -100,6 +125,7 @@ void pump_events() {
     // X11 and Cocoa are pumped inside OGRE's own GLX/Cocoa window code, so
     // there is nothing to do on those platforms.
 }
+#endif
 
 // A desktop's display rate is the player's (vsync follows it).
 void platform_set_frame_rate(float fps) { (void)fps; }

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -679,6 +680,22 @@ bool player_folder() { return is_regular_file("pak.zip") || is_regular_file("Pak
 // (scripts/package_windows.py) - the program beside its own pak.zip, music/
 // and RTShaderLib/, laid out as the devices lay theirs.
 void apply_desktop_defaults(Options& o) {
+#if defined(TL_PLATFORM_MACOS)
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        o.game_data = std::string(home) + "/Documents/Torchlight Rekindled/";
+        const std::string console_ui = o.game_data + "console_ui";
+        if (is_directory(console_ui)) o.console_ui = console_ui;
+    }
+    const std::string resources = tl::core::platform_program_folder() + "../Resources/";
+    const std::string bundled_ogre_media = resources + "OGRE/Media/";
+    if (is_directory(bundled_ogre_media + "RTShaderLib")) o.ogre_media = bundled_ogre_media;
+    if (!o.game_data.empty()) {
+        std::error_code error;
+        std::filesystem::create_directories(o.game_data, error);
+    }
+    return;
+#endif
     o.game_data = "game_data";
     if (!player_folder()) return;
     o.game_data = "./";
@@ -1297,6 +1314,8 @@ bool device_files_present(const Options& opts) {
 bool prepare_run(const Options& opts, tl::core::AssetIndex& assets) {
     apply_input_options(opts);
 #if defined(TL_DEVICE_BUILD)
+    const bool check_files = true;
+#elif defined(TL_PLATFORM_MACOS)
     const bool check_files = true;
 #else
     const bool check_files = player_folder();
