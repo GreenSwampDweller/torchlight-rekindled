@@ -6,6 +6,7 @@
 #include "core/audio.h"
 #include "core/run_config.h"
 #include "core/settings_menu.h"
+#include "core/touch_pad.h"
 
 #include <cmath>
 #include <fstream>
@@ -43,9 +44,7 @@ void Renderer::Impl::create_options_screens() {
     // DIVERGENCE (platform): no storage device to pick on a Switch.
     settings_menu.storage_hidden = true;
 #if defined(TL_PLATFORM_IOS)
-    // DIVERGENCE (platform): on iOS the Storage row is the Text Size setting.
     settings_menu.storage_hidden = false;
-    settings_menu.text_size_row = true;
 #endif
     settings_menu.update_audio_levels = [](const tl::core::AudioLevels& levels) {
         const tl::core::AudioGains gains = tl::core::audio_gains(levels);
@@ -62,6 +61,13 @@ void Renderer::Impl::create_options_screens() {
         settings_screen.set_hidden(
             tl::core::settings_control_window(tl::core::SettingsControl::Storage),
             settings_menu.storage_hidden);
+#if defined(TL_PLATFORM_IOS)
+        settings_screen.set_hidden("PickerLeftArrow", false);
+        settings_screen.set_hidden("PickerRightArrow", false);
+#else
+        settings_screen.set_hidden("PickerLeftArrow", true);
+        settings_screen.set_hidden("PickerRightArrow", true);
+#endif
     }
 }
 
@@ -188,8 +194,76 @@ void Renderer::Impl::refresh_settings_menu() {
     settings_screen.set_checked("ShowBlood", settings_menu.show_blood);
 #if defined(TL_PLATFORM_IOS)
     static const char* const kTextSizeNames[] = {"Small", "Medium", "Large"};
+    static const char* const kSensitivityNames[] = {"Slow", "Normal", "Fast"};
+    static const char* const kPitchRangeNames[] = {"Narrow", "Normal", "Wide"};
+    static const char* const kPitchDirectionNames[] = {"Normal", "Inverted"};
+    static const char* const kTouchSizeNames[] = {"Small", "Normal", "Large"};
+    static const char* const kTouchOpacityNames[] = {"Low", "Normal", "High"};
+    static const char* const kTouchStyleNames[] = {"Classic", "Neon", "Solid"};
+    static const char* const kTouchLayoutNames[] = {"Two thumbs", "Right hand", "Left hand"};
     const int text_size = std::clamp(game_settings().text_size, 0, 2);
-    settings_screen.set_caption("Text24", std::string("Text Size: ") + kTextSizeNames[text_size]);
+    static constexpr float kTouchSizes[] = {0.85f, 1.0f, 1.2f};
+    static constexpr float kTouchOpacities[] = {0.7f, 1.0f, 1.35f};
+    tl::core::touch_pad().set_visual_options(
+        kTouchSizes[std::clamp(game_settings().touch_control_size, 0, 2)],
+        kTouchOpacities[std::clamp(game_settings().touch_control_opacity, 0, 2)],
+        std::clamp(game_settings().touch_control_style, 0, 2),
+        std::clamp(game_settings().touch_control_layout, 0, 2));
+    tl::core::touch_pad().set_layout_offsets(game_settings().touch_control_offsets);
+    tl::core::touch_pad().set_edit_mode(game_settings().touch_control_edit);
+    game_hud.set_compact(game_settings().compact_hud);
+    std::string picker_caption;
+    switch (settings_menu.ios_picker) {
+        case 1:
+            picker_caption = std::string("Camera Speed: ") +
+                             kSensitivityNames[
+                                 std::clamp(game_settings().camera_sensitivity, 0, 2)];
+            break;
+        case 2:
+            picker_caption = std::string("Camera Tilt: ") +
+                             kPitchRangeNames[
+                                 std::clamp(game_settings().camera_pitch_range, 0, 2)];
+            break;
+        case 3:
+            picker_caption = std::string("Pinch Zoom: ") +
+                             kSensitivityNames[
+                                 std::clamp(game_settings().camera_zoom_sensitivity, 0, 2)];
+            break;
+        case 4:
+            picker_caption = std::string("Tilt Direction: ") +
+                             kPitchDirectionNames[game_settings().camera_invert_pitch ? 1 : 0];
+            break;
+        case 5:
+            picker_caption = std::string("Touch Size: ") +
+                             kTouchSizeNames[std::clamp(game_settings().touch_control_size, 0, 2)];
+            break;
+        case 6:
+            picker_caption = std::string("Touch Opacity: ") +
+                             kTouchOpacityNames[
+                                 std::clamp(game_settings().touch_control_opacity, 0, 2)];
+            break;
+        case 7:
+            picker_caption = std::string("Touch Style: ") +
+                             kTouchStyleNames[std::clamp(game_settings().touch_control_style, 0, 2)];
+            break;
+        case 8:
+            picker_caption = std::string("Touch Layout: ") +
+                             kTouchLayoutNames[
+                                 std::clamp(game_settings().touch_control_layout, 0, 2)];
+            break;
+        case 9:
+            picker_caption = std::string("Compact HUD: ") +
+                             (game_settings().compact_hud ? "On" : "Off");
+            break;
+        case 10:
+            picker_caption = std::string("Move Controls: ") +
+                             (game_settings().touch_control_edit ? "On" : "Off");
+            break;
+        default:
+            picker_caption = std::string("Text Size: ") + kTextSizeNames[text_size];
+            break;
+    }
+    settings_screen.set_caption("Text24", picker_caption);
     const float previous_scale = ui_text_scale();
     set_ui_text_scale(ui_text_size_scale(text_size));
     if (previous_scale != ui_text_scale()) {

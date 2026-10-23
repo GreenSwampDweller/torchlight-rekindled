@@ -689,13 +689,21 @@ def options():
                 **at(47, 8, w, 23)),
         ], widget=widget, **at(x, y))
 
-    def wide_button(name, widget, words, y):
-        return obj("Button", name, [
-            obj("Text", "Text24", TEXT=words, **{"HORIZONTAL ALIGN": "CENTER",
-                                                "VERTICAL ALIGN": "CENTER",
-                                                "WORD WRAP": True},
-                **at(0, -3, 210, 48, "CENTER", "CENTER")),
-        ], widget=widget, NORMAL="ButtonStandardRed", HOVER="ButtonStandardRedHighlight",
+    def wide_button(name, widget, words, y, arrows=False):
+        children = [obj("Text", "Text24", TEXT=words, **{"HORIZONTAL ALIGN": "CENTER",
+                                                          "VERTICAL ALIGN": "CENTER",
+                                                          "WORD WRAP": True},
+                        **at(30 if arrows else 0, -3, 160 if arrows else 210, 48,
+                            "CENTER", "CENTER"))]
+        if arrows:
+            children += [
+                obj("Image", "PickerLeftArrow", widget="PickerLeftArrow",
+                    IMAGE="decor_arrow_left", **at(12, 11, 20, 27)),
+                obj("Image", "PickerRightArrow", widget="PickerRightArrow",
+                    IMAGE="decor_arrow_right", **at(188, 11, 20, 27)),
+            ]
+        return obj("Button", name, children, widget=widget,
+            NORMAL="ButtonStandardRed", HOVER="ButtonStandardRedHighlight",
             CLICKED="ButtonStandardRedHighlight", **at(0, y, 220, 51))
 
     legend = obj("CEGUI Object", "InspectAButton", [
@@ -742,7 +750,7 @@ def options():
                            "Brightness", 0, 138, 86),
                     slider("contras slider_clone", "Contrast", "sliderTabContrast", "Contrast",
                            0, 186, 86),
-                    wide_button("Button23", "Storage", "Set Storage Device", 224),
+                    wide_button("Button23", "Storage", "Set Storage Device", 224, arrows=True),
                     wide_button("Button23_clone", "Defaults", "Reset Defaults", 276),
                 ], **at(50, 204, 720, 338)),
                 legend,

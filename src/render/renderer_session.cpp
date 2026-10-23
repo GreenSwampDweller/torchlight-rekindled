@@ -8,8 +8,62 @@
 #include <OgrePixelFormat.h>
 
 #include <chrono>
+#include <cerrno>
+#include <cstdio>
+#include <string>
+#include <sys/stat.h>
 
 namespace tl::render {
+namespace {
+
+bool move_save_file(const std::string& from, const std::string& to) {
+    std::remove(to.c_str());
+    return std::rename(from.c_str(), to.c_str()) == 0;
+}
+
+bool rotate_save_backups(const std::string& path, const std::string& temporary) {
+    const std::string backup1 = path + ".bak1";
+    const std::string backup2 = path + ".bak2";
+    const std::string backup3 = path + ".bak3";
+    std::remove(backup3.c_str());
+    if (std::rename(backup2.c_str(), backup3.c_str()) != 0 && errno != ENOENT) return false;
+    if (std::rename(backup1.c_str(), backup2.c_str()) != 0 && errno != ENOENT) return false;
+    const bool had_primary = std::rename(path.c_str(), backup1.c_str()) == 0;
+    if (!had_primary && errno != ENOENT) return false;
+    if (std::rename(temporary.c_str(), path.c_str()) == 0) return true;
+    if (had_primary) move_save_file(backup1, path);
+    return false;
+}
+
+void restore_saved_payload(const std::string& path, const std::string& backup,
+                           const std::vector<uint8_t>& bytes) {
+    struct stat info;
+    if (stat(path.c_str(), &info) == 0) {
+        std::string damaged = path + ".corrupt";
+        for (unsigned i = 1; stat(damaged.c_str(), &info) == 0; ++i)
+            damaged = path + ".corrupt." + std::to_string(i);
+        if (std::rename(path.c_str(), damaged.c_str()) != 0) {
+            TL_LOG_WARN("save recovery: could not preserve damaged file '%s'", path.c_str());
+            return;
+        }
+        TL_LOG_WARN("save recovery: preserved damaged file as '%s'", damaged.c_str());
+    }
+    const std::string temporary = path + ".restore.tmp";
+    std::FILE* out = std::fopen(temporary.c_str(), "wb");
+    if (out == nullptr) return;
+    const bool written = std::fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
+    const bool closed = std::fclose(out) == 0;
+    if (!written || !closed || std::rename(temporary.c_str(), path.c_str()) != 0) {
+        std::remove(temporary.c_str());
+        TL_LOG_WARN("save recovery: could not restore '%s' from '%s'", path.c_str(),
+                    backup.c_str());
+        return;
+    }
+    TL_LOG_WARN("save recovery: restored '%s' from '%s'", path.c_str(), backup.c_str());
+}
+
+}  // namespace
+
 bool Renderer::place_player_at(float x, float z, const float* feet_if_no_ground) {
     Impl& m = *impl_;
     if (!m.player_control) {
@@ -2131,18 +2185,37 @@ void Renderer::Impl::load_shared_stash(const std::string& directory) {
     tl::core::SharedStash* stash = config.shared_stash;
     if (stash == nullptr || !stash->begin_load()) return;
     const std::string path = directory + stash->file_name();
-    std::FILE* in = std::fopen(path.c_str(), "rb");
-    if (in == nullptr) return;
-    std::vector<uint8_t> bytes;
-    uint8_t buffer[4096];
-    size_t got = 0;
-    while ((got = std::fread(buffer, 1, sizeof(buffer), in)) > 0) {
-        bytes.insert(bytes.end(), buffer, buffer + got);
-    }
-    std::fclose(in);
     std::vector<tl::formats::ItemSaveState> saved;
-    if (!tl::formats::read_shared_stash_file(bytes.data(), bytes.size(), saved)) {
-        TL_LOG_WARN("shared stash: '%s' could not be read", path.c_str());
+    std::vector<uint8_t> bytes;
+    std::string recovered_from;
+    auto read_stash = [](const std::string& candidate,
+                         std::vector<uint8_t>& contents,
+                         std::vector<tl::formats::ItemSaveState>& items) {
+        std::FILE* in = std::fopen(candidate.c_str(), "rb");
+        if (in == nullptr) return false;
+        contents.clear();
+        uint8_t buffer[4096];
+        size_t got = 0;
+        while ((got = std::fread(buffer, 1, sizeof(buffer), in)) > 0)
+            contents.insert(contents.end(), buffer, buffer + got);
+        const bool ok = std::ferror(in) == 0;
+        std::fclose(in);
+        return ok && tl::formats::read_shared_stash_file(contents.data(), contents.size(), items);
+    };
+    if (!read_stash(path, bytes, saved)) {
+        for (unsigned i = 1; i <= 3; ++i) {
+            const std::string backup = path + ".bak" + std::to_string(i);
+            std::vector<tl::formats::ItemSaveState> candidate_items;
+            if (!read_stash(backup, bytes, candidate_items)) continue;
+            saved = std::move(candidate_items);
+            recovered_from = backup;
+            break;
+        }
+        if (recovered_from.empty()) {
+            TL_LOG_WARN("shared stash: '%s' could not be read", path.c_str());
+            return;
+        }
+        restore_saved_payload(path, recovered_from, bytes);
     }
     // Each item into its saved slot (`pickupEquipment(item, +0x58)`); one that
     // does not fit is destroyed.
@@ -2169,13 +2242,18 @@ void Renderer::Impl::save_shared_stash(const std::string& directory) {
     }
     const std::vector<uint8_t> bytes = tl::formats::write_shared_stash_file(saved);
     const std::string path = directory + stash->file_name();
-    std::FILE* out = std::fopen(path.c_str(), "wb");
+    const std::string temporary = path + ".tmp";
+    std::FILE* out = std::fopen(temporary.c_str(), "wb");
     if (out == nullptr) {
         TL_LOG_WARN("shared stash: could not write '%s'", path.c_str());
         return;
     }
-    std::fwrite(bytes.data(), 1, bytes.size(), out);
-    std::fclose(out);
+    const bool written = std::fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
+    const bool closed = std::fclose(out) == 0;
+    if (!written || !closed || !rotate_save_backups(path, temporary)) {
+        std::remove(temporary.c_str());
+        TL_LOG_WARN("shared stash: could not safely replace '%s'", path.c_str());
+    }
 }
 
 void Renderer::load_shared_stash(const std::string& directory) {
@@ -2342,27 +2420,19 @@ bool Renderer::Impl::save_character(const std::string& path, bool force) {
 
     const std::vector<uint8_t> bytes = tl::formats::write_character_file(file);
 
-    // `save.tmp` and `backup.tmp` beside the save; then remove(backup),
-    // rename(save, backup), rename(tmp, save).
-    const size_t slash = path.find_last_of("/\\");
-    const std::string directory =
-        slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
-    const std::string temporary = directory + "save.tmp";
-    const std::string backup = directory + "backup.tmp";
+    const std::string temporary = path + ".tmp";
     std::FILE* out = std::fopen(temporary.c_str(), "wb");
     if (out == nullptr) {
         TL_LOG_WARN("Unable to save character to : %s", path.c_str());
         return false;
     }
     const bool written = std::fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
-    std::fclose(out);
-    if (!written) {
+    const bool closed = std::fclose(out) == 0;
+    if (!written || !closed || !rotate_save_backups(path, temporary)) {
+        std::remove(temporary.c_str());
         TL_LOG_WARN("Unable to save character to : %s", path.c_str());
         return false;
     }
-    std::remove(backup.c_str());
-    std::rename(path.c_str(), backup.c_str());
-    std::rename(temporary.c_str(), path.c_str());
     TL_LOG_INFO("Saving character to :%s (%zu bytes, %zu level(s) remembered)", path.c_str(),
                 bytes.size(), file.levels.size());
     return true;

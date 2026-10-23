@@ -2356,6 +2356,7 @@ struct Renderer::Impl : tl::core::World {
     /// The HUD and the minimap, out of the way of a scene or a conversation.
     void step_hud_visibility();
     bool hud_hidden_for_scene = false;
+    bool controller_connected = false;
     bool hud_hidden_game_hud = false;
     bool hud_hidden_automap = false;
 

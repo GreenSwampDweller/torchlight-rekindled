@@ -18,6 +18,11 @@ std::string save_directory();
 
 bool read_whole_file(const std::string& path, std::vector<uint8_t>& bytes);
 
+// Read a character save, falling back to the newest valid rotating backup and
+// restoring it to the primary path when the primary file is damaged.
+bool read_character_with_backup(const std::string& path,
+                                tl::formats::CharacterFile& file);
+
 // The settings the Options screen keeps (`CSettings`; the console's file is on
 // its storage device, this one beside the saves). A missing file leaves the
 // defaults.

@@ -146,6 +146,10 @@ void InventoryMenu::lay_out_tooltips() {
     const auto line_height = [&](float points) {
         return points * points_to_char_pixels() * scale_;
     };
+    // Keep long item names inside a screen-sized tooltip frame. The authored
+    // layout grows to the full name width and can push the frame off-screen
+    // when the iOS large-text setting is active.
+    const float max_frame_wide = across * 0.84f;
     const auto colour_of = [](const tl::core::LabelColour& c) {
         return Ogre::ColourValue(c.r, c.g, c.b, c.a);
     };
@@ -161,6 +165,10 @@ void InventoryMenu::lay_out_tooltips() {
         const TipFonts sizes = index == 0 ? kMainFonts : kCompareFonts;
         TipBuilt& out = built[index];
         float widest = 160.0f * scale_;  // `scaledY(160.0)`, the least width
+        const float grow = std::max(0.0f, 52.0f * scale_ - 52.0f);
+        const float max_window_wide = std::max(120.0f * scale_, max_frame_wide - 52.0f);
+        const float max_text_wide = std::max(
+            80.0f * scale_, max_window_wide - grow - 64.0f * scale_);
 
         // One window's text, a span per colour run of each line; returns its
         // height. `wrap` is the width a `WordWrapLeftAligned` window breaks at.
@@ -200,8 +208,9 @@ void InventoryMenu::lay_out_tooltips() {
         // `ItemType` at 10 and `ItemName` at 26, `BigDPS` at 50, as the layout
         // authors them; the rest runs down from there.
         const float left = 20.0f * scale_;
-        add_block(tip.type, 0.0f, 10.0f * scale_, sizes.body, 2.0f, /*right=*/true, false, 0.0f);
-        add_block(tip.name, left, 26.0f * scale_, sizes.name, 2.0f, false, false, 0.0f);
+        add_block(tip.type, 0.0f, 10.0f * scale_, sizes.body, 2.0f, /*right=*/true, false,
+                  max_text_wide + 20.0f * scale_);
+        add_block(tip.name, left, 26.0f * scale_, sizes.name, 2.0f, false, false, max_text_wide);
         float y = 50.0f * scale_;
         if (tip.big.shown) {
             const Ogre::FontPtr& face = have_display ? display_font : font;
@@ -212,29 +221,30 @@ void InventoryMenu::lay_out_tooltips() {
             if (tip.big_label.shown) {
                 add_block(tip.big_label, left + big_wide + 4.0f * scale_,
                           y + (line_height(sizes.big) - line_height(sizes.body)), sizes.body, 2.0f,
-                          false, false, 0.0f);
+                          false, false, max_text_wide);
             }
             y += tall + 4.0f * scale_;
         }
         if (tip.stats.shown && !tip.stats.text.empty()) {
             y +=
-                add_block(tip.stats, left, y, sizes.body, 2.0f, false, false, 0.0f) + 4.0f * scale_;
+                add_block(tip.stats, left, y, sizes.body, 2.0f, false, false, max_text_wide) +
+                4.0f * scale_;
         }
         if (tip.effects.shown) {
             y += 4.0f * scale_;
-            y += add_block(tip.effects, left, y, sizes.body, 0.0f, false, false, 0.0f) +
+            y += add_block(tip.effects, left, y, sizes.body, 0.0f, false, false, max_text_wide) +
                  4.0f * scale_;
         }
         y += 6.0f * scale_;
         for (const tl::core::TooltipText& requirement : tip.requirements) {
             if (!requirement.shown) continue;
-            y += add_block(requirement, left, y, sizes.body, 2.0f, false, false, 0.0f) +
+            y += add_block(requirement, left, y, sizes.body, 2.0f, false, false, max_text_wide) +
                  4.0f * scale_;
         }
         if (tip.description.shown) {
             // `WordWrapLeftAligned`, to the width the lines above settled.
             y += add_block(tip.description, left, y, sizes.body, 2.0f, false, false,
-                           widest - 40.0f * scale_) +
+                           std::min(widest - 64.0f * scale_, max_text_wide)) +
                  4.0f * scale_;
         }
         if (tip.price.shown) {
@@ -246,9 +256,18 @@ void InventoryMenu::lay_out_tooltips() {
         // The last `setSize`: the widest line
         // and the running height, at least `scaledY(100.0)`, each grown by
         // `scaledY(52.0) - 52` when that is above 0.
-        const float grow = std::max(0.0f, 52.0f * scale_ - 52.0f);
-        out.wide = widest + grow;
-        out.tall = std::max(100.0f * scale_, y) + grow;
+        const float natural_height = std::max(100.0f * scale_, y);
+        const float height_room = std::max(
+            100.0f * scale_, down * 0.84f - grow - 52.0f);
+        const float height_scale = std::min(1.0f, height_room / natural_height);
+        if (height_scale < 1.0f) {
+            for (TipSpan& span : out.spans) {
+                span.y *= height_scale;
+                span.points *= height_scale;
+            }
+        }
+        out.wide = std::min(widest + grow, max_window_wide);
+        out.tall = natural_height * height_scale + grow;
     }
 
     // from the selected row's left and top.

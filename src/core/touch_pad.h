@@ -38,7 +38,11 @@ public:
         std::uint32_t held = 0;     ///< buttons down now
         std::uint32_t pressed = 0;  ///< pressed since the last take(), held or not
         float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;  ///< -1..1, y down
-        float pinch_dolly = 0.0f;  ///< signed dolly delta accumulated since the last take()
+        float pinch_dolly = 0.0f;   ///< signed dolly delta accumulated since the last take()
+        bool layout_changed = false;
+        std::array<float, 32> layout_offsets{}; ///< normalized per-control x/y adjustments
+        bool tap = false;
+        float tap_x = 0.0f, tap_y = 0.0f;
     };
 
     /// One thing to draw: a disc at a centre, in window pixels.
@@ -58,6 +62,14 @@ public:
     void set_screen(float width, float height);
     float width() const { return width_; }
     float height() const { return height_; }
+    /// Scale touch targets and their drawn discs; alpha scales their visibility.
+    void set_visual_options(float scale, float opacity, int style = 0, int layout = 0);
+    float opacity() const { return opacity_; }
+    int style() const { return style_; }
+    int layout_mode() const { return layout_mode_; }
+    void set_edit_mode(bool enabled) { edit_mode_ = enabled; }
+    bool edit_mode() const { return edit_mode_; }
+    void set_layout_offsets(const std::array<float, 32>& offsets);
 
     void touch_down(int id, float x, float y);
     void touch_move(int id, float x, float y);
@@ -95,6 +107,8 @@ private:
         int control = -1;
         float base_x = 0.0f, base_y = 0.0f;  ///< a stick's centre while held
         float x = 0.0f, y = 0.0f;
+        float start_x = 0.0f, start_y = 0.0f;
+        bool editing = false;
     };
 
     void layout();
@@ -107,6 +121,13 @@ private:
     float dpad_arm_ = 0.0f, dpad_button_ = 0.0f;
     float pinch_distance_ = 0.0f;
     float pinch_dolly_ = 0.0f;
+    float control_scale_ = 1.0f;
+    float opacity_ = 1.0f;
+    int style_ = 0;
+    int layout_mode_ = 0;
+    bool edit_mode_ = false;
+    bool layout_change_pending_ = false;
+    std::array<float, 32> layout_offsets_{};
     std::vector<Control> controls_;
     std::array<Touch, 10> touches_{};
     State state_;

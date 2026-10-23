@@ -28,7 +28,8 @@ private:
     std::vector<Ogre::PanelOverlayElement*> discs_;
     std::vector<Ogre::TextAreaOverlayElement*> labels_;  ///< null where a disc has none
     float built_width_ = 0.0f, built_height_ = 0.0f;
-    float built_text_scale_ = 0.0f;
+    float built_text_scale_ = 0.0f, built_opacity_ = 0.0f;
+    int built_style_ = -1;
 };
 
 }  // namespace tl::render

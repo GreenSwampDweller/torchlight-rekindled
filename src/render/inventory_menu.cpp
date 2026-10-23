@@ -2263,6 +2263,62 @@ void InventoryMenu::prev_menu_tab() {
 // PORT: a headless verification step: a bag slot selected at the next update.
 void InventoryMenu::select_slot(size_t slot) { pending_select_slot_ = static_cast<int>(slot); }
 
+bool InventoryMenu::touch_select_at(float x, float y) {
+    if (!visible_ || menu_mode_ != MenuMode::Inventory || select_open_ || pet_commands_open_ ||
+        spell_remove_open_) return false;
+
+    const std::string* prefix = nullptr;
+    const std::vector<size_t>* rows = nullptr;
+    int selected = 0;
+    int tab = 0;
+    enum class Target { Bag, Pet, Vendor } target = Target::Bag;
+    static const std::string bag_prefix = "inv/";
+    static const std::string pet_prefix = "pet/";
+    static const std::string vendor_prefix = "vendor/";
+    if (vendor_ != VendorScreen::None) {
+        prefix = &vendor_prefix;
+        rows = &vendor_rows_;
+        selected = vendor_selected_;
+        tab = vendor_tab_;
+        target = Target::Vendor;
+    } else if (focus_ == Tray::Pet && pet_tray_available_) {
+        prefix = &pet_prefix;
+        rows = &pet_rows_;
+        selected = pet_selected_;
+        tab = pet_tab_;
+        target = Target::Pet;
+    } else {
+        prefix = &bag_prefix;
+        rows = &filtered_indices_;
+        selected = selected_index_;
+        tab = current_tab_;
+    }
+    if (prefix == nullptr || rows == nullptr || rows->empty()) return false;
+    const int scroll = tray_scroll(*prefix, tab, selected, rows->size());
+    for (int visible_row = 0; visible_row < 5; ++visible_row) {
+        const int row = scroll + visible_row;
+        if (row < 0 || static_cast<size_t>(row) >= rows->size()) continue;
+        const Node* node = find_node_by_widget(*prefix + "ItemTray" + std::to_string(visible_row));
+        if (node == nullptr || node->hidden) continue;
+        const float left = node->left * static_cast<float>(width_);
+        const float top = node->top * static_cast<float>(height_);
+        const float right = left + node->width * static_cast<float>(width_);
+        const float bottom = top + node->height * static_cast<float>(height_);
+        if (x < left || x > right || y < top || y > bottom) continue;
+        if (target == Target::Bag) {
+            select_slot((*rows)[static_cast<size_t>(row)]);
+        } else if (target == Target::Pet) {
+            focus_ = Tray::Pet;
+            pet_selected_ = row;
+        } else {
+            focus_ = Tray::Vendor;
+            vendor_selected_ = row;
+        }
+        return true;
+    }
+    return false;
+}
+
 void InventoryMenu::set_current_tab(int tab) {
     current_tab_ = std::clamp(tab, 0, tl::core::kInventoryFilterCount - 1);
     selected_index_ = 0;

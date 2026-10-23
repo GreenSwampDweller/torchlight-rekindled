@@ -1,4 +1,9 @@
 #import <UIKit/UIKit.h>
+#import <GameController/GCController.h>
+#import <GameController/GCControllerButtonInput.h>
+#import <GameController/GCControllerAxisInput.h>
+#import <GameController/GCControllerDirectionPad.h>
+#import <GameController/GCExtendedGamepad.h>
 #import "OgreEAGL2View.h"
 #import "OgreEAGL2ViewController.h"
 #import <atomic>
@@ -9,6 +14,7 @@
 #import <algorithm>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include "core/touch_pad.h"
 #include "platform/ios/ios_app.h"
 
@@ -17,6 +23,52 @@ static std::atomic<bool> g_active{true};
 static std::atomic<bool> g_engine_started{false};
 static UIWindow* g_render_window = nil;
 static std::string g_program_folder;
+
+struct IOSControllerState {
+    float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
+    uint32_t buttons = 0;
+    bool connected = false;
+};
+static std::mutex g_controller_mutex;
+static IOSControllerState g_controller_state;
+
+static void publishController(GCExtendedGamepad* gamepad) {
+    if (gamepad == nil) return;
+    uint32_t buttons = 0;
+    using tl::core::TouchPad;
+    if (gamepad.buttonA.isPressed) buttons |= TouchPad::kA;
+    if (gamepad.buttonB.isPressed) buttons |= TouchPad::kB;
+    if (gamepad.buttonX.isPressed) buttons |= TouchPad::kX;
+    if (gamepad.buttonY.isPressed) buttons |= TouchPad::kY;
+    if (gamepad.leftShoulder.isPressed) buttons |= TouchPad::kL1;
+    if (gamepad.rightShoulder.isPressed) buttons |= TouchPad::kR1;
+    if (gamepad.leftTrigger.value >= 0.5f) buttons |= TouchPad::kL2;
+    if (gamepad.rightTrigger.value >= 0.5f) buttons |= TouchPad::kR2;
+    if (gamepad.leftThumbstickButton.isPressed) buttons |= TouchPad::kThumbL;
+    if (gamepad.rightThumbstickButton.isPressed) buttons |= TouchPad::kThumbR;
+    if (gamepad.buttonMenu.isPressed) buttons |= TouchPad::kStart;
+    if (gamepad.buttonOptions.isPressed) buttons |= TouchPad::kSelect;
+    if (gamepad.dpad.up.isPressed) buttons |= TouchPad::kUp;
+    if (gamepad.dpad.down.isPressed) buttons |= TouchPad::kDown;
+    if (gamepad.dpad.left.isPressed) buttons |= TouchPad::kLeft;
+    if (gamepad.dpad.right.isPressed) buttons |= TouchPad::kRight;
+    std::lock_guard<std::mutex> lock(g_controller_mutex);
+    g_controller_state = {gamepad.leftThumbstick.xAxis.value,
+                          gamepad.leftThumbstick.yAxis.value,
+                          gamepad.rightThumbstick.xAxis.value,
+                          gamepad.rightThumbstick.yAxis.value, buttons, true};
+}
+
+extern "C" void tl_ios_read_controller(float* left_x, float* left_y, float* right_x,
+                                          float* right_y, uint32_t* buttons, bool* connected) {
+    std::lock_guard<std::mutex> lock(g_controller_mutex);
+    if (left_x) *left_x = g_controller_state.lx;
+    if (left_y) *left_y = g_controller_state.ly;
+    if (right_x) *right_x = g_controller_state.rx;
+    if (right_y) *right_y = g_controller_state.ry;
+    if (buttons) *buttons = g_controller_state.buttons;
+    if (connected) *connected = g_controller_state.connected;
+}
 
 extern "C" const char* tl_ios_program_folder(void) {
     @autoreleasepool {
@@ -213,7 +265,36 @@ static std::vector<std::string> discoverModMediaFolders(const std::string& docum
 @implementation TorchlightAppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)options {
     (void)application; (void)options;
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self selector:@selector(controllerConnected:)
+                   name:GCControllerDidConnectNotification object:nil];
+    [center addObserver:self selector:@selector(controllerDisconnected:)
+                   name:GCControllerDidDisconnectNotification object:nil];
+    [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
+    for (GCController* controller in GCController.controllers) [self attachController:controller];
     return YES;
+}
+- (void)attachController:(GCController*)controller {
+    GCExtendedGamepad* gamepad = controller.extendedGamepad;
+    if (gamepad == nil) return;
+    gamepad.valueChangedHandler = ^(GCExtendedGamepad* changed, GCControllerElement* element) {
+        (void)element;
+        publishController(changed);
+    };
+    publishController(gamepad);
+    tl::core::touch_pad().set_visible(false);
+    tl::core::touch_pad().release_all();
+}
+- (void)controllerConnected:(NSNotification*)notification {
+    GCController* controller = (GCController*)notification.object;
+    [self attachController:controller];
+}
+- (void)controllerDisconnected:(NSNotification*)notification {
+    (void)notification;
+    std::lock_guard<std::mutex> lock(g_controller_mutex);
+    g_controller_state = IOSControllerState{};
+    tl::core::touch_pad().set_visible(false);
+    tl::core::touch_pad().release_all();
 }
 - (UISceneConfiguration*)application:(UIApplication*)application configurationForConnectingSceneSession:(UISceneSession*)connectingSceneSession options:(UISceneConnectionOptions*)options {
     (void)application; (void)connectingSceneSession; (void)options;

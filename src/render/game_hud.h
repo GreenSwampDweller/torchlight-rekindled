@@ -141,6 +141,8 @@ public:
 
     /// Re-lay-out for a new viewport size.
     void resize(unsigned width, unsigned height);
+    /// Scale the authored HUD footprint for small touch screens.
+    void set_compact(bool compact);
 
     /// This frame's floor labels, drawn over the scene and under the HUD. The
     /// last one given is drawn on top (the highlighted label's `moveToFront`);
@@ -275,6 +277,8 @@ private:
     unsigned width_ = 0;
     unsigned height_ = 0;
     float scale_ = 1.0f;
+    float compact_scale_ = 1.0f;
+    bool compact_ = false;
     bool built_ = false;
     bool visible_ = false;
 };

@@ -209,6 +209,7 @@ is bundled with a local build, the app copies `pak.zip`, `music/`, and
 `console_ui/` into its Documents folder on first launch. Otherwise, in Files,
 open **On My iPhone/iPad → Torchlight Rekindled** and copy those folders there.
 The app reads and writes its saves and settings in that same Documents folder.
+Character saves and the shared stash keep three rotating backups (`.bak1` through `.bak3`). If a save is damaged, the game restores the newest valid backup and keeps the damaged file alongside it for recovery.
 Touch controls appear on screen when first touched.
 On iOS, the right stick rotates the camera horizontally and adjusts its pitch vertically; pinch
 with two fingers anywhere in the play area to zoom. On the other platforms the camera is the console's
@@ -216,6 +217,21 @@ and the right stick zooms. `free_camera=1` in `config.txt` (or **Debug > FREE CA
 `debug=1`) turns on the free camera on any platform: the right stick across turns it, a pinch
 zooms on a touch screen (iOS, Android, the Switch in handheld), and R3 puts the view back
 (otherwise R3 still toggles the map). `free_camera=0` gives iOS the console's camera too.
+On controller platforms, vertical stick still
+zooms, and holding LB while moving it vertically adjusts pitch.
+In Options, focus the Text Size row and press A to cycle through Text Size, Camera Speed,
+Camera Tilt, Pinch Zoom, Tilt Direction, Touch Size, Touch Opacity, Touch Style, Touch Layout,
+Compact HUD, and Move Controls. Use left/right to change the selected value; the choices save with the other
+settings. Touch Style offers Classic, Neon, and Solid button designs. Touch Layout offers
+two-thumb, right-hand, and left-hand presets, and the face-button cluster includes a larger Use
+target for interaction and confirmation. Enable Move Controls, close Options, then drag controls
+to reposition them; each position saves when you lift your finger. In inventory screens, tap a
+visible bag, pet, or vendor row to select it, then use the Use control to equip, transfer, or buy.
+
+iOS reads extended Bluetooth controllers through Apple's Game Controller framework. Pair the
+controller in iOS Settings, then launch or resume Torchlight; connecting a controller hides the
+touch overlay and game HUD to free screen space. Disconnecting returns the game to touch-first
+controls.
 
 The iOS build supports unpacked mods. Put each extracted mod in its own
 subfolder under `Documents/mods/`, keeping the mod's `media/` directory

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <functional>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,25 @@ struct GameSettings {
     /// iOS-only text size for item tooltips and quest reward/dialog text: 0 small, 1 default,
     /// 2 large. Other platforms keep the authored UI size.
     int text_size = 1;
+    /// iOS camera look sensitivity presets: 0 slow, 1 normal, 2 fast.
+    int camera_sensitivity = 1;
+    /// iOS camera pitch range presets: 0 narrow, 1 normal, 2 wide.
+    int camera_pitch_range = 1;
+    /// iOS pinch-to-zoom response: 0 slow, 1 normal, 2 fast.
+    int camera_zoom_sensitivity = 1;
+    /// Whether upward camera input tilts the view down instead.
+    bool camera_invert_pitch = false;
+    /// iOS on-screen controller target size and visibility presets.
+    int touch_control_size = 1;
+    int touch_control_opacity = 1;
+    /// iOS touch overlay palette: 0 classic, 1 neon, 2 solid.
+    int touch_control_style = 0;
+    /// iOS control layout: 0 two thumbs, 1 right hand, 2 left hand.
+    int touch_control_layout = 0;
+    std::array<float, 32> touch_control_offsets{};
+    bool touch_control_edit = false;
+    /// Reduce the in-game HUD footprint on small screens.
+    bool compact_hud = false;
     float sound_volume = 0.8f;              ///< `KSETTINGS_F_SOUNDVOLUME`
     float music_volume = 0.5f;              ///< `KSETTINGS_F_MUSICVOLUME`
     bool sound_mute = false;                ///< `KSETTINGS_SOUNDMUTE`
@@ -179,6 +199,8 @@ struct SettingsMenu {
     /// `tabOrder` (so `SettingsControl` value - 1). Kept across openings, as
     /// the shared `TabNavigationHandler` does.
     int focus = 0;
+    /// iOS repurposes Storage as a compact multi-setting picker.
+    int ios_picker = 0;
 
     /// DIVERGENCE (platform): a Switch has no Xbox 360 storage device; a port that hides Set
     /// Storage Device sets this, and the walk passes over it.

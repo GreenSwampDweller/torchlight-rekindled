@@ -36,5 +36,6 @@ target_include_directories(${target} SYSTEM PRIVATE "${TL_IOS_DEPENDENCIES_DIR}/
 set(TL_IOS_FREETYPE "${TL_IOS_DEPENDENCIES_DIR}/lib/libfreetype.a")
     target_link_libraries(${target} PRIVATE ${TL_OGRE_LIBS} "${TL_IOS_FREETYPE}" z
         "-framework UIKit" "-framework Foundation" "-framework QuartzCore" "-framework OpenGLES"
-        "-framework CoreGraphics" "-framework CoreFoundation" "-framework AVFoundation" "-framework AudioToolbox")
+        "-framework CoreGraphics" "-framework CoreFoundation" "-framework AVFoundation" "-framework AudioToolbox"
+        "-framework GameController")
 endfunction()

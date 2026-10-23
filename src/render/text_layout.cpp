@@ -142,6 +142,26 @@ std::vector<std::vector<TextSpan>> wrap_runs(const Ogre::FontPtr& font,
                 // A space that ends a run still separates it from the next.
                 return;
             }
+            // A single long token (for example a generated or modded item
+            // name) has no whitespace at which the normal wrapper can break.
+            // Split it at glyph boundaries so it cannot escape its text box.
+            if (advance(word) > width) {
+                if (!current.empty()) break_line();
+                std::string piece;
+                for (char c : word) {
+                    const std::string candidate = piece + c;
+                    if (!piece.empty() && advance(candidate) > width) {
+                        put(run, std::string(), piece);
+                        break_line();
+                        piece.clear();
+                    }
+                    piece.push_back(c);
+                }
+                if (!piece.empty()) put(run, std::string(), piece);
+                word.clear();
+                pending_space = false;
+                return;
+            }
             const std::string lead = (pending_space && !current.empty()) ? " " : std::string();
             if (!current.empty() && pen + advance(lead + word) > width) {
                 break_line();

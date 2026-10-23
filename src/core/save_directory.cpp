@@ -33,6 +33,61 @@ bool read_whole_file(const std::string& path, std::vector<uint8_t>& bytes) {
     return true;
 }
 
+namespace {
+
+bool parse_character_at(const std::string& path, std::vector<uint8_t>& bytes,
+                        tl::formats::CharacterFile& file) {
+    return read_whole_file(path, bytes) && !bytes.empty() &&
+           tl::formats::read_character_file(bytes.data(), bytes.size(), file);
+}
+
+void restore_character_backup(const std::string& path, const std::string& backup,
+                              const std::vector<uint8_t>& bytes) {
+    struct stat primary_info;
+    if (stat(path.c_str(), &primary_info) == 0) {
+        std::string preserved = path + ".corrupt";
+        for (unsigned i = 1; stat(preserved.c_str(), &primary_info) == 0; ++i) {
+            preserved = path + ".corrupt." + std::to_string(i);
+        }
+        if (std::rename(path.c_str(), preserved.c_str()) != 0) {
+            TL_LOG_WARN("save recovery: could not preserve damaged save '%s'", path.c_str());
+            return;
+        }
+        TL_LOG_WARN("save recovery: preserved damaged save as '%s'", preserved.c_str());
+    }
+
+    const std::string temporary = path + ".restore.tmp";
+    std::FILE* out = std::fopen(temporary.c_str(), "wb");
+    if (out == nullptr) return;
+    const bool written = std::fwrite(bytes.data(), 1, bytes.size(), out) == bytes.size();
+    const bool closed = std::fclose(out) == 0;
+    if (!written || !closed || std::rename(temporary.c_str(), path.c_str()) != 0) {
+        std::remove(temporary.c_str());
+        TL_LOG_WARN("save recovery: could not restore '%s' from '%s'", path.c_str(),
+                    backup.c_str());
+        return;
+    }
+    TL_LOG_WARN("save recovery: restored '%s' from '%s'", path.c_str(), backup.c_str());
+}
+
+}  // namespace
+
+bool read_character_with_backup(const std::string& path,
+                                tl::formats::CharacterFile& file) {
+    std::vector<uint8_t> bytes;
+    if (parse_character_at(path, bytes, file)) return true;
+
+    for (unsigned i = 1; i <= 3; ++i) {
+        const std::string backup = path + ".bak" + std::to_string(i);
+        tl::formats::CharacterFile recovered;
+        if (!parse_character_at(backup, bytes, recovered)) continue;
+        file = std::move(recovered);
+        restore_character_backup(path, backup, bytes);
+        return true;
+    }
+    return false;
+}
+
 // The settings the Options screen keeps (`CSettings`; the console's file is on
 // its storage device, this one beside the saves). A missing file leaves the
 // defaults.
@@ -114,10 +169,8 @@ std::string empty_save_path() {
 bool newest_living_save(tl::formats::CharacterFile& file, std::string& path) {
     const std::vector<std::string> saves = list_saves();
     if (saves.empty()) return false;
-    std::vector<uint8_t> bytes;
-    if (!read_whole_file(saves.front(), bytes)) return false;
     tl::formats::CharacterFile read;
-    if (!tl::formats::read_character_file(bytes.data(), bytes.size(), read)) return false;
+    if (!read_character_with_backup(saves.front(), read)) return false;
     // `CContinueGameMenu::reloadFiles`: a retired character is
     // listed with HP -999, which `canContinue`
     // refuses.
@@ -134,12 +187,8 @@ bool newest_living_save(tl::formats::CharacterFile& file, std::string& path) {
 std::vector<ContinueEntry> list_continue_entries() {
     std::vector<ContinueEntry> entries;
     for (const std::string& path : list_saves()) {
-        std::vector<uint8_t> bytes;
         tl::formats::CharacterFile file;
-        if (!read_whole_file(path, bytes) ||
-            !tl::formats::read_character_file(bytes.data(), bytes.size(), file)) {
-            continue;
-        }
+        if (!read_character_with_backup(path, file)) continue;
         ContinueEntry entry;
         entry.path = path;
         entry.class_name = file.class_name;

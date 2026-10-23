@@ -514,6 +514,14 @@ void GameHud::resize(unsigned width, unsigned height) {
     layout_labels();
 }
 
+void GameHud::set_compact(bool compact) {
+    if (compact_ == compact) return;
+    compact_ = compact;
+    compact_scale_ = compact ? 0.86f : 1.0f;
+    layout();
+    layout_labels();
+}
+
 // PORT: the HUD's state taken and drawn.
 void GameHud::set_state(const HudState& state) {
     state_ = state;
@@ -531,7 +539,7 @@ void GameHud::layout() {
     const float native = sets_.empty() || sets_.front().native_height <= 0
                              ? kNativeHeight
                              : static_cast<float>(sets_.front().native_height);
-    scale_ = down / native;
+    scale_ = (down / native) * compact_scale_;
 
     // One pass, parents first: `build()` pushes an object before its children.
     for (Node& node : nodes_) {

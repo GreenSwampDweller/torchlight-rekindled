@@ -2,6 +2,7 @@
 // Split from renderer.cpp; the shared
 // declarations are in renderer_impl.h.
 #include "formats/dds.h"
+#include "core/touch_pad.h"
 #include "render/menu_chrome.h"
 #include "render/renderer_impl.h"
 #include "render/skinned_entities.h"
@@ -2153,6 +2154,19 @@ bool Renderer::init(const RendererConfig& requested) {
     // The window may not come out the size asked for (adopt_window_size); everything after it
     // is laid out for the size it has.
     const RendererConfig& config = m.config;
+    if (config.settings != nullptr) {
+        static constexpr float kTouchSizes[] = {0.85f, 1.0f, 1.2f};
+        static constexpr float kTouchOpacities[] = {0.7f, 1.0f, 1.35f};
+        set_ui_text_scale(ui_text_size_scale(config.settings->text_size));
+        tl::core::touch_pad().set_visual_options(
+            kTouchSizes[std::clamp(config.settings->touch_control_size, 0, 2)],
+            kTouchOpacities[std::clamp(config.settings->touch_control_opacity, 0, 2)],
+            std::clamp(config.settings->touch_control_style, 0, 2),
+            std::clamp(config.settings->touch_control_layout, 0, 2));
+        tl::core::touch_pad().set_layout_offsets(config.settings->touch_control_offsets);
+        tl::core::touch_pad().set_edit_mode(config.settings->touch_control_edit);
+        m.game_hud.set_compact(config.settings->compact_hud);
+    }
 
     // Our LogManager, created before Root so Root does not make its own.
     // suppressFileOutput keeps OGRE from writing Ogre.log next to the binary:

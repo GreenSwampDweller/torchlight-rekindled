@@ -5,6 +5,8 @@
 #include "render/renderer_impl.h"
 #include "render/unit_opacity.h"
 
+#include <fstream>
+
 namespace tl::render {
 bool Renderer::dump_loading_screen(const std::string& png_path) {
     Impl& m = *impl_;
@@ -150,7 +152,15 @@ void Renderer::Impl::update_game_camera(const Ogre::Vector3& player_at) {
     const float full = kDefaultCameraDistance * camera_mult;
     if (!(camera_dolly > 0.0f)) camera_dolly = full;
     // Not in cinematic mode (`CCameraControl::processInput`, `+0x98`).
-    cam.touch.step(dt, camera_cinematic.on, camera_yaw, camera_dolly, camera_mult);
+    static constexpr float kCameraSpeeds[] = {0.65f, 1.0f, 1.5f};
+    static constexpr float kCameraTilts[] = {0.20f, 0.35f, 0.55f};
+    static constexpr float kPinchSpeeds[] = {0.7f, 1.0f, 1.4f};
+    const tl::core::GameSettings& camera_options = game_settings();
+    cam.touch.step(dt, camera_cinematic.on, camera_yaw, camera_dolly, camera_mult,
+                   kCameraSpeeds[std::clamp(camera_options.camera_sensitivity, 0, 2)],
+                   kCameraTilts[std::clamp(camera_options.camera_pitch_range, 0, 2)],
+                   kPinchSpeeds[std::clamp(camera_options.camera_zoom_sensitivity, 0, 2)],
+                   camera_options.camera_invert_pitch);
     if (camera_zoom_input != 0.0f && dt > 0.0f && !camera_cinematic.on) {
         const float stick = std::max(-1.0f, std::min(1.0f, camera_zoom_input));
         camera_dolly = tl::core::zoom_dolly(
@@ -476,6 +486,20 @@ void Renderer::Impl::drive_player(float delta) {
     // the pad itself.
     const tl::core::InputState in =
         cinematic_open ? tl::core::InputState{} : tl::core::poll_input();
+    controller_connected = in.controller_connected;
+    if (in.touch_tap && inventory_menu.visible()) {
+        inventory_menu.touch_select_at(in.touch_x, in.touch_y);
+    }
+    if (in.touch_layout_changed) {
+        tl::core::GameSettings& settings = game_settings();
+        settings.touch_control_offsets = in.touch_layout_offsets;
+        if (!config.settings_path.empty()) {
+            std::ofstream file(config.settings_path, std::ios::binary | std::ios::trunc);
+            file << tl::core::write_game_settings(settings);
+            if (!file) TL_LOG_WARN("touch controls: could not save layout to '%s'",
+                                   config.settings_path.c_str());
+        }
+    }
     // + / Start: the Pause Menu. It,
     // Options and the debug menu (a DIVERGENCE, debug_menu_open) have the pad.
     const bool quit_edge = in.quit && !quit_held;
@@ -1272,6 +1296,7 @@ void Renderer::Impl::step_hud_visibility() {
     if (!player_control) return;
     const bool scene =
         hud.letterboxed() || quest_dialog.visible() || script_dialog_open() || !talk_unit.empty();
+    const bool hide_hud = scene || controller_connected;
     // DIVERGENCE: the conversation's end lets the unit go as well -
     // no window, no vendor screen, no line over its head, no walk still on
     // its way to it.
@@ -1282,9 +1307,9 @@ void Renderer::Impl::step_hud_visibility() {
         inventory_menu.vendor() == VendorScreen::None && !(floaty_remaining > 0.0f)) {
         clear_talk_target();
     }
-    if (scene == hud_hidden_for_scene) return;
-    hud_hidden_for_scene = scene;
-    if (scene) {
+    if (hide_hud == hud_hidden_for_scene) return;
+    hud_hidden_for_scene = hide_hud;
+    if (hide_hud) {
         hud_hidden_game_hud = game_hud.visible();
         if (hud_hidden_game_hud) game_hud.hide();
         // `CLevel::setAutomapVisible(false)`,

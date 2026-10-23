@@ -34,7 +34,9 @@ struct TouchCamera {
     /// R3 is taken while the view is away from the console's.
     void take(const tl::core::InputState& in, bool blocked);
     /// Advance the turn and tilt into `camera_yaw`, and the pinch into `dolly`.
-    void step(float dt, bool cinematic, float& camera_yaw, float& dolly, float camera_mult);
+    void step(float dt, bool cinematic, float& camera_yaw, float& dolly, float camera_mult,
+              float sensitivity = 1.0f, float pitch_range = 0.35f,
+              float zoom_sensitivity = 1.0f, bool invert_pitch = false);
     /// The console's eye `offset` tilted, then turned; itself while both are zero.
     Ogre::Vector3 turned(Ogre::Vector3 offset, float dolly) const;
 };

@@ -2,9 +2,9 @@
 
 #include "core/run_config.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <sstream>
 
 namespace tl::core {
@@ -42,29 +42,39 @@ bool is_slider(SettingsControl control) {
            control == SettingsControl::Brightness || control == SettingsControl::Contrast;
 }
 
-// DIVERGENCE (platform): iOS's Text Size row. A and right step up, left down, wrapping
-// over small, medium and large.
-bool step_text_size(int code, GameSettings& settings) {
-    if (code != kMenuPadA && code != kMenuPadLeft && code != kMenuPadRight) return false;
-    settings.text_size =
-        (std::clamp(settings.text_size, 0, 2) + (code == kMenuPadLeft ? 2 : 1)) % 3;
-    return true;
-}
-
 }  // namespace
 
 // PORT: the options written to the port's own settings file.
 std::string write_game_settings(const GameSettings& s) {
-    char text[512];
-    std::snprintf(text, sizeof text,
-                  "SOUNDVOLUME:%.9g\nMUSICVOLUME:%.9g\nSOUNDMUTE:%d\nMUSICMUTE:%d\n"
-                  "SHOW_TIPS:%d\nFLOATY_NUMBERS:%d\nSHOW_BLOOD:%d\nBRIGHTNESS:%.9g\nCONTRAST:%.9g\n"
-                  "TEXT_SIZE:%d\n",
-                  static_cast<double>(s.sound_volume), static_cast<double>(s.music_volume),
-                  s.sound_mute ? 1 : 0, s.music_mute ? 1 : 0, s.show_tips ? 1 : 0,
-                  s.floaty_numbers ? 1 : 0, s.show_blood ? 1 : 0, static_cast<double>(s.brightness),
-                  static_cast<double>(s.contrast), std::clamp(s.text_size, 0, 2));
-    return text;
+    char text[640];
+    std::snprintf(
+        text, sizeof text,
+        "SOUNDVOLUME:%.9g\nMUSICVOLUME:%.9g\nSOUNDMUTE:%d\nMUSICMUTE:%d\n"
+        "SHOW_TIPS:%d\nFLOATY_NUMBERS:%d\nSHOW_BLOOD:%d\nBRIGHTNESS:%.9g\nCONTRAST:%.9g\n"
+        "TEXT_SIZE:%d\nCAMERA_SENSITIVITY:%d\nCAMERA_PITCH_RANGE:%d\n"
+        "CAMERA_ZOOM_SENSITIVITY:%d\nCAMERA_INVERT_PITCH:%d\n"
+        "TOUCH_CONTROL_SIZE:%d\nTOUCH_CONTROL_OPACITY:%d\nTOUCH_CONTROL_STYLE:%d\n"
+        "TOUCH_CONTROL_LAYOUT:%d\nCOMPACT_HUD:%d\nTOUCH_CONTROL_EDIT:%d\n",
+        static_cast<double>(s.sound_volume), static_cast<double>(s.music_volume),
+        s.sound_mute ? 1 : 0, s.music_mute ? 1 : 0, s.show_tips ? 1 : 0, s.floaty_numbers ? 1 : 0,
+        s.show_blood ? 1 : 0, static_cast<double>(s.brightness), static_cast<double>(s.contrast),
+        std::clamp(s.text_size, 0, 2), std::clamp(s.camera_sensitivity, 0, 2),
+        std::clamp(s.camera_pitch_range, 0, 2), std::clamp(s.camera_zoom_sensitivity, 0, 2),
+        s.camera_invert_pitch ? 1 : 0, std::clamp(s.touch_control_size, 0, 2),
+        std::clamp(s.touch_control_opacity, 0, 2), std::clamp(s.touch_control_style, 0, 2),
+        std::clamp(s.touch_control_layout, 0, 2), s.compact_hud ? 1 : 0,
+        s.touch_control_edit ? 1 : 0);
+    std::string result(text);
+    char offset_line[64];
+    for (int i = 0; i < 16; ++i) {
+        std::snprintf(offset_line, sizeof offset_line, "TOUCH_LAYOUT_%d_X:%.7g\n", i,
+                      static_cast<double>(s.touch_control_offsets[static_cast<size_t>(i) * 2]));
+        result += offset_line;
+        std::snprintf(offset_line, sizeof offset_line, "TOUCH_LAYOUT_%d_Y:%.7g\n", i,
+                      static_cast<double>(s.touch_control_offsets[static_cast<size_t>(i) * 2 + 1]));
+        result += offset_line;
+    }
+    return result;
 }
 
 // PORT: the options read from the port's own settings file.
@@ -89,7 +99,38 @@ void read_game_settings(const std::string& text, GameSettings& s) {
         else if (key == "SHOW_BLOOD") s.show_blood = number != 0.0f;
         else if (key == "BRIGHTNESS") s.brightness = number;
         else if (key == "CONTRAST") s.contrast = number;
-        else if (key == "TEXT_SIZE") s.text_size = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        else if (key == "TEXT_SIZE") {
+            s.text_size = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        }
+        else if (key == "CAMERA_SENSITIVITY") {
+            s.camera_sensitivity = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "CAMERA_PITCH_RANGE") {
+            s.camera_pitch_range = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "CAMERA_ZOOM_SENSITIVITY") {
+            s.camera_zoom_sensitivity = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "CAMERA_INVERT_PITCH") {
+            s.camera_invert_pitch = number != 0.0f;
+        } else if (key == "TOUCH_CONTROL_SIZE") {
+            s.touch_control_size = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "TOUCH_CONTROL_OPACITY") {
+            s.touch_control_opacity = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "TOUCH_CONTROL_STYLE") {
+            s.touch_control_style = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "TOUCH_CONTROL_LAYOUT") {
+            s.touch_control_layout = number <= 0.0f ? 0 : number >= 2.0f ? 2 : 1;
+        } else if (key == "COMPACT_HUD") {
+            s.compact_hud = number != 0.0f;
+        } else if (key == "TOUCH_CONTROL_EDIT") {
+            s.touch_control_edit = number != 0.0f;
+        } else if (key.rfind("TOUCH_LAYOUT_", 0) == 0) {
+            int index = -1;
+            char axis = '\0';
+            if (std::sscanf(key.c_str(), "TOUCH_LAYOUT_%d_%c", &index, &axis) == 2 &&
+                index >= 0 && index < 16 && (axis == 'X' || axis == 'Y')) {
+                const size_t offset = static_cast<size_t>(index) * 2 + (axis == 'Y' ? 1 : 0);
+                s.touch_control_offsets[offset] = std::clamp(number, -0.45f, 0.45f);
+            }
+        }
     }
 }
 
@@ -175,6 +216,7 @@ void SettingsMenu::set_open(bool opening, GameSettings& settings) {
             show_tips = settings.show_tips;
             floaty_numbers = settings.floaty_numbers;
             show_blood = settings.show_blood;
+            ios_picker = 0;
         }
     } else if (!opening) {
         // The window is taken down here; what the close does to the settings
@@ -231,6 +273,18 @@ void SettingsMenu::reset_defaults(GameSettings& settings) {
     floaty_numbers = true;
     show_blood = true;
     settings.text_size = 1;
+    settings.camera_sensitivity = 1;
+    settings.camera_pitch_range = 1;
+    settings.camera_zoom_sensitivity = 1;
+    settings.camera_invert_pitch = false;
+    settings.touch_control_size = 1;
+    settings.touch_control_opacity = 1;
+    settings.touch_control_style = 0;
+    settings.touch_control_layout = 0;
+    settings.touch_control_offsets.fill(0.0f);
+    settings.touch_control_edit = false;
+    settings.compact_hud = false;
+    ios_picker = 0;
 }
 
 // on `settings_navigation`'s answer.
@@ -260,16 +314,39 @@ SettingsPress SettingsMenu::press(int code, GameSettings& settings) {
             *box = !*box;
             result.changed = true;
         }
-    } else if (control == SettingsControl::Storage && text_size_row) {
-        result.changed = step_text_size(code, settings);
     } else if (control == SettingsControl::Defaults || control == SettingsControl::Storage) {
         if (code == kMenuPadA) {
             if (control == SettingsControl::Defaults) {
                 reset_defaults(settings);
                 result.changed = true;
             } else {
-                result.storage = true;
+                if (!storage_hidden) {
+                    ios_picker = (ios_picker + 1) % 11;
+                    result.changed = true;
+                } else {
+                    result.storage = true;
+                }
             }
+        } else if (!storage_hidden && (code == kMenuPadLeft || code == kMenuPadRight)) {
+            const int step = code == kMenuPadRight ? 1 : 2;
+            if (ios_picker == 4) {
+                settings.camera_invert_pitch = !settings.camera_invert_pitch;
+            } else if (ios_picker == 9) {
+                settings.compact_hud = !settings.compact_hud;
+            } else if (ios_picker == 10) {
+                settings.touch_control_edit = !settings.touch_control_edit;
+            } else {
+                int* value = ios_picker == 1 ? &settings.camera_sensitivity
+                              : ios_picker == 2 ? &settings.camera_pitch_range
+                              : ios_picker == 3 ? &settings.camera_zoom_sensitivity
+                              : ios_picker == 5 ? &settings.touch_control_size
+                              : ios_picker == 6 ? &settings.touch_control_opacity
+                              : ios_picker == 7 ? &settings.touch_control_style
+                              : ios_picker == 8 ? &settings.touch_control_layout
+                                                : &settings.text_size;
+                *value = (std::clamp(*value, 0, 2) + step) % 3;
+            }
+            result.changed = true;
         }
     } else if (is_slider(control) && (code == kMenuPadLeft || code == kMenuPadRight)) {
         const float step = code == kMenuPadRight ? kSliderStep : -kSliderStep;

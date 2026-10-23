@@ -25,7 +25,8 @@ void TouchCamera::take(const tl::core::InputState& in, bool blocked) {
 }
 
 void TouchCamera::step(float dt, bool cinematic, float& camera_yaw, float& dolly,
-                       float camera_mult) {
+                       float camera_mult, float sensitivity, float pitch_range,
+                       float zoom_sensitivity, bool invert_pitch) {
     // A heading this did not leave is a new level's: it starts the turn and tilt again.
     if (tracking && camera_yaw != heading) {
         orbit = 0.0f;
@@ -47,16 +48,18 @@ void TouchCamera::step(float dt, bool cinematic, float& camera_yaw, float& dolly
         pitch_adjust = 0.0f;
     } else if (!cinematic) {
         if (orbit_input != 0.0f && dt > 0.0f) {
-            const float turn = orbit_input * 1.8f * dt;
+            const float turn = orbit_input * 1.8f * sensitivity * dt;
             orbit += turn;
             camera_yaw += turn;
         }
         if (pitch_input != 0.0f && dt > 0.0f) {
-            pitch_adjust = std::clamp(pitch_adjust + pitch_input * 0.8f * dt, -0.35f, 0.35f);
+            const float direction = invert_pitch ? -1.0f : 1.0f;
+            pitch_adjust = std::clamp(pitch_adjust + direction * pitch_input * 0.8f * sensitivity * dt,
+                                      -pitch_range, pitch_range);
         }
         if (zoom_delta != 0.0f) {
             const float farthest = tl::core::kZoomDefaultScale * camera_mult;
-            dolly += zoom_delta;
+            dolly += zoom_delta * zoom_sensitivity;
             if (dolly < tl::core::kZoomMin) dolly = tl::core::kZoomMin;
             if (dolly > farthest) dolly = farthest;
         }

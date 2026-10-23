@@ -106,13 +106,29 @@ Ogre::ColourValue tint_colour(int tint) {
     }
 }
 
+Ogre::ColourValue style_colour(const Shape& shape, int style) {
+    if (style == 0) return tint_colour(shape.tint);
+    if (shape.tint != 0) return tint_colour(shape.tint);
+    if (style == 1) {
+        if (shape.kind == Shape::kStickBase || shape.kind == Shape::kStickKnob)
+            return Ogre::ColourValue(0.2f, 0.92f, 1.0f);
+        if (shape.kind == Shape::kDpadBase) return Ogre::ColourValue(0.55f, 0.35f, 1.0f);
+        return Ogre::ColourValue(0.38f, 0.76f, 1.0f);
+    }
+    if (shape.kind == Shape::kStickBase || shape.kind == Shape::kDpadBase)
+        return Ogre::ColourValue(0.24f, 0.31f, 0.42f);
+    if (shape.kind == Shape::kStickKnob) return Ogre::ColourValue(0.75f, 0.83f, 0.95f);
+    return Ogre::ColourValue(0.67f, 0.75f, 0.88f);
+}
+
 /// How opaque a shape is, at rest and while held.
 float shape_alpha(const Shape& s) {
+    const float opacity = tl::core::touch_pad().opacity();
     switch (s.kind) {
-        case Shape::kButton: return s.pressed ? 0.80f : 0.40f;
-        case Shape::kStickBase: return s.pressed ? 0.40f : 0.25f;
-        case Shape::kStickKnob: return s.pressed ? 0.80f : 0.45f;
-        case Shape::kDpadBase: return 0.18f;
+        case Shape::kButton: return (s.pressed ? 0.80f : 0.40f) * opacity;
+        case Shape::kStickBase: return (s.pressed ? 0.40f : 0.25f) * opacity;
+        case Shape::kStickKnob: return (s.pressed ? 0.80f : 0.45f) * opacity;
+        case Shape::kDpadBase: return 0.18f * opacity;
     }
     return 0.4f;
 }
@@ -129,14 +145,21 @@ float label_height(const Shape& s) {
 /// only references, and they go with the overlay system before OGRE does.
 void apply_material(Ogre::PanelOverlayElement* disc, const Shape& s) {
     const int tint = std::clamp(s.tint, 0, 4);
+    const int style = tl::core::touch_pad().style();
+    const int alpha = static_cast<int>(std::lround(shape_alpha(s) * 100.0f));
     const std::string name = "tl/touchpad/m" + std::to_string(s.kind) + "_" + std::to_string(tint) +
-                             (s.pressed ? "_on" : "_off");
+                             "_s" + std::to_string(style) +
+                             (s.pressed ? "_on_" : "_off_") + std::to_string(alpha);
     if (disc->getMaterialName() == name) return;
-    const Ogre::TexturePtr texture = s.kind == Shape::kStickKnob
-                                         ? disc_texture("tl/touchpad/knob", 1.0f)
-                                         : disc_texture("tl/touchpad/disc", 0.45f);
-    Ogre::ColourValue colour = tint_colour(tint);
-    colour.a = shape_alpha(s);
+    const float fill = s.kind == Shape::kStickKnob ? 1.0f : style == 2 ? 0.82f
+                                                     : style == 1 ? 0.16f
+                                                                  : 0.45f;
+    std::string texture_name = s.kind == Shape::kStickKnob ? "tl/touchpad/knob_s"
+                                                           : "tl/touchpad/disc_s";
+    texture_name += std::to_string(style);
+    const Ogre::TexturePtr texture = disc_texture(texture_name.c_str(), fill);
+    Ogre::ColourValue colour = style_colour(s, style);
+    colour.a = std::clamp(shape_alpha(s), 0.0f, 1.0f);
     disc->setMaterial(disc_material(name, texture, colour));
 }
 
@@ -158,6 +181,8 @@ void TouchOverlay::build(std::size_t count) {
 
     overlay_ = overlays.create(kOverlayName);
     built_text_scale_ = ui_text_scale();
+    built_opacity_ = tl::core::touch_pad().opacity();
+    built_style_ = tl::core::touch_pad().style();
     overlay_->setZOrder(kZOrder);
     root_ = static_cast<Ogre::OverlayContainer*>(
         overlays.createOverlayElement("Panel", std::string(kOverlayName) + "/root"));
@@ -190,7 +215,8 @@ void TouchOverlay::build(std::size_t count) {
             label->setMetricsMode(Ogre::GMM_PIXELS);
             label->setFontName(kFontName, Ogre::RGN_INTERNAL);
             label->setAlignment(Ogre::TextAreaOverlayElement::Center);
-            label->setColour(Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.9f));
+            label->setColour(Ogre::ColourValue(
+                1.0f, 1.0f, 1.0f, std::clamp(0.72f * built_opacity_, 0.45f, 1.0f)));
             label->setCaption(shapes[i].label);
             const float height = label_height(shapes[i]);
             set_char_height(label, height);
@@ -219,7 +245,8 @@ void TouchOverlay::step() {
     }
     const std::vector<Shape> shapes = pad.shapes();
     if (overlay_ == nullptr || discs_.size() != shapes.size() || built_width_ != pad.width() ||
-        built_height_ != pad.height() || built_text_scale_ != ui_text_scale()) {
+        built_height_ != pad.height() || built_text_scale_ != ui_text_scale() ||
+        built_opacity_ != pad.opacity() || built_style_ != pad.style()) {
         built_width_ = pad.width();
         built_height_ = pad.height();
         build(shapes.size());

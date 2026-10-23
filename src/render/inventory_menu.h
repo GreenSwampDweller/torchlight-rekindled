@@ -241,6 +241,9 @@ public:
     /// next `update`.
     void select_slot(size_t slot);
     int selected_slot_index() const;
+    /// Select the visible inventory row under a screen-pixel tap. Returns
+    /// true when a bag, pet, or vendor row consumed the tap.
+    bool touch_select_at(float x, float y);
 
     /// The bag's screen with no vendor (`CInventoryMenuXenon`): the focus is on
     /// the bag or on the first pet's tray, and the left column follows it.

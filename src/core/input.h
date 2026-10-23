@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <array>
 
 namespace tl::core {
 
@@ -20,6 +21,12 @@ namespace tl::core {
 /// summing two normalised axes. `move_y` is positive *away* from the viewer,
 /// matching the direction the camera looks.
 struct InputState {
+    /// iOS: a hardware controller is connected; the HUD can yield screen space.
+    bool controller_connected = false;
+    bool touch_layout_changed = false;
+    std::array<float, 32> touch_layout_offsets{};
+    bool touch_tap = false;
+    float touch_x = 0.0f, touch_y = 0.0f;
     float move_x = 0.0f;
     float move_y = 0.0f;
 

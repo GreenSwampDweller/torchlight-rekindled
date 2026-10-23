@@ -44,7 +44,6 @@ using tl::core::load_game_settings;
 using tl::core::make_save_directory;
 using tl::core::menu_backdrop_file;
 using tl::core::newest_living_save;
-using tl::core::read_whole_file;
 using tl::core::save_directory;
 
 namespace {
@@ -102,10 +101,8 @@ std::string menu_backdrop(tl::render::Renderer& renderer, const std::string& fro
         const std::vector<std::string> saves = list_saves();
         if (!saves.empty()) path = saves.front();
     }
-    std::vector<uint8_t> bytes;
     tl::formats::CharacterFile file;
-    if (path.empty() || !read_whole_file(path, bytes) ||
-        !tl::formats::read_character_file(bytes.data(), bytes.size(), file)) {
+    if (path.empty() || !tl::core::read_character_with_backup(path, file)) {
         return kMenuLayout;
     }
     load_character_shared_stash(renderer, stash, file.hardcore != 0, path);
@@ -1709,9 +1706,8 @@ int main(int argc, char** argv) {
     bool title_save_read = false;
     if (opts.start_in_menu && chosen_class.empty()) {
         const std::string newest = menu_backdrop_file(opts.menu_from_save);
-        std::vector<uint8_t> bytes;
-        title_save_read = !newest.empty() && read_whole_file(newest, bytes) &&
-                          tl::formats::read_character_file(bytes.data(), bytes.size(), title_save);
+        title_save_read = !newest.empty() &&
+                          tl::core::read_character_with_backup(newest, title_save);
         chosen_class = title_save_read ? title_save.class_name : std::string("Destroyer");
     }
 
@@ -1774,11 +1770,8 @@ int main(int argc, char** argv) {
         for (;;) {
             if (behind) {
                 shown_file = continue_menu.current_file();
-                std::vector<uint8_t> bytes;
                 tl::formats::CharacterFile file;
-                const bool read =
-                    read_whole_file(shown_file, bytes) &&
-                    tl::formats::read_character_file(bytes.data(), bytes.size(), file);
+                const bool read = tl::core::read_character_with_backup(shown_file, file);
                 if (read) chosen_class = file.class_name;
                 if (!renderer.restart(rc)) return tl::render::MenuAction::Quit;
                 apply_class();
@@ -1803,10 +1796,8 @@ int main(int argc, char** argv) {
             }
             if (action == tl::render::MenuAction::Continue) {
                 const std::string path = continue_menu.current_file();
-                std::vector<uint8_t> bytes;
                 tl::formats::CharacterFile file;
-                if (!read_whole_file(path, bytes) ||
-                    !tl::formats::read_character_file(bytes.data(), bytes.size(), file)) {
+                if (!tl::core::read_character_with_backup(path, file)) {
                     TL_LOG_WARN("load character: '%s' could not be read", path.c_str());
                     return tl::render::MenuAction::Back;
                 }
@@ -2159,10 +2150,8 @@ int main(int argc, char** argv) {
     // Player Start moves the existing character. A generated floor can fail; a
     // device build then goes back to the title menu.
     if (!opts.continue_file.empty() && !continued_from_save) {
-        std::vector<uint8_t> bytes;
         tl::formats::CharacterFile file;
-        if (!read_whole_file(opts.continue_file, bytes) ||
-            !tl::formats::read_character_file(bytes.data(), bytes.size(), file) ||
+        if (!tl::core::read_character_with_backup(opts.continue_file, file) ||
             !continue_game(file, opts.continue_file)) {
             TL_LOG_ERROR("could not continue from '%s'", opts.continue_file.c_str());
             tl::core::log_shutdown();
