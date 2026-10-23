@@ -11,6 +11,9 @@
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
+#if defined(__APPLE__) && !defined(TL_PLATFORM_IOS)
+#include <mach-o/dyld.h>
+#endif
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -35,6 +38,13 @@ std::string platform_program_folder() {
     const DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) return {};
     path.assign(buffer, length);
+#elif defined(__APPLE__)
+    uint32_t length = 0;
+    (void)_NSGetExecutablePath(nullptr, &length);
+    if (length == 0) return {};
+    std::string buffer(length, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &length) != 0) return {};
+    path.assign(buffer.c_str());
 #else
     char buffer[4096] = {};
     const ssize_t length = readlink("/proc/self/exe", buffer, sizeof buffer - 1);

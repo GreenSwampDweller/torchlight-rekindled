@@ -6,10 +6,16 @@
 
 set(TL_OGRE_BUILD_DIR "${CMAKE_SOURCE_DIR}/build-ogre-desktop"
     CACHE PATH "Directory containing the desktop build of OGRE")
+if(APPLE)
+    # Xcode adds its configuration directory to target_link_directories.
+    set(TL_OGRE_LIB_DIR "${TL_OGRE_BUILD_DIR}/lib/macosx")
+else()
+    set(TL_OGRE_LIB_DIR "${TL_OGRE_BUILD_DIR}/lib")
+endif()
 
 # OGRE is optional until M1 wires up rendering, so that a fresh clone configures
 # and the tests run before anyone has spent 20 minutes building the engine.
-if(EXISTS "${TL_OGRE_BUILD_DIR}/lib")
+if(EXISTS "${TL_OGRE_LIB_DIR}")
     set(TL_HAVE_OGRE TRUE)
 else()
     set(TL_HAVE_OGRE FALSE)
@@ -72,9 +78,15 @@ function(tl_configure_platform target)
         "${TL_OGRE_BUILD_DIR}/include"
     )
 
-    target_link_directories(${target} PRIVATE "${TL_OGRE_BUILD_DIR}/lib")
-    target_link_libraries(${target} PRIVATE
-        -Wl,--start-group ${TL_OGRE_LIBS} -Wl,--end-group)
+    target_link_directories(${target} PRIVATE "${TL_OGRE_LIB_DIR}")
+    if(APPLE)
+        # Apple's linker has no --start-group/--end-group. Repeating this small
+        # static library set resolves OGRE's cyclic references on macOS.
+        target_link_libraries(${target} PRIVATE ${TL_OGRE_LIBS} ${TL_OGRE_LIBS})
+    else()
+        target_link_libraries(${target} PRIVATE
+            -Wl,--start-group ${TL_OGRE_LIBS} -Wl,--end-group)
+    endif()
     # OGRE is linked statically, so the build-tree RUNPATH CMake derives from
     # the link directory serves nothing and would name the build machine's path.
     set_target_properties(${target} PROPERTIES SKIP_BUILD_RPATH ON)
@@ -82,13 +94,22 @@ function(tl_configure_platform target)
     # FreeType, for the interface layer's font: the game's own
     # `Torchlight Regular.ttf` out of its own archive. OGRE's Overlay component
     # needs it to rasterise a TrueType face, and it is present for both targets.
-    target_link_libraries(${target} PRIVATE freetype)
+    if(APPLE)
+        find_package(Freetype REQUIRED)
+        target_link_libraries(${target} PRIVATE Freetype::Freetype)
+    else()
+        target_link_libraries(${target} PRIVATE freetype)
+    endif()
 
     # zlib is not OGRE's zip reader - that is the bundled miniz - but the STBI
     # codec's PNG *writer*, which --dump-frame goes through, calls compress().
     target_link_libraries(${target} PRIVATE z)
 
-    if(WIN32)
+    if(APPLE)
+        target_link_libraries(${target} PRIVATE
+            "-framework OpenGL" "-framework Cocoa" "-framework IOKit" "-framework CoreVideo"
+            "-framework AudioToolbox" "-framework GameController")
+    elseif(WIN32)
         target_link_libraries(${target} PRIVATE opengl32 gdi32 user32 winmm advapi32 shlwapi)
     else()
         target_link_libraries(${target} PRIVATE GL X11 dl pthread)
