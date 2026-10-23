@@ -27,6 +27,7 @@
 
 #if defined(TL_PLATFORM_MACOS)
 extern "C" void tl_macos_error_message(const char* summary, const char* detail);
+extern "C" bool tl_macos_should_keep_running();
 #endif
 
 namespace tl::core {
@@ -154,7 +155,11 @@ void platform_sleep_until(std::chrono::steady_clock::time_point deadline) {
 
 bool should_keep_running() {
     // Desktop has no external lifecycle; the window closing ends the loop.
+#if defined(TL_PLATFORM_MACOS)
+    return tl_macos_should_keep_running();
+#else
     return true;
+#endif
 }
 
 bool memory_usage(unsigned long long& used, unsigned long long& total) {

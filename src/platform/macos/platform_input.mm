@@ -11,6 +11,31 @@
 #include <map>
 #include <string>
 
+bool app_should_keep_running = true;
+
+@interface TLGameView : NSView
+@end
+
+@implementation TLGameView
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent*)event { (void)event; }
+- (void)keyUp:(NSEvent*)event { (void)event; }
+- (void)flagsChanged:(NSEvent*)event { (void)event; }
+@end
+
+@interface TLWindowDelegate : NSObject <NSWindowDelegate>
+@end
+
+@implementation TLWindowDelegate
+- (BOOL)windowShouldClose:(id)sender {
+    (void)sender;
+    app_should_keep_running = false;
+    return YES;
+}
+@end
+
+TLWindowDelegate* game_window_delegate = nil;
+
 namespace tl::core {
 namespace {
 
@@ -29,9 +54,12 @@ void prepare_game_window(std::map<std::string, std::string>& params) {
                                                   defer:NO];
     [game_window setTitle:@"Torchlight Rekindled"];
     [game_window center];
-    NSView* content = [[NSView alloc] initWithFrame:frame];
+    game_window_delegate = [[TLWindowDelegate alloc] init];
+    [game_window setDelegate:game_window_delegate];
+    NSView* content = [[TLGameView alloc] initWithFrame:frame];
     [game_window setContentView:content];
     [game_window makeKeyAndOrderFront:nil];
+    [game_window makeFirstResponder:content];
     [NSApp activateIgnoringOtherApps:YES];
     params["externalWindowHandle"] = std::to_string(reinterpret_cast<std::uintptr_t>(content));
 }
@@ -169,6 +197,8 @@ void pump_events() {
         }
     }
 }
+
+extern "C" bool tl_macos_should_keep_running() { return app_should_keep_running; }
 
 extern "C" void tl_macos_error_message(const char* summary, const char* detail) {
     @autoreleasepool {
