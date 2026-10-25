@@ -4,6 +4,7 @@
 #import <GameController/GCControllerAxisInput.h>
 #import <GameController/GCControllerDirectionPad.h>
 #import <GameController/GCExtendedGamepad.h>
+#import <objc/message.h>
 #import "OgreEAGL2View.h"
 #import "OgreEAGL2ViewController.h"
 #import <atomic>
@@ -13,6 +14,7 @@
 #import <vector>
 #import <algorithm>
 #include <cstring>
+#include <dlfcn.h>
 #include <memory>
 #include <mutex>
 #include "core/touch_pad.h"
@@ -265,13 +267,24 @@ static std::vector<std::string> discoverModMediaFolders(const std::string& docum
 @implementation TorchlightAppDelegate
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)options {
     (void)application; (void)options;
+    // Load GameController dynamically. Recent iOS SDKs only advertise some
+    // GameController symbols for arm64e, while the game and OGRE remain arm64.
+    // Runtime lookup keeps the app compatible with both supported slices.
+    dlopen("/System/Library/Frameworks/GameController.framework/GameController", RTLD_LAZY);
+    Class controllerClass = NSClassFromString(@"GCController");
+    if (controllerClass == Nil) return YES;
     NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
     [center addObserver:self selector:@selector(controllerConnected:)
-                   name:GCControllerDidConnectNotification object:nil];
+                   name:@"GCControllerDidConnectNotification" object:nil];
     [center addObserver:self selector:@selector(controllerDisconnected:)
-                   name:GCControllerDidDisconnectNotification object:nil];
-    [GCController startWirelessControllerDiscoveryWithCompletionHandler:nil];
-    for (GCController* controller in GCController.controllers) [self attachController:controller];
+                   name:@"GCControllerDidDisconnectNotification" object:nil];
+    using StartDiscovery = void (*)(id, SEL, id);
+    reinterpret_cast<StartDiscovery>(objc_msgSend)(
+        controllerClass, @selector(startWirelessControllerDiscoveryWithCompletionHandler:), nil);
+    using Controllers = NSArray* (*)(id, SEL);
+    NSArray* controllers = reinterpret_cast<Controllers>(objc_msgSend)(
+        controllerClass, @selector(controllers));
+    for (id controller in controllers) [self attachController:controller];
     return YES;
 }
 - (void)attachController:(GCController*)controller {
