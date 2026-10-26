@@ -196,7 +196,7 @@ void Renderer::Impl::refresh_settings_menu() {
     static const char* const kTextSizeNames[] = {"Small", "Medium", "Large"};
     static const char* const kSensitivityNames[] = {"Slow", "Normal", "Fast"};
     static const char* const kPitchRangeNames[] = {"Narrow", "Normal", "Wide"};
-    static const char* const kPitchDirectionNames[] = {"Normal", "Inverted"};
+    static const char* const kPitchInversionNames[] = {"Off", "On"};
     static const char* const kTouchSizeNames[] = {"Small", "Normal", "Large"};
     static const char* const kTouchOpacityNames[] = {"Low", "Normal", "High"};
     static const char* const kTouchStyleNames[] = {"Classic", "Neon", "Solid"};
@@ -230,8 +230,8 @@ void Renderer::Impl::refresh_settings_menu() {
                                  std::clamp(game_settings().camera_zoom_sensitivity, 0, 2)];
             break;
         case 4:
-            picker_caption = std::string("Tilt Direction: ") +
-                             kPitchDirectionNames[game_settings().camera_invert_pitch ? 1 : 0];
+            picker_caption = std::string("Invert Camera Pitch: ") +
+                             kPitchInversionNames[game_settings().camera_invert_pitch ? 1 : 0];
             break;
         case 5:
             picker_caption = std::string("Touch Size: ") +

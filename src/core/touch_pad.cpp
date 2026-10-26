@@ -111,10 +111,9 @@ void TouchPad::layout() {
     add(Kind::kButton, kB, face_x + arm, face_y, face, face_reach, "B", 2);
     add(Kind::kButton, kX, face_x - arm, face_y, face, face_reach, "X", 3);
     add(Kind::kButton, kY, face_x, face_y - arm, face, face_reach, "Y", 4);
-    // A separate, larger Use target near the action cluster. It shares A's
-    // game action so it works for interaction, loot and menu confirmation.
-    add(Kind::kButton, kA, face_x, h - 0.13f * u, 0.055f * u * control_scale_,
-        0.075f * u * control_scale_, "Use", 1);
+    // Keep the former Use target's layout slot reserved so saved control
+    // offsets continue to line up for players who customized their layout.
+    add(Kind::kButton, 0, face_x, h - 0.13f * u, 0.0f, 0.0f, "", 0);
 
     const float shoulder = 0.06f * u * control_scale_;
     const float shoulder_reach = 0.08f * u * control_scale_;
@@ -145,6 +144,7 @@ int TouchPad::control_at(float x, float y) const {
     float best_d = 0.0f;
     for (int i = 0; i < static_cast<int>(controls_.size()); ++i) {
         const Control& c = controls_[static_cast<std::size_t>(i)];
+        if (c.radius <= 0.0f && c.reach <= 0.0f) continue;
         if (!edit_mode_ && c.kind == Kind::kLeftStick) continue;
         const float d = std::hypot(x - c.x, y - c.y);
         const float hit_radius = edit_mode_ ? std::max(c.reach, c.radius * 1.4f) : c.reach;
@@ -350,6 +350,7 @@ std::vector<TouchPad::Shape> TouchPad::shapes() const {
     std::vector<Shape> out;
     for (int i = 0; i < static_cast<int>(controls_.size()); ++i) {
         const Control& c = controls_[static_cast<std::size_t>(i)];
+        if (c.radius <= 0.0f && c.reach <= 0.0f) continue;
         const Touch* held = nullptr;
         for (const Touch& t : touches_) {
             if (t.id >= 0 && t.control == i) held = &t;

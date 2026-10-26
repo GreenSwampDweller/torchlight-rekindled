@@ -204,6 +204,15 @@ switches, the frame-rate overlay (`fps`) and the free camera (`free_camera`). An
 
 ### iOS
 
+#### iOS 1.0.3 changes
+
+- **Camera pitch setting is clearer:** the Options row now reads **Invert Camera Pitch: Off/On**. It reverses the vertical camera movement for the right stick and touch camera controls.
+- **Cleaner touch HUD:** the redundant **Use** button has been removed. The **A** button continues to interact, confirm, equip, transfer, and buy.
+- **Landscape release:** this build keeps the established landscape layout and controls.
+
+Pet-to-town and shared-stash features are available in this source tree; they are
+not new in this 1.0.3 update.
+
 The Xcode app bundle contains the engine and OGRE's shader library. If game data
 is bundled with a local build, the app copies `pak.zip`, `music/`, and
 `console_ui/` into its Documents folder on first launch. Otherwise, in Files,
@@ -220,13 +229,14 @@ zooms on a touch screen (iOS, Android, the Switch in handheld), and R3 puts the 
 On controller platforms, vertical stick still
 zooms, and holding LB while moving it vertically adjusts pitch.
 In Options, focus the Text Size row and press A to cycle through Text Size, Camera Speed,
-Camera Tilt, Pinch Zoom, Tilt Direction, Touch Size, Touch Opacity, Touch Style, Touch Layout,
+Camera Tilt, Pinch Zoom, Invert Camera Pitch, Touch Size, Touch Opacity, Touch Style, Touch Layout,
 Compact HUD, and Move Controls. Use left/right to change the selected value; the choices save with the other
-settings. Touch Style offers Classic, Neon, and Solid button designs. Touch Layout offers
-two-thumb, right-hand, and left-hand presets, and the face-button cluster includes a larger Use
-target for interaction and confirmation. Enable Move Controls, close Options, then drag controls
+settings. **Invert Camera Pitch** switches the vertical camera control between normal and reversed
+for the right stick and touch camera controls. Touch Style offers Classic, Neon, and Solid button
+designs. Touch Layout offers two-thumb, right-hand, and left-hand presets. The A button handles
+interaction and confirmation. Enable Move Controls, close Options, then drag controls
 to reposition them; each position saves when you lift your finger. In inventory screens, tap a
-visible bag, pet, or vendor row to select it, then use the Use control to equip, transfer, or buy.
+visible bag, pet, or vendor row to select it, then press A to equip, transfer, or buy.
 
 iOS reads extended Bluetooth controllers through Apple's Game Controller framework. Pair the
 controller in iOS Settings, then launch or resume Torchlight; connecting a controller hides the
