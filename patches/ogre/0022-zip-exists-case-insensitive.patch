@@ -9,25 +9,65 @@ full-path lookup the index misses - was "Cannot locate resource". open() was
 already case-insensitive (zip_entry_open with casesensitive = STRICT). Not
 __SWITCH__-guarded: every target reads the pak through it.
 
+The lower-cased names are kept in a set, built at the first exists() (2026-10-28):
+lower-casing the archive's ~22,000 entries at every call took 13% of an
+Android main-menu load with a mod mounted, whose items miss the group's index.
+
 
 diff --git a/OgreMain/src/OgreZip.cpp b/OgreMain/src/OgreZip.cpp
+index 80953cfb2..8522b031a 100644
 --- a/OgreMain/src/OgreZip.cpp
 +++ b/OgreMain/src/OgreZip.cpp
-@@ -286,8 +286,17 @@ namespace {
+@@ -29,6 +29,7 @@ THE SOFTWARE.
+ 
+ #if OGRE_NO_ZIP_ARCHIVE == 0
+ #include <zip.h>
++#include <unordered_set>
+ 
+ namespace Ogre {
+ namespace {
+@@ -40,6 +41,10 @@ namespace {
+         MemoryDataStreamPtr mBuffer;
+         /// File list (since zziplib seems to only allow scanning of dir tree once)
+         FileInfoList mFileList;
++#if !OGRE_RESOURCEMANAGER_STRICT
++        /// Torchlight: mFileList's names in lower case, for exists(); built at its first call.
++        mutable std::unordered_set<String> mLowerNames;
++#endif
+         OGRE_AUTO_MUTEX;
+     public:
+         ZipArchive(const String& name, const String& archType, const uint8* externBuf = 0, size_t externBufSz = 0);
+@@ -149,6 +163,9 @@ namespace {
+             zip_close(mZipFile);
+             mZipFile = 0;
+             mFileList.clear();
++#if !OGRE_RESOURCEMANAGER_STRICT
++            mLowerNames.clear();
++#endif
+             mBuffer.reset();
+         }
+     
+@@ -277,9 +294,23 @@ namespace {
          }
  #endif
  
 +#if !OGRE_RESOURCEMANAGER_STRICT
 +        StringUtil::toLowerCase(cleanName);
-+#endif
-         return std::find_if(mFileList.begin(), mFileList.end(), [&cleanName](const Ogre::FileInfo& fi) {
-+#if !OGRE_RESOURCEMANAGER_STRICT
-+                   String name = fi.filename;
-+                   StringUtil::toLowerCase(name);
-+                   return name == cleanName;
++        if (mLowerNames.empty())
++        {
++            for (const FileInfo& fi : mFileList)
++            {
++                String name = fi.filename;
++                StringUtil::toLowerCase(name);
++                mLowerNames.insert(name);
++            }
++        }
++        return mLowerNames.count(cleanName) != 0;
 +#else
+         return std::find_if(mFileList.begin(), mFileList.end(), [&cleanName](const Ogre::FileInfo& fi) {
                     return fi.filename == cleanName;
-+#endif
                 }) != mFileList.end();
++#endif
      }
      //---------------------------------------------------------------------
+     time_t ZipArchive::getModifiedTime(const String& filename) const

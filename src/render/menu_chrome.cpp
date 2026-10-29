@@ -67,15 +67,20 @@ float authored_height(const tl::formats::Imageset& reference, float fallback) {
 
 namespace {
 bool g_console_game_data = false;
+std::vector<std::string> g_mod_imagesets;
 }  // namespace
+
+void set_mod_imagesets(std::vector<std::string> paths) { g_mod_imagesets = std::move(paths); }
 
 void set_console_game_data(bool console) { g_console_game_data = console; }
 bool console_game_data() { return g_console_game_data; }
 
 // PORT: the PC sets a console-style screen falls back to.
 std::vector<const char*> pc_imagesets() {
-    if (g_console_game_data) return {};
-    return {kLogoImageset, kGuiImageset, kUi2Imageset, kUiIconsImageset};
+    std::vector<const char*> sets;
+    if (!g_console_game_data) sets = {kLogoImageset, kGuiImageset, kUi2Imageset, kUiIconsImageset};
+    for (const std::string& path : g_mod_imagesets) sets.push_back(path.c_str());
+    return sets;
 }
 
 // PORT: the PC image in place of a console one. DIVERGENCE (data): the console screens drawn on

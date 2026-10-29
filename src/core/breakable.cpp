@@ -31,7 +31,8 @@ std::string breakable_clean_path(const std::string& path) {
     return out;
 }
 
-BreakableData read_breakable(const tl::formats::AdmFile& unit) {
+BreakableData read_breakable(const tl::formats::AdmFile& unit,
+                             const BreakableSkillLevels& skill_levels) {
     // `CBreakable::unitInit`.
     BreakableData data;
     const std::string directory = unit.string_or("RESOURCEDIRECTORY", "");
@@ -48,12 +49,26 @@ BreakableData read_breakable(const tl::formats::AdmFile& unit) {
     // default true, and its `[SKILL]` blocks in order.
     data.collideable = unit.bool_or("COLLIDEABLE", true);
     data.block = unit.bool_or("BLOCK", false);
-    unit.visit([&data](const tl::formats::AdmSection& section) {
+    unit.visit([&data, &skill_levels](const tl::formats::AdmSection& section) {
         if (section.name != "SKILL") return;
         const std::string name = section.string_or("NAME", "");
         if (name.empty()) return;
+        uint32_t level = section.integer_or("LEVEL", 1u);
+        if (skill_levels) {
+            // `addSkillByName` adds nothing for a name no skill file has;
+            // `CSkill::_setLevelOfSkillFromSkillManager` keeps -1 as 1 and
+            // caps the level at the skill's count of `[LEVELn]` blocks, 1 at least.
+            const std::optional<uint32_t> count = skill_levels(upper(name));
+            if (!count) return;
+            const uint32_t cap = *count == 0 ? 1u : *count;
+            if (level == 0xffffffffu) {
+                level = 1;
+            } else if (cap < level) {
+                level = cap;
+            }
+        }
         data.skills.push_back(name);
-        data.skill_levels.push_back(section.integer_or("LEVEL", 1u));
+        data.skill_levels.push_back(level);
     });
     return data;
 }

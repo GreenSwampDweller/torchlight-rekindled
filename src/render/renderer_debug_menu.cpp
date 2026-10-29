@@ -10,7 +10,6 @@ namespace {
 enum DebugRow {
     kDebugGodspeed = 0,
     kDebugStats,
-    kDebugFreeCamera,
     kDebugGpuSkinning,
     kDebugGlThread,
     kDebugRenderSystem,
@@ -35,9 +34,6 @@ void Renderer::Impl::refresh_debug_menu() {
         "Dialog",
         row(kDebugGodspeed, std::string("GODSPEED: ") + (god_mode ? "ON" : "OFF")) + "\n" +
             row(kDebugStats, std::string("FPS: ") + (stats_overlay_on ? "ON" : "OFF")) + "\n" +
-            row(kDebugFreeCamera,
-                std::string("FREE CAMERA: ") + (TouchCamera::enabled() ? "ON" : "OFF")) +
-            "\n" +
             row(kDebugGpuSkinning,
                 std::string("GPU SKINNING: ") + (!gpu_skinning.available() ? "N/A"
                                                  : GpuSkinning::enabled()  ? "ON"
@@ -121,10 +117,6 @@ void Renderer::Impl::drive_debug_menu(const tl::core::InputState& in) {
                 refresh_game_hud();
                 break;
             case kDebugStats: set_stats_overlay(!stats_overlay_on); break;
-            case kDebugFreeCamera:
-                TouchCamera::set_enabled(!TouchCamera::enabled());
-                TL_LOG_INFO("debug: free camera %s", TouchCamera::enabled() ? "on" : "off");
-                break;
             case kDebugGpuSkinning:
                 // Applied at the end of this frame (GpuSkinning::step), so the FPS
                 // row beside it can show the difference straight away.

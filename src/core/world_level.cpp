@@ -2,6 +2,7 @@
 #include "core/layout_text.h"
 #include "core/level_memory.h"
 #include "core/logic_names.h"
+#include "core/ogre_math.h"
 #include "core/skill_cast.h"
 #include "core/unit_skills_reader.h"
 #include "core/world.h"
@@ -14,6 +15,132 @@
 namespace tl::core {
 
 namespace {
+
+// A collision placement into the level's collision world; a room's piece waits for
+// `end_room_placement`, which adds them in the order made.
+void place_collision(World& world, const MeshPlacement& placement) {
+    if (placement.made != 0 && placement.collision_group == 0 && world.collision_section >= 0) {
+        world.room_piece_collision.push_back({world.collision_section, placement});
+        return;
+    }
+    world.add_collision_placement(placement);
+    if (placement.collision_group != 0) {
+        world.collision.set_group_blocks(placement.collision_group, placement.collision_blocks);
+    }
+}
+
+// A room piece's collision, numbered in the order the level made it (`end_room_placement` adds
+// them so); a piece cast again after the bake is `recalculate`.
+void add_room_piece_collision(World& world, std::vector<MeshPlacement>& out,
+                              MeshPlacement placement, int depth, bool recalculate) {
+    placement.room_piece = true;
+    placement.recalculate = recalculate;
+    placement.made = ++world.room_pieces_made;
+    placement.linked = depth > 1;
+    out.push_back(std::move(placement));
+}
+
+// CLevel::bakeCollision, handed `m_HasPathing` by loadRoomLayout: with
+// pathing, a room without its `.pth` holds the random pieces back.
+bool rooms_hold_random_pieces(const World& world, const tl::core::LevelTemplate& level_template,
+                              const tl::core::LevelLayout& layout) {
+    if (!level_template.has_pathing) return false;
+    for (size_t chunk_i = 0; chunk_i < layout.instances.size(); ++chunk_i) {
+        const std::string& piece = level_template.chunks[layout.pieces[chunk_i]].path;
+        if (world.resolve_archive_path(piece + ".cmp").empty()) continue;
+        if (piece.size() < 6 ||
+            world.resolve_archive_path(piece.substr(0, piece.size() - 6) + "pth").empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The rooms are placed: their seeding ends, and their pieces' collision goes in as
+// CLevel::bakeCollision walks them, room by room, each `Room Piece` in the order made.
+void end_room_placement(World& world) {
+    world.layout_seeding = false;
+    std::stable_sort(
+        world.room_piece_collision.begin(), world.room_piece_collision.end(),
+        [](const WorldState::RoomPieceCollision& a, const WorldState::RoomPieceCollision& b) {
+            return a.placement.made < b.placement.made;
+        });
+    for (const WorldState::RoomPieceCollision& piece : world.room_piece_collision) {
+        world.collision_section = piece.section;
+        world.add_collision_placement(piece.placement);
+    }
+    world.collision_section = -1;
+    world.room_piece_collision.clear();
+}
+
+// Node::_updateFromParentImpl: the object's node under its layout's, turned
+// by the parent's quaternion and its own axes made one
+// (`CPositionableObject::setOrientation`), all fused; the room's own node is (1, -0, -0, -0).
+void node_place(const tl::formats::CmpNode& node, const ogre::Vector3& origin,
+                const ogre::Quaternion& basis, ogre::Vector3& position,
+                ogre::Quaternion& orientation) {
+    const bool unturned = basis.w == 1.0f && basis.x == 0.0f && basis.y == 0.0f && basis.z == 0.0f;
+    const tl::core::OgreQuaternion parent =
+        unturned ? tl::core::kLayoutNodeOrientation
+                 : tl::core::OgreQuaternion{basis.w, basis.x, basis.y, basis.z};
+    const tl::core::Vec3 turned = tl::core::quaternion_rotate(
+        parent, {node.position().x, node.position().y, node.position().z});
+    position = ogre::Vector3(origin.x + turned.x, origin.y + turned.y, origin.z + turned.z);
+    tl::core::OgreQuaternion own = tl::core::quaternion_derived(parent, {});
+    if (node.vec3s.size() >= 4) {
+        const auto axis = [&node](size_t i) {
+            return tl::core::Vec3{node.vec3s[i].x, node.vec3s[i].y, node.vec3s[i].z};
+        };
+        own = tl::core::node_orientation(axis(2), axis(3), axis(1), parent);
+    }
+    orientation = ogre::Quaternion(own.w, own.x, own.y, own.z);
+}
+
+// `CPositionableObject::getPosition(true)` of an object under a Group: the layout
+// holds where it stands, the scene keeps it as its offset from the Group's place, and the node gives
+// it back as `group + (world - group)` (`_updateFromParentImpl`) - a last bit off
+// where the two are far apart. A turned room or Group keeps the place as `node_place` makes it.
+ogre::Vector3 derived_position(const std::map<int64_t, const tl::formats::CmpNode*>& by_id,
+                               const tl::formats::CmpNode& node, const ogre::Vector3& origin,
+                               const ogre::Quaternion& basis, int depth = 0) {
+    ogre::Vector3 position;
+    ogre::Quaternion orientation;
+    node_place(node, origin, basis, position, orientation);
+    const bool unturned = basis.w == 1.0f && basis.x == 0.0f && basis.y == 0.0f && basis.z == 0.0f;
+    const auto parent = by_id.find(node.parent_id);
+    if (!unturned || depth > 64 || parent == by_id.end() ||
+        parent->second->type != tl::formats::cmp_type::kGroup ||
+        parent->second->vec3s.size() >= 4) {
+        return position;
+    }
+    const ogre::Vector3 at = derived_position(by_id, *parent->second, origin, basis, depth + 1);
+    const ogre::Vector3 offset = position - at;
+    return at + offset;
+}
+
+// The floor's collision bookkeeping, emptied before its rooms are placed.
+void begin_floor_collision(World& world, const tl::core::LevelTemplate& level_template,
+                           const tl::core::LevelLayout& layout) {
+    world.passability_recalculate.clear();
+    world.held_random_collision.clear();
+    world.held_random_boxes.clear();
+    world.room_piece_collision.clear();
+    world.room_pieces_made = 0;
+    world.hold_random_pieces = rooms_hold_random_pieces(world, level_template, layout);
+}
+
+// The floor's grid baked over its rooms; a held piece's faces join after the rooms' passes.
+void bake_floor_passability(World& world) {
+    const auto add_held = [&world] {
+        for (const WorldState::HeldCollision& held : world.held_random_collision) {
+            world.add_collision_mesh(held.path, held.to_world);
+        }
+        world.collision.build();
+    };
+    world.passability.bake(world.collision, &world.collision_sections,
+                           &world.passability_recalculate,
+                           world.hold_random_pieces ? &world.held_random_boxes : nullptr, add_held);
+}
 
 // `CParticlePreloader` +0x20 (`m_ParticleSystems`): the files loaded, for the whole run, and here
 // what of each the load kept out (`World::roll_layout_groups` and LoadParticle's filter).
@@ -186,77 +313,14 @@ void World::apply_floor_quests(const tl::core::DungeonDef& def, uint32_t depth) 
         // `initializeQuestWithNPC` rolls a seed only for a non-null NPC.
         // `getDialog` then draws without reseeding `g_Rand`.
         const uint32_t seed = static_cast<uint32_t>(-1);
-        if (!quest_log.accept(*quest, quest_level_of(*quest), seed, stat_graphs)) continue;
+        if (!quest_log.accept(*quest, quest_level_of(*quest), seed, stat_graphs, -1,
+                              /*resolve_units=*/false)) {
+            continue;
+        }
         if (tl::core::QuestEntry* held = quest_log.find(quest->name))
             held->dialog_interacted = true;
         TL_LOG_INFO("floor quests: '%s' given", quest->name.c_str());
     }
-}
-
-// `CLevel::randomOpenPosition(p, radius, true)`, as the population
-// phases ask it.
-tl::core::Vec3 World::populate_open_position(const tl::core::Vec3& at, float radius) {
-    return tl::core::random_open_position(
-        at, 0.0f, radius,
-        [this](const tl::core::Vec3& p) {
-            return !passability.ready() ||
-                   (passability.map_passable(p) && passability.position_passable(p) &&
-                    !tl::core::is_in_no_spawn_region(no_spawn_regions, p, 0.0f));
-        },
-        tl::core::volatile_random());
-}
-
-// CCharacter::createPathfinder(CLevel&), called by
-// CLevel::addCharacter: MINION_SPAWNCLASS (+0x6b8)
-// rolled once - rollSpawnClass(out, null, this, this, -1, 0xffffffff, 0, -1, 0, 0) on
-// g_Rand - and cleared.
-std::vector<std::string> World::roll_unit_minions(const std::string& unit, int level) {
-    std::vector<std::string> rolled;
-    const std::string spawn_class = stats_for_unit(unit).minion_spawnclass;
-    if (spawn_class.empty()) return rolled;
-    SpawnTables tables;
-    build_spawn_context(tables, /*items_by_type=*/false);
-    const std::optional<tl::core::SpawnClass> loaded =
-        load_spawn_class(spawn_class, tables.context);
-    // `getSpawnClassByName` finding none leaves `+0x6b8` null.
-    if (!loaded) return rolled;
-    tl::core::SpawnCharacterContext self;
-    self.level = level;
-    loaded->roll_spawn_class(rolled, nullptr, &self, &self, -1, 0xffffffffu, /*level_bonus=*/0,
-                             /*rarity_override=*/-1, /*magic_find=*/0, /*flags=*/0,
-                             tl::core::game_random(), tables.context);
-    return rolled;
-}
-
-// `CCharacter::createPathfinder(CLevel&)`'s
-// minions for a unit: rolled at its level and placed (`place_unit_minions`).
-void World::spawn_unit_minions(int64_t master, int64_t owner) {
-    const std::string unit = script.unit_of(master);
-    if (unit.empty()) return;
-    int level = 0;
-    if (!script.unit_level(master, level)) level = level_monster_level;
-    place_unit_minions(master, owner, roll_unit_minions(unit, level));
-}
-
-// `[FORMATION]`s of a template's `FORMATIONS` file (`CLevelTemplateData +0x5b0`),
-// as `CLevel::populateFormations` reads them:
-// every child of the file in order, its `FILE` and its `WEIGHT` (1 when
-// unauthored).
-std::vector<tl::core::FormationChoice> World::formation_choices(const std::string& table) const {
-    std::vector<tl::core::FormationChoice> choices;
-    const std::string path = resolve_archive_path(table + ".adm");
-    if (path.empty()) return choices;
-    const std::vector<uint8_t> bytes = read_resource(path);
-    if (bytes.empty()) return choices;
-    const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
-    if (!file.ok) return choices;
-    for (const tl::formats::AdmSection& child : file.root.children) {
-        tl::core::FormationChoice choice;
-        choice.file = child.string_or("FILE", "");
-        choice.weight = static_cast<int32_t>(child.integer_or("WEIGHT", 1u));
-        choices.push_back(std::move(choice));
-    }
-    return choices;
 }
 
 // `CTriggerUnit::setUnitModelName` ->
@@ -305,6 +369,7 @@ void World::activate_room_machine(size_t index, const std::string& path) {
     std::vector<tl::core::ScriptEvent> events;
     machine.script.set_has_saved_state(level_has_saved_state);
     machine.script.set_stored_unit_exists([this](int64_t id) { return level_stores_unit(id); });
+    machine.script.set_activation_listener(sound_listener);
     machine.script.level_activated(quest_log.state(), events);
     if (machine.owner == 0) {
         TL_LOG_INFO("  room script '%s' armed (no owning link): %zu event(s) on activation",
@@ -318,7 +383,8 @@ void World::activate_room_machine(size_t index, const std::string& path) {
 
 // `CEditorScene::loadCompressedLayout`: every Group to
 // `rollRandomGroups`, on `g_Rand`; returns the nodes not created, the groups and what is under them.
-std::set<int64_t> World::roll_layout_groups(const tl::formats::CmpScene& layout) {
+std::set<int64_t> World::roll_layout_groups(const tl::formats::CmpScene& layout,
+                                            std::vector<int64_t>* created) {
     std::set<int64_t> gated;
     std::map<int64_t, const tl::formats::CmpNode*> by_id;
     for (const tl::formats::CmpNode& n : layout.nodes) by_id.emplace(n.id, &n);
@@ -357,8 +423,13 @@ std::set<int64_t> World::roll_layout_groups(const tl::formats::CmpScene& layout)
         const uint32_t group_mode = tl::core::difficulty_id_by_string(mode_name);
         const bool difficulty_ok =
             !(group_mode < 4u) || group_mode == static_cast<uint32_t>(config.difficulty);
-        g.can_be_created = class_ok && dungeon_ok && difficulty_ok &&
-                           tl::core::group_is_open(n, quest_log.state());
+        const bool quest_ok = tl::core::group_is_open(n, quest_log.state());
+        g.can_be_created = class_ok && dungeon_ok && difficulty_ok && quest_ok;
+        if (!g.can_be_created) {
+            TL_LOG_DEBUG("  group '%s' not created:%s%s%s%s", n.name.c_str(),
+                         class_ok ? "" : " class", dungeon_ok ? "" : " dungeon",
+                         difficulty_ok ? "" : " difficulty", quest_ok ? "" : " quest");
+        }
         if (const tl::formats::CmpField* f = n.field(group_field::kChoice)) {
             g.random_type = tl::core::random_group_type_from_string(f->as_text());
         }
@@ -370,7 +441,7 @@ std::set<int64_t> World::roll_layout_groups(const tl::formats::CmpScene& layout)
         }
         groups.push_back(g);
     }
-    gated = tl::core::roll_random_groups(groups, tl::core::game_random());
+    gated = tl::core::roll_random_groups(groups, tl::core::game_random(), created);
 
     if (!gated.empty()) {
         size_t hidden_by_quest = 0;
@@ -431,12 +502,9 @@ bool World::count_layout_load(const std::string& reference) {
     return timeline;
 }
 
-// `CTriggerUnit::unitInit`: `CItem::unitInit` ->
-// `CBaseUnit::unitInit` makes each `[SKILL]` (`CSkill::CSkill`),
-// then the `LAYOUTFILE` is loaded into a kind-0 `CLayout`, then each
-// `LAYOUT_STATE_n` into a kind-2 one; a state layout that made no
-// `Timeline` is made again as kind 1, which the preloader loads.
-void World::trigger_unit_loads(const std::string& unit, const TriggerProp& prop) {
+// `CBaseUnit::unitInit` makes each `[SKILL]` of a prop
+// (`CSkill::CSkill`), its effects rolled as made.
+void World::roll_prop_skills(const std::string& unit) {
     ensure_prop_index();
     const auto found = prop_files.find(lowered(unit));
     if (found != prop_files.end()) {
@@ -471,6 +539,16 @@ void World::trigger_unit_loads(const std::string& unit, const TriggerProp& prop)
             }
         }
     }
+}
+
+// `CTriggerUnit::unitInit`: `CItem::unitInit` ->
+// `CBaseUnit::unitInit` makes each `[SKILL]` (`CSkill::CSkill`),
+// then the `LAYOUTFILE` is loaded into a kind-0 `CLayout`, then each
+// `LAYOUT_STATE_n` into a kind-2 one; a state layout that made no
+// `Timeline` is made again as kind 1, which the preloader loads.
+void World::trigger_unit_loads(const std::string& unit, const TriggerProp& prop,
+                               bool skills_rolled) {
+    if (!skills_rolled) roll_prop_skills(unit);
     const std::string own = prop_layout_path(unit);
     if (!own.empty()) count_layout_load(own);
     // `CTriggerUnit::addSoundsToState`, twice: a sound found is a
@@ -551,6 +629,93 @@ const std::set<int64_t>* World::load_particle_file(const std::string& path, bool
         }
     }
     return &kept_out;
+}
+
+// `CLevel::loadRoomLayout`, cases 8 and 9, after the bake:
+// `positionUpdated`, then `setEnabled(isEnabled())`, whose `updatePathNodes`
+// lays an enabled `Path Node Occupation` box or circle on the map. Kept in node order.
+void World::collect_path_blockers(const tl::formats::CmpScene& layout,
+                                  const std::set<int64_t>& gated, const ogre::Vector3& origin,
+                                  const ogre::Quaternion& basis) {
+    namespace f = tl::formats::cmp_field::property_node;
+    for (const tl::formats::CmpNode& node : layout.nodes) {
+        if (node.type != tl::formats::cmp_type::kMarker || !node.has_position()) continue;
+        if (gated.count(node.id) != 0) continue;
+        const tl::formats::CmpField* kind = node.field(f::kType);
+        const std::string text = kind != nullptr ? kind->as_text() : std::string();
+        const bool circle = text == "Path Node Occupation Circle";
+        if (!circle && text != "Path Node Occupation Box") continue;
+        const tl::formats::CmpField* enabled = node.field(f::kEnabled);
+        if (enabled != nullptr && enabled->count() == 1 && !enabled->as_bool()) continue;
+        const auto number = [&node](size_t index) {
+            const tl::formats::CmpField* field = node.field(index);
+            return field != nullptr && field->count() == 1 ? field->as_float() : 0.0f;
+        };
+        ogre::Vector3 position;
+        ogre::Quaternion orientation;
+        node_place(node, origin, basis, position, orientation);
+        PathBlocker b;
+        b.circle = circle;
+        b.centre = {position.x, position.y, position.z};
+        const float width = number(f::kBoxWidth);
+        const float length = number(f::kBoxLength);
+        b.scale_x = width != 0.0f ? width : number(f::kRadius);
+        const ogre::Vector3 x = orientation.xAxis();
+        const ogre::Vector3 y = orientation.yAxis();
+        const ogre::Vector3 z = orientation.zAxis();
+        const tl::core::NoSpawnRegion box = tl::core::property_node_bounds(
+            b.centre, {x.x, x.y, x.z}, {y.x, y.y, y.z}, {z.x, z.y, z.z}, b.scale_x,
+            length != 0.0f ? length : 1.0f);
+        b.low = box.min;
+        b.high = box.max;
+        loaded_path_blockers.push_back(b);
+    }
+}
+
+// The ruleset's LEVELPARTICLE layout (a Sound and a Layout Link Particle), placed once:
+// `CGameClient::loadLevel` loads it after `CLevel::populate`
+// (`CLayout::loadLayoutFile`), keeps it (+0x1080), and `updateIngame`
+// puts it at the player every frame.
+void World::place_level_particle(
+    const std::string& level_particle_ref,
+    std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
+    if (level_particle_ref.empty()) return;
+    std::string level_particle_path = resolve_archive_path(level_particle_ref);
+    if (level_particle_path.empty()) {
+        level_particle_path = resolve_archive_path(level_particle_ref + ".cmp");
+    }
+    const size_t systems_before = view_particle_mark();
+    if (!level_particle_path.empty() &&
+        place_layout(level_particle_path, ogre::Vector3::ZERO, ogre::Quaternion::IDENTITY,
+                     /*depth=*/1)) {
+        placed_pieces.emplace_back(level_particle_path, ogre::Vector3::ZERO);
+        const size_t riding = view_level_particle_node(systems_before);
+        TL_LOG_INFO("  LEVELPARTICLE '%s': %zu system node(s) follow the player",
+                    level_particle_ref.c_str(), riding);
+    } else {
+        TL_LOG_WARN("  LEVELPARTICLE '%s' named but could not be placed",
+                    level_particle_ref.c_str());
+    }
+}
+
+// The rooms' activation `CLevel::populate` ends with (`setActivated`, room order), then
+// `CTriggerUnit::setActiveInLevel(true)` of their triggers: the collision
+// onto the map grid after every population test, and the route grid again after.
+void World::activate_deferred_rooms() {
+    defer_room_activation = false;
+    for (const auto& [index, path] : deferred_room_machines) activate_room_machine(index, path);
+    deferred_room_machines.clear();
+    if (!door_trigger_nodes.empty()) {
+        register_door_avoidance();
+        if (passability.ready()) nav.build(passability);
+    }
+}
+
+// `CLevel::loadRoomLayout` after `bakeCollision`: the loaded layouts'
+// enabled path blockers onto the map, before the population.
+void World::lay_loaded_path_blockers() {
+    for (const PathBlocker& b : loaded_path_blockers) set_path_blocker_cells(b, true);
+    path_blockers_laid = !loaded_path_blockers.empty();
 }
 
 bool World::place_layout(const std::string& reference, const ogre::Vector3& origin,
@@ -650,10 +815,11 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     // (CRandomGroup::getGroupCanBeCreated; core/random_groups.h).
     // A `CParticle`'s file is the preloader's one load of it (`load_particle_file`).
     std::set<int64_t> gated;
+    std::vector<int64_t> created_groups;
     if (as_cparticle) {
         if (const std::set<int64_t>* kept_out = load_particle_file(path)) gated = *kept_out;
     } else {
-        gated = roll_layout_groups(layout);
+        gated = roll_layout_groups(layout, &created_groups);
     }
 
     // The layout's Animation Controller nodes, by the unit (`MONSTER`) they drive; they
@@ -730,6 +896,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         NestedScript machine;
         machine.reference = path;
         machine.owner = nested_link;
+        machine.turn_link = turn_link;
         machine.owner_name = nested_link_name;
         machine.owner_nodes = outer_sink != nullptr ? outer_sink : &scripted_nodes;
         // The file's placement: `origin + basis * local`, the same transform
@@ -750,6 +917,10 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         nested_scripts.push_back(std::move(machine));
         node_sink = &nested_scripts.back().nodes;
         level_machines.push_back(&nested_scripts.back().script);
+        // Wired before the file's objects are made: its Monsters' units are made with it as
+        // their nodes are (below).
+        nested_scripts.back().script.set_units(&unit_book);
+        wire_script(nested_scripts.back().script);
     }
     struct SinkGuard {
         NodeMap** slot;
@@ -772,6 +943,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         const std::vector<std::string>* variants = nullptr;
         const std::vector<std::string>* collisions = nullptr;
         int64_t guid = 0;
+        size_t file_index = 0;  ///< the node's place in the file: the walk's order
     };
     std::vector<PendingVariant> pending_variants;
     struct NestedLayout {
@@ -825,6 +997,8 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         const int64_t outer = particle_owner;
         const int64_t outer_link = nested_link;
         const std::string outer_link_name = nested_link_name;
+        const int64_t outer_turn_link = turn_link;
+        if (owns_a_script) turn_link = nested_layout.link;
         particle_owner = nested_layout.owner;
         nested_link = nested_layout.link;
         nested_link_name = nested_layout.link_name;
@@ -894,6 +1068,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         particle_owner = outer;
         nested_link = outer_link;
         nested_link_name = outer_link_name;
+        turn_link = outer_turn_link;
     };
 
     size_t hidden = 0;
@@ -907,8 +1082,9 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     };
     std::vector<TriggerOwnLayout> trigger_own_layouts;
     ensure_sound_index();
-    // `CRoomPiece::vfunc_2`: a room's own piece with a Group above it whose
-    // `CHOICE` is not ALL (`CRandomGroup::m_eRandomType`, +0x108) is cast again after the bake.
+    // `CRoomPiece::vfunc_2`: a piece with a Group above it in its own file whose
+    // `CHOICE` is not ALL (`CRandomGroup::m_eRandomType`, +0x108) is cast again after the bake,
+    // a linked layout's pieces as a room's own.
     std::map<int64_t, const tl::formats::CmpNode*> node_by_id;
     for (const tl::formats::CmpNode& n : layout.nodes) node_by_id.emplace(n.id, &n);
     const auto under_random_group = [&node_by_id](const tl::formats::CmpNode& piece) {
@@ -926,7 +1102,39 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         }
         return false;
     };
-    for (const tl::formats::CmpNode& node : layout.nodes) {
+    collect_path_blockers(layout, gated, origin, basis);
+    // `CEditorScene::loadCompressedLayout` makes the Groups, then the objects
+    // under none, then each made group's objects (a node's nearest Group ancestor) in the order
+    // `rollRandomGroups` left the groups, each group's in the file's order.
+    std::vector<const tl::formats::CmpNode*> made_order;
+    {
+        std::map<int64_t, const tl::formats::CmpNode*> node_of;
+        for (const tl::formats::CmpNode& n : layout.nodes) node_of.emplace(n.id, &n);
+        std::map<int64_t, size_t> group_rank;
+        for (size_t i = 0; i < created_groups.size(); ++i) group_rank.emplace(created_groups[i], i);
+        const auto rank_of = [&](const tl::formats::CmpNode& n) -> size_t {
+            if (n.type == tl::formats::cmp_type::kGroup) return 0;
+            int64_t at = n.parent_id;
+            for (size_t guard = 0; at != -1 && guard < layout.nodes.size(); ++guard) {
+                const auto it = node_of.find(at);
+                if (it == node_of.end()) break;
+                if (it->second->type == tl::formats::cmp_type::kGroup) {
+                    const auto made = group_rank.find(at);
+                    return made == group_rank.end() ? group_rank.size() + 2 : made->second + 2;
+                }
+                at = it->second->parent_id;
+            }
+            return 1;
+        };
+        std::vector<std::pair<size_t, const tl::formats::CmpNode*>> keyed;
+        keyed.reserve(layout.nodes.size());
+        for (const tl::formats::CmpNode& n : layout.nodes) keyed.emplace_back(rank_of(n), &n);
+        std::stable_sort(keyed.begin(), keyed.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& [rank, n] : keyed) made_order.push_back(n);
+    }
+    for (const tl::formats::CmpNode* made_node : made_order) {
+        const tl::formats::CmpNode& node = *made_node;
         // `CSoundObject::setSoundBankGuid`, as the object is made: a GUID
         // that names a sound is a `CSoundBank::addSample`, which leaves
         // `g_Rand` at its low word.
@@ -944,6 +1152,18 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         if (!node.has_position()) continue;
         if (gated.count(node.id)) continue;
 
+        // `CMonsterDescriptor::Set_createNewCharacter`: a Monster's unit is
+        // made, its level set, as its node is - in the file's creation pass, after the links
+        // made before it and before the walk rolls the pieces.
+        if (node.type == tl::formats::cmp_type::kMonster && owns_a_script) {
+            const tl::formats::CmpField* who =
+                node.field(tl::formats::cmp_field::monster::kMonster);
+            if (who != nullptr && !who->as_text().empty()) {
+                tl::core::LevelScript& machine = nested_scripts[nested_script_index].script;
+                machine.preset_unit_creation(node.id, machine.roll_unit_creation(who->as_text()));
+            }
+        }
+
         // Field 0 is VISIBLE on every descriptor; a hidden node is placed hidden
         // (MeshPlacement::start_hidden) so a later Show finds it. A Monster's VISIBLE is
         // field 12 (LevelScript::build reads it there too).
@@ -960,9 +1180,10 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
 
         // A node's position and basis are in its layout's frame: the offset is rotated
         // before it is added, and the rotations compose.
-        const ogre::Vector3 local(node.position().x, node.position().y, node.position().z);
-        const ogre::Vector3 position = origin + basis * local;
-        const ogre::Quaternion orientation = basis * tl::core::node_orientation(node);
+        ogre::Vector3 position;
+        ogre::Quaternion orientation;
+        node_place(node, origin, basis, position, orientation);
+        position = derived_position(node_by_id, node, origin, basis);
 
         // `CLevel::loadRoomLayout`: a
         // `Property Node` typed `Quest Item` (12) joins `+0x108`, `Quest Boss`
@@ -1083,8 +1304,10 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                                      ? drawn->second
                                      : trigger.scale + tl::core::volatile_random().between(
                                                            0.0f, trigger.scale_variation);
+                // Then its `[SKILL]`s (a chest's traps), their effects rolled.
             }
-            if (!trigger_unit.empty() && trigger.found) trigger_unit_loads(trigger_unit, trigger);
+            if (!trigger_unit.empty() && trigger.found)
+                trigger_unit_loads(trigger_unit, trigger, made_trigger_scale.count(node.id) != 0);
             if (has_model) {
                 mesh_ref = trigger.mesh;
             } else {
@@ -1376,6 +1599,10 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                     if (skipped_room_guids.size() < 4) skipped_room_guids.push_back(guid);
                     continue;
                 }
+                // Its `initRoomPiece` in the walk still draws: no mesh is a count of 0, neither
+                // 1 nor above the variant, so `randomIntegerBetween(0, -1)`.
+                pending_variants.push_back({0, std::string::npos, nullptr, nullptr, guid,
+                                            static_cast<size_t>(made_node - layout.nodes.data())});
                 bool collides = true;
                 if (const tl::formats::CmpField* enabled =
                         node.field(tl::formats::cmp_field::room_piece::kCollisionEnabled)) {
@@ -1397,8 +1624,9 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                 collision_placement.orientation = orientation;
                 collision_placement.scale = node_scale;
                 collision_placement.start_hidden = node_start_hidden;
-                collision_placement.room_piece = true;
-                collision_placements.push_back(std::move(collision_placement));
+                collision_placement.has_mesh = false;
+                add_room_piece_collision(*this, collision_placements,
+                                         std::move(collision_placement), depth, false);
                 continue;
             }
 
@@ -1462,10 +1690,8 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                 const std::string collision_path = resolve_archive_path(collision_file);
                 if (rolled && collisions.size() == variants.size()) {
                     collision_index = collision_placements.size();
-                    MeshPlacement collision_placement = piece_placement;
-                    collision_placement.room_piece = true;
-                    collision_placement.recalculate = depth == 1 && under_random_group(node);
-                    collision_placements.push_back(std::move(collision_placement));
+                    add_room_piece_collision(*this, collision_placements, piece_placement, depth,
+                                             under_random_group(node));
                 } else if (collision_path.empty()) {
                     TL_LOG_WARN("  room piece %lld names collision '%s', not in the archive",
                                 static_cast<long long>(guid), collision_file.c_str());
@@ -1474,9 +1700,9 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                     MeshPlacement collision_placement = piece_placement;
                     collision_placement.mesh = collision_path;
                     // A piece with collision is one of `populate`'s sections.
-                    collision_placement.room_piece = true;
-                    collision_placement.recalculate = depth == 1 && under_random_group(node);
-                    collision_placements.push_back(std::move(collision_placement));
+                    add_room_piece_collision(*this, collision_placements,
+                                             std::move(collision_placement), depth,
+                                             under_random_group(node));
                 }
             }
 
@@ -1494,7 +1720,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                 pending_variants.push_back(
                     {mesh_placements.size(), collision_index, &variants,
                      collision_index != std::string::npos ? &collision_entry->second : nullptr,
-                     guid});
+                     guid, static_cast<size_t>(made_node - layout.nodes.data())});
             }
             mesh_placements.push_back(std::move(piece_placement));
         }
@@ -1506,7 +1732,15 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     // file is loaded. While a layout loads, `setRoomPieceGuid` does not.
     {
         std::vector<size_t> unplaced;
+        std::stable_sort(pending_variants.begin(), pending_variants.end(),
+                         [](const PendingVariant& a, const PendingVariant& b) {
+                             return a.file_index < b.file_index;
+                         });
         for (const PendingVariant& pending : pending_variants) {
+            if (pending.variants == nullptr) {
+                tl::core::game_random().integer_between(0, -1);
+                continue;
+            }
             const std::vector<std::string>& variants = *pending.variants;
             const auto variant = static_cast<uint32_t>(
                 tl::core::game_random().integer_between(0, static_cast<int>(variants.size()) - 1));
@@ -1530,6 +1764,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
                 collision_placements[pending.collision].mesh = collision_path;
             }
         }
+        std::sort(unplaced.begin(), unplaced.end());
         for (auto it = unplaced.rbegin(); it != unplaced.rend(); ++it) {
             mesh_placements.erase(mesh_placements.begin() + static_cast<std::ptrdiff_t>(*it));
         }
@@ -1546,12 +1781,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     const size_t meshes = mesh_placements.size();
 
     // Collision meshes are loaded for their triangles only, never placed in the scene.
-    for (const auto& placement : collision_placements) {
-        add_collision_placement(placement);
-        if (placement.collision_group != 0) {
-            collision.set_group_blocks(placement.collision_group, placement.collision_blocks);
-        }
-    }
+    for (const auto& placement : collision_placements) place_collision(*this, placement);
 
     // CTriggerUnit::unitInit: a LAYOUTFILE
     // gives a kind-0 CLayout (+0x240, X360 +0x1e8) under the trigger, shown, started; its
@@ -1634,6 +1864,10 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         NestedScript& machine = nested_scripts[nested_script_index];
         machine.script.set_units(&unit_book);
         wire_script(machine.script);
+        std::vector<int64_t> made_ids;
+        made_ids.reserve(made_order.size());
+        for (const tl::formats::CmpNode* n : made_order) made_ids.push_back(n->id);
+        machine.script.set_made_order(std::move(made_ids));
         machine.script.build(layout, gated);
         init_unit_triggers(machine.script);
         log_puzzles(machine.script);
@@ -1704,141 +1938,147 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
     }
 
     place_merge_layouts(path, origin, basis, depth);
-    if (depth == 0) {
-        // Where the player stands, recorded before the lighting is applied:
-        // the light map starts there (aim_light_map()).
-        if (const tl::formats::CmpNode* start = find_spawn(layout)) {
-            if (start->has_position()) {
-                player_start = origin + ogre::Vector3(start->position().x, start->position().y,
-                                                      start->position().z);
-                have_player_start = true;
-            }
-        }
-        apply_environment(path);
-        // The camera and the sky; the subject stood at the layout's Player Start
-        // (player_start_yaw its facing).
-        view_place_viewer(layout, origin);
-
-        // `CGameClient::loadLevel` ends in
-        // `CLevel::updateNPCIcons`; the player is not in control yet, so it
-        // runs on the first frame that it is.
-        npc_icons_dirty = true;
-
-        if (automap_initialized) {
-            update_automap_icons();
-            if (have_player_start) view_automap_player(player_start);
-        }
-        log_scene_census(" as placed");
-
-        // The level script, built once the whole tree is placed so a wire can find what
-        // it drives. Top-level only; nested graphs run as their own machines.
-        script_layout = layout;
-        script_gated = gated;
-        initial_quests = quest_log.state();
-        script_ready = true;
-
-        // Index the collision soup once the whole tree, nested layouts and all,
-        // has contributed to it.
-        collision.build();
-        if (collision.empty()) {
-            TL_LOG_WARN(
-                "  no collision geometry: none of this layout's pieces names a "
-                "COLLISIONFILE, so nothing will block a character");
-        } else {
-            TL_LOG_INFO("  collision: %zu face(s) from %zu mesh(es), %zu of them nocollide",
-                        collision.triangle_count(), collision_meshes, collision.nocollide_count());
-        }
-
-        // Where a character may be routed, after the whole tree has contributed. A level
-        // with no generated chunks is cast whole (CLevel::bakeCollision).
-        nav.clear();
-        passability.clear();
-        if (!collision.empty()) {
-            const unsigned long nav_started = view_milliseconds();
-            passability.bake(collision, nullptr);
-            const unsigned long nav_took = view_milliseconds() - nav_started;
-            log_passability(passability, static_cast<double>(nav_took) / 1000.0);
-            if (!passability_dump_path.empty()) {
-                write_passability_dump(passability, passability_dump_path);
-            }
-            // Before `nav.build()`, which takes a one-time snapshot of the map
-            // grid's open cells - a door registered afterwards would be solid
-            // in `passability` but walkable in `nav` forever.
-            register_door_avoidance();
-            nav.build(passability);
-            TL_LOG_INFO("  navigation: %zu of %zu cell(s) walkable at %.2f units",
-                        nav.walkable_count(), nav.cell_count(),
-                        static_cast<double>(nav.cell_size()));
-            apply_path_blockers(layout, gated);
-        } else {
-            door_trigger_nodes.clear();
-        }
-        // `CLevel::loadRoomLayout`: the map, drawn from the
-        // grid just baked (none without one); a town's whole (its town flag).
-        view_automap_create();
-        // A hunting monster routes through the same grid the player does,
-        // and stands on the same floor - see LevelScript::set_collision().
-        script.set_navigation(&nav);
-        script.set_collision(&collision);
-
-        // The script runs after the navigation grid: its Level Activated wires may switch
-        // pathing blockers. Before the build, which makes the layout's characters.
-        script.set_equipment_roller(
-            [this](const std::string& unit, tl::core::LevelScript::UnitCreation& made) {
-                roll_unit_equipment(unit, made);
-            });
-        script.set_unit_equipment(unit_equipment_hooks());
-        // The level's observer map (`CLevel +0x200`) is the level's own.
-        unit_observers.clear();
-        skill_observers.clear();
-        script.build(layout, gated);
-        init_unit_triggers(script);
-        log_puzzles(script);
-        // `CGameClient::loadLevel`: once the level's
-        // layout is built, `setSeed(0)` and `setSeedVolatile(0)` - the clock.
-        tl::core::reseed_level_generators();
-        // A Unit Trigger is acted on with A through the console's second target pass.
-        // DIVERGENCE: with nobody holding a
-        // pad (headless), walking up to it fires it.
-        if (config.headless && !config.pad) {
-            script.enable_proximity_unit_triggers(
-                [this](const std::string& unit) { return is_enchant_shrine(unit); });
-        }
-
-        // And the level's hostile units go looking for the player. Nothing in
-        // a layout wires this - a dungeon's monsters carry no wiring at all -
-        // because in the original it is what being hostile *means*.
-        if (const size_t armed = script.arm_hostiles()) {
-            TL_LOG_INFO("  %zu hostile unit(s) will come after the player", armed);
-        }
-        if (script.wire_count() > 0 || script.trigger_count() > 0 || script.has_sound_nodes()) {
-            TL_LOG_INFO(
-                "  level script: %zu object(s), %zu wire(s), %zu trigger(s), "
-                "%zu timeline(s)",
-                script.object_count(), script.wire_count(), script.trigger_count(),
-                script.timeline_count());
-
-            std::vector<tl::core::ScriptEvent> events;
-            logic_trace_text("# level load\n");
-            script.set_has_saved_state(level_has_saved_state);
-            script.set_stored_unit_exists([this](int64_t id) { return level_stores_unit(id); });
-            script.level_activated(quest_log.state(), events);
-            flush_logic_trace(script);
-            apply_script_events(events, scripted_nodes);
-            if (!events.empty()) {
-                TL_LOG_INFO("  level activated: %zu event(s) fired", events.size());
-            }
-        }
-
-        if (collision_skipped > 0) {
-            TL_LOG_WARN("  %zu collision mesh(es) named but not loaded", collision_skipped);
-        }
-
-        log_memory("after the layout");
-    }
+    if (depth == 0) finish_level_layout(path, layout, gated, origin);
 
     layouts_in_progress.erase(path);
     return true;
+}
+
+// `place_layout` at depth 0, once the whole tree is placed: the player's start, the viewer, the
+// collision and the grids, then the level script built and activated.
+void World::finish_level_layout(const std::string& path, const tl::formats::CmpScene& layout,
+                                const std::set<int64_t>& gated, const ogre::Vector3& origin) {
+    // Where the player stands, recorded before the lighting is applied:
+    // the light map starts there (aim_light_map()).
+    if (const tl::formats::CmpNode* start = find_spawn(layout)) {
+        if (start->has_position()) {
+            player_start = origin + ogre::Vector3(start->position().x, start->position().y,
+                                                  start->position().z);
+            have_player_start = true;
+        }
+    }
+    apply_environment(path);
+    // The camera and the sky; the subject stood at the layout's Player Start
+    // (player_start_yaw its facing).
+    view_place_viewer(layout, origin);
+
+    // `CGameClient::loadLevel` ends in
+    // `CLevel::updateNPCIcons`; the player is not in control yet, so it
+    // runs on the first frame that it is.
+    npc_icons_dirty = true;
+
+    if (automap_initialized) {
+        update_automap_icons();
+        if (have_player_start) view_automap_player(player_start);
+    }
+    log_scene_census(" as placed");
+
+    // The level script, built once the whole tree is placed so a wire can find what
+    // it drives. Top-level only; nested graphs run as their own machines.
+    script_layout = layout;
+    script_gated = gated;
+    initial_quests = quest_log.state();
+    script_ready = true;
+
+    // Index the collision soup once the whole tree, nested layouts and all,
+    // has contributed to it.
+    collision.build();
+    if (collision.empty()) {
+        TL_LOG_WARN(
+            "  no collision geometry: none of this layout's pieces names a "
+            "COLLISIONFILE, so nothing will block a character");
+    } else {
+        TL_LOG_INFO("  collision: %zu face(s) from %zu mesh(es), %zu of them nocollide",
+                    collision.triangle_count(), collision_meshes, collision.nocollide_count());
+    }
+
+    // Where a character may be routed, after the whole tree has contributed. A level
+    // with no generated chunks is cast whole (CLevel::bakeCollision).
+    nav.clear();
+    passability.clear();
+    if (!collision.empty()) {
+        const unsigned long nav_started = view_milliseconds();
+        passability.bake(collision, nullptr);
+        const unsigned long nav_took = view_milliseconds() - nav_started;
+        log_passability(passability, static_cast<double>(nav_took) / 1000.0);
+        if (!passability_dump_path.empty()) {
+            write_passability_dump(passability, passability_dump_path);
+        }
+        // Before `nav.build()`, which takes a one-time snapshot of the map
+        // grid's open cells - a door registered afterwards would be solid
+        // in `passability` but walkable in `nav` forever.
+        register_door_avoidance();
+        nav.build(passability);
+        TL_LOG_INFO("  navigation: %zu of %zu cell(s) walkable at %.2f units", nav.walkable_count(),
+                    nav.cell_count(), static_cast<double>(nav.cell_size()));
+        apply_path_blockers(layout, gated);
+        loaded_path_blockers.clear();
+    } else {
+        door_trigger_nodes.clear();
+    }
+    // `CLevel::loadRoomLayout`: the map, drawn from the
+    // grid just baked (none without one); a town's whole (its town flag).
+    view_automap_create();
+    // A hunting monster routes through the same grid the player does,
+    // and stands on the same floor - see LevelScript::set_collision().
+    script.set_navigation(&nav);
+    script.set_collision(&collision);
+
+    // The script runs after the navigation grid: its Level Activated wires may switch
+    // pathing blockers. Before the build, which makes the layout's characters.
+    script.set_equipment_roller(
+        [this](const std::string& unit, tl::core::LevelScript::UnitCreation& made) {
+            roll_unit_equipment(unit, made);
+        });
+    script.set_unit_equipment(unit_equipment_hooks());
+    // The level's observer map (`CLevel +0x200`) is the level's own.
+    unit_observers.clear();
+    skill_observers.clear();
+    script.build(layout, gated);
+    init_unit_triggers(script);
+    log_puzzles(script);
+    // `CGameClient::loadLevel`: once the level's
+    // layout is built, `setSeed(0)` and `setSeedVolatile(0)` - the clock.
+    tl::core::reseed_level_generators();
+    // A Unit Trigger is acted on with A through the console's second target pass.
+    // DIVERGENCE: with nobody holding a
+    // pad (headless), walking up to it fires it.
+    if (config.headless && !config.pad) {
+        script.enable_proximity_unit_triggers(
+            [this](const std::string& unit) { return is_enchant_shrine(unit); });
+    }
+
+    // And the level's hostile units go looking for the player. Nothing in
+    // a layout wires this - a dungeon's monsters carry no wiring at all -
+    // because in the original it is what being hostile *means*.
+    if (const size_t armed = script.arm_hostiles()) {
+        TL_LOG_INFO("  %zu hostile unit(s) will come after the player", armed);
+    }
+    if (script.wire_count() > 0 || script.trigger_count() > 0 || script.has_sound_nodes()) {
+        TL_LOG_INFO(
+            "  level script: %zu object(s), %zu wire(s), %zu trigger(s), "
+            "%zu timeline(s)",
+            script.object_count(), script.wire_count(), script.trigger_count(),
+            script.timeline_count());
+
+        std::vector<tl::core::ScriptEvent> events;
+        logic_trace_text("# level load\n");
+        script.set_has_saved_state(level_has_saved_state);
+        script.set_stored_unit_exists([this](int64_t id) { return level_stores_unit(id); });
+        script.set_activation_listener(sound_listener);
+        script.level_activated(quest_log.state(), events);
+        flush_logic_trace(script);
+        apply_script_events(events, scripted_nodes);
+        if (!events.empty()) {
+            TL_LOG_INFO("  level activated: %zu event(s) fired", events.size());
+        }
+    }
+
+    if (collision_skipped > 0) {
+        TL_LOG_WARN("  %zu collision mesh(es) named but not loaded", collision_skipped);
+    }
+
+    log_memory("after the layout");
 }
 
 void World::place_layout_item(const tl::formats::CmpNode& node, const ogre::Vector3& at) {
@@ -1950,6 +2190,8 @@ bool World::find_chunk_marker(const std::string& chunk_cmp_path, const ogre::Vec
 }
 
 bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_number) {
+    loaded_path_blockers.clear();
+    path_blockers_laid = false;
     // `CDungeonManager::getDungeonByName`:
     // the process's dungeon of that `NAME`, with the salt and the floor
     // templates it has kept.
@@ -2091,7 +2333,7 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
     deferred_room_machines.clear();
     level_chunk_origins.clear();
     collision_sections.clear();
-    passability_recalculate.clear();
+    begin_floor_collision(*this, level_template, *layout);
     layout_seeding = true;
     layout_level_seed = level_seed;
     for (size_t chunk_i = 0; chunk_i < layout->instances.size(); ++chunk_i) {
@@ -2132,8 +2374,7 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
         }
         collision_section = -1;
     }
-
-    layout_seeding = false;
+    end_room_placement(*this);
     if (placed_chunks == 0) {
         defer_room_activation = false;
         deferred_room_machines.clear();
@@ -2142,31 +2383,6 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
         return false;
     }
     TL_LOG_INFO("  %zu of %zu room(s) placed", placed_chunks, layout->instances.size());
-
-    // The level-wide atmosphere: the ruleset's LEVELPARTICLE layout (a Sound and a Layout
-    // Link Particle), placed once.
-    const std::string level_particle_ref = level_template.level_particle;
-    if (!level_particle_ref.empty()) {
-        std::string level_particle_path = resolve_archive_path(level_particle_ref);
-        if (level_particle_path.empty()) {
-            level_particle_path = resolve_archive_path(level_particle_ref + ".cmp");
-        }
-        const size_t systems_before = view_particle_mark();
-        if (!level_particle_path.empty() &&
-            place_layout(level_particle_path, ogre::Vector3::ZERO, ogre::Quaternion::IDENTITY,
-                         /*depth=*/1)) {
-            placed_pieces.emplace_back(level_particle_path, ogre::Vector3::ZERO);
-            // CGameClient::loadLevel keeps the layout
-            // (+0x1080) and updateIngame puts it at the
-            // player every frame.
-            const size_t riding = view_level_particle_node(systems_before);
-            TL_LOG_INFO("  LEVELPARTICLE '%s': %zu system node(s) follow the player",
-                        level_particle_ref.c_str(), riding);
-        } else {
-            TL_LOG_WARN("  LEVELPARTICLE '%s' named but could not be placed",
-                        level_particle_ref.c_str());
-        }
-    }
 
     // Lighting, CAMERAMULT and fog over every room: apply_environment() takes the STRATA's
     // RULESET (rules_path_for()).
@@ -2181,7 +2397,7 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
     passability.clear();
     if (!collision.empty()) {
         const unsigned long bake_started = view_milliseconds();
-        passability.bake(collision, &collision_sections, &passability_recalculate);
+        bake_floor_passability(*this);
         for (const tl::core::PassabilityMap::Box& box : collision_sections) {
             TL_LOG_DEBUG("  room box (%.3f, %.3f)..(%.3f, %.3f)%s", static_cast<double>(box.low.x),
                          static_cast<double>(box.low.z), static_cast<double>(box.high.x),
@@ -2193,11 +2409,12 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
         if (!passability_dump_path.empty()) {
             write_passability_dump(passability, passability_dump_path);
         }
-        // Before `nav.build()` - see the matching note in place_layout()'s depth == 0 tail.
-        register_door_avoidance();
+        // The doors' and triggers' collision reaches the map grid as the rooms activate, after
+        // the population (below).
         nav.build(passability);
         TL_LOG_INFO("  navigation: %zu of %zu cell(s) walkable at %.2f units", nav.walkable_count(),
                     nav.cell_count(), static_cast<double>(nav.cell_size()));
+        lay_loaded_path_blockers();
     } else {
         door_trigger_nodes.clear();
     }
@@ -2419,6 +2636,9 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
     }
     tl::core::reseed_level_generators();
 
+    // `CLevel::populate`: its sections, `clearOutRoomPieces`, the loading
+    // screen's first update, then the random population.
+    view_update_loading();
     // CGameClient::loadLevel calls
     // CLevel::populate(false) on a remembered level: no random population;
     // its units come from the state.
@@ -2429,13 +2649,16 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
     // remembered level runs it too, and `+0xb9` keeps a placed objective from
     // being placed twice.
     populate_quests();
+    view_update_loading();
 
     // ... and its last act: every room scene activated (setActivated, through
     // CLayoutDescriptor::descriptorSceneActivated) in room order;
     // CGameClient::loadLevel the same for LEVELPARTICLE after populate.
-    defer_room_activation = false;
-    for (const auto& [index, path] : deferred_room_machines) activate_room_machine(index, path);
-    deferred_room_machines.clear();
+    activate_deferred_rooms();
+    view_update_loading();
+    // `findParticles` (the level's particle layouts listed), then populate's last update.
+    view_update_loading();
+    place_level_particle(level_template.level_particle, placed_pieces);
 
     if (const size_t armed = script.arm_hostiles()) {
         TL_LOG_INFO("  %zu hostile unit(s) will come after the player", armed);
@@ -2473,506 +2696,6 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
 
     log_memory("after the dungeon floor");
     return true;
-}
-
-// `CResourceManager::createUnit` and
-// `CLevel::addItem` for a `CREATEAS: TRIGGER`
-// prop: the port lays down a layout of one `Unit Trigger` node (the header).
-bool World::place_populated_trigger(const std::string& unit, const ogre::Vector3& at,
-                                    const ogre::Quaternion& facing, int64_t id, float scale) {
-    TriggerProp prop;
-    if (!trigger_prop(unit, prop)) return false;
-
-    using tl::formats::CmpField;
-    const auto vec = [](float x, float y, float z) {
-        CmpField f;
-        for (float v : {x, y, z}) {
-            uint32_t bits = 0;
-            std::memcpy(&bits, &v, sizeof bits);
-            f.words.push_back(bits);
-        }
-        return f;
-    };
-    const auto number = [](uint32_t value) {
-        CmpField f;
-        f.words.push_back(value);
-        return f;
-    };
-    // A string field: UTF-16LE with a NUL, padded to whole dwords.
-    const auto text = [](const std::string& value) {
-        const size_t dwords = ((value.size() + 1) * 2 + 3) / 4;
-        CmpField f;
-        f.words.assign(dwords, 0u);
-        for (size_t i = 0; i < value.size(); ++i) {
-            f.words[i / 2] |= static_cast<uint32_t>(static_cast<unsigned char>(value[i]))
-                              << (16 * (i % 2));
-        }
-        return f;
-    };
-
-    tl::formats::CmpNode node;
-    node.type = tl::formats::cmp_type::kUnitTrigger;
-    node.name = unit;
-    node.id = id;
-    node.parent_id = -1;
-    node.root = true;
-    // `unit_trigger`'s fields in their order: the position and the three axes
-    // (the layout is put down already turned), enabled, the unit, and the
-    // rest at what an unauthored node holds.
-    node.fields = {vec(0.0f, 0.0f, 0.0f),
-                   vec(0.0f, 0.0f, 1.0f),
-                   vec(1.0f, 0.0f, 0.0f),
-                   vec(0.0f, 1.0f, 0.0f),
-                   number(1),
-                   text(unit),
-                   number(0),
-                   text(""),
-                   text(""),
-                   number(0),
-                   number(0)};
-    node.vec3s = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
-    node.strings = {unit};
-
-    auto scene = std::make_unique<tl::formats::CmpScene>();
-    scene->ok = true;
-    scene->nodes.push_back(std::move(node));
-    const std::string key = "populate:" + unit + "#" + std::to_string(id);
-    layout_files[key] = std::move(scene);
-    made_trigger_scale[id] = scale;
-    const bool placed = place_layout(key, at, facing, /*depth=*/1);
-    made_trigger_scale.erase(id);
-    if (!placed) return false;
-    populated_triggers[id] = PopulatedTrigger{unit, facing};
-    return true;
-}
-
-// The same function's loop: each unit made at the level's monster
-// level, turned randomBetweenVolatile(0, 360), a character placed at
-// randomOpenPositionRange(master, 1, 4, true) and made the master's pet.
-//
-void World::place_unit_minions(int64_t master, int64_t owner,
-                               const std::vector<std::string>& minions) {
-    for (const std::string& name : minions) {
-        // Not a character: made and left out of the level.
-        ensure_monster_index();
-        if (monster_files.count(lowered(name)) == 0) continue;
-        index_unit(name);
-        const tl::core::LevelScript::UnitCreation creation = script.roll_unit_creation(name);
-        const float yaw = tl::core::volatile_random().between(0.0f, 360.0f) * 0.017453292f;
-        tl::core::Vec3 from;
-        if (!script.unit_position(master, from)) return;
-        const tl::core::Vec3 at = tl::core::random_open_position(
-            from, 1.0f, 4.0f,
-            [this](const tl::core::Vec3& p) {
-                return !passability.ready() ||
-                       (passability.map_passable(p) && passability.position_passable(p) &&
-                        !tl::core::is_in_no_spawn_region(no_spawn_regions, p, 0.0f));
-            },
-            tl::core::volatile_random());
-        // `CLevel::addCharacter(minion, at, false)`: on the ground.
-        const ogre::Quaternion turn(ogre::Radian(yaw), ogre::Vector3::UNIT_Y);
-        const ogre::Vector3 place = dropped_to_ground(ogre::Vector3(at.x, at.y, at.z));
-        if (spawn_unit(name, place, owner, level_monster_level, /*champion=*/false,
-                       /*spawn_anim=*/false, turn, creation.scale) == nullptr) {
-            continue;
-        }
-        const int64_t id = spawned[owner].back().id;
-        const ogre::Vector3 forward = turn * ogre::Vector3::UNIT_Z;
-        script.add_spawned_unit(id, name, tl::core::Vec3{place.x, place.y, place.z},
-                                /*hunts=*/false, std::atan2(forward.x, forward.z), &creation);
-        int made_level = 0;
-        if (0 < level_monster_level &&
-            !(script.unit_level(id, made_level) && made_level == level_monster_level)) {
-            apply_spawn_level(id);
-        }
-        // ... which rolls a minion's own minions, before its master takes it.
-        spawn_unit_minions(id, owner);
-        add_monster_pet(script, id, script, master);
-        TL_LOG_INFO("  minion: %s beside %s at (%.2f, %.2f, %.2f)", name.c_str(),
-                    script.unit_of(master).c_str(), static_cast<double>(place.x),
-                    static_cast<double>(place.y), static_cast<double>(place.z));
-    }
-}
-
-int World::populate_units(const std::string& spawn_class, uint32_t wanted, int level,
-                          tl::core::Randomizer& sections, const PopulatePhase& phase) {
-    if (wanted == 0) return 0;
-    if (population_sections.empty()) {
-        TL_LOG_WARN("  %s: no room piece made a section; none placed", phase.label);
-        return 0;
-    }
-
-    SpawnTables tables;
-    build_spawn_context(tables, /*items_by_type=*/false);
-    std::optional<tl::core::SpawnClass> loaded;
-    if (!spawn_class.empty()) loaded = load_spawn_class(spawn_class, tables.context);
-    // No such class (`NONE` is what a template names for a phase it leaves
-    // out): the phase still runs, as the original's does, and places nothing.
-    if (!loaded) TL_LOG_INFO("  %s: no spawn class '%s'", phase.label, spawn_class.c_str());
-
-    tl::core::RunicRandom& g_rand = tl::core::game_random();
-    tl::core::RunicRandom& volatile_rolls = tl::core::volatile_random();
-
-    // `CLevel +0xf0`, the `Quest Boss` property nodes, and how often each has
-    // been stood on (`CPropertyNode +0x114`).
-    std::vector<tl::core::SpawnMarker> markers;
-    if (phase.markers) {
-        for (const QuestMarker& marker : quest_boss_markers) {
-            tl::core::SpawnMarker m;
-            m.position = {marker.position.x, marker.position.y, marker.position.z};
-            m.orientation = {marker.orientation.w, marker.orientation.x, marker.orientation.y,
-                             marker.orientation.z};
-            m.taken = marker.taken;
-            markers.push_back(m);
-        }
-    }
-
-    const auto turn_of = [](const tl::core::PopulatedFacing& facing) {
-        if (facing.from_marker) {
-            return ogre::Quaternion(facing.orientation[0], facing.orientation[1],
-                                    facing.orientation[2], facing.orientation[3]);
-        }
-        return ogre::Quaternion(ogre::Radian(facing.yaw), ogre::Vector3::UNIT_Y);
-    };
-
-    int breakables = 0;
-    int triggers = 0;
-    std::map<std::string, int> counts;
-    // What `createUnit` drew for a unit, by handle, until it is added.
-    std::map<int64_t, tl::core::LevelScript::UnitCreation> made_characters;
-    std::map<int64_t, float> made_scales;
-    int64_t handles = 0;
-
-    tl::core::PopulateWorld world;
-    world.volatile_rolls = &volatile_rolls;
-    world.markers = phase.markers ? &markers : nullptr;
-    world.roll = [&](const std::string&) {
-        // `rollSpawnClass(out, null, null, null, CLevel +0x1a8, 0xffffffff, 0, -1, 0, 0)`:
-        // on `g_Rand` as it stands.
-        std::vector<std::string> rolled;
-        if (!loaded) return rolled;
-        loaded->roll_spawn_class(rolled, nullptr, nullptr, nullptr, level, 0xffffffffu,
-                                 /*level_bonus=*/0, /*rarity_override=*/-1, /*magic_find=*/0,
-                                 /*flags=*/0, g_rand, tables.context);
-        return rolled;
-    };
-    world.random_open_position = [this](const tl::core::Vec3& at, float radius) {
-        return populate_open_position(at, radius);
-    };
-    world.in_no_spawn_region = [this](const tl::core::Vec3& at, float radius) {
-        return tl::core::is_in_no_spawn_region(no_spawn_regions, at, radius);
-    };
-    world.passable_between = [this](const tl::core::Vec3& from, const tl::core::Vec3& to) {
-        return !passability.ready() || passability.passable_between(from, to, /*map_only=*/false);
-    };
-    world.create = [&](const std::string& unit) {
-        tl::core::PopulatedUnit made;
-        made.handle = ++handles;
-        ensure_prop_index();
-        const auto prop_file = prop_files.find(lowered(unit));
-        if (prop_file == prop_files.end()) {
-            // Not a prop: a character (the props class's `Mimic` among them).
-            ensure_monster_index();
-            if (monster_files.count(lowered(unit)) == 0) return tl::core::PopulatedUnit{};
-            // Its numbers, which making it reads.
-            index_unit(unit);
-            made.kind = tl::core::PopulatedKind::Character;
-            made_characters[made.handle] = script.roll_unit_creation(unit);
-            return made;
-        }
-        const tl::formats::AdmFile file = read_unit_file(prop_file->second);
-        if (!file.ok) return tl::core::PopulatedUnit{};
-        made.kind = tl::core::PopulatedKind::Item;
-        if (is_breakable_unit(unit)) {
-            // `CBaseUnit::unitInit`, through
-            // `CItem::unitInit`: the scale. A breakable (`BREAKABLE` ->
-            // `CONTAINER` -> `ITEM`) never blocks.
-            made_scales[made.handle] =
-                tl::core::breakable_scale(tl::core::read_breakable(file), volatile_rolls);
-            return made;
-        }
-        // A `CREATEAS: TRIGGER` prop (the chests).
-        TriggerProp prop;
-        if (!trigger_prop(unit, prop)) {
-            TL_LOG_WARN("  %s: '%s' is neither a breakable nor a trigger prop", phase.label,
-                        unit.c_str());
-            return tl::core::PopulatedUnit{};
-        }
-        // `CBaseUnit::unitInit` draws its
-        // scale as it is made.
-        made_scales[made.handle] = prop.scale + volatile_rolls.between(0.0f, prop.scale_variation);
-        // `+0x18d`, `+0x19c` and `ISA 0x20`: a collideable chest.
-        made.blocks = prop.collideable && !prop.collision.empty() &&
-                      unit_types.isa(prop.unittype, tl::core::unit_type::kInteractable);
-        return made;
-    };
-    world.add_character = [&](const tl::core::PopulatedUnit& made, const std::string& unit,
-                              const tl::core::Vec3& at, const tl::core::PopulatedFacing& facing,
-                              bool champion) {
-        const auto creation = made_characters.find(made.handle);
-        if (creation == made_characters.end()) return false;
-        // `CLevel::addCharacter(unit, at, false)`:
-        // on the ground. `makeChampion(name,
-        // level + 1)` is `spawn_unit`'s.
-        const ogre::Quaternion turn = turn_of(facing);
-        const ogre::Vector3 forward = turn * ogre::Vector3::UNIT_Z;
-        const ogre::Vector3 place = dropped_to_ground(ogre::Vector3(at.x, at.y, at.z));
-        if (spawn_unit(unit, place, phase.owner, level, champion, /*spawn_anim=*/false, turn,
-                       creation->second.scale) == nullptr) {
-            return false;
-        }
-        const SpawnedUnit& placed = spawned[phase.owner].back();
-        script.add_spawned_unit(placed.id, unit, tl::core::Vec3{place.x, place.y, place.z},
-                                /*hunts=*/false, std::atan2(forward.x, forward.z),
-                                &creation->second);
-        // Made at the level's monster level already; only a champion's
-        // `level + 1` sets it again.
-        const auto wanted_level = unit_spawn_level.find(placed.id);
-        int made_level = 0;
-        if (wanted_level != unit_spawn_level.end() && wanted_level->second.level > 0 &&
-            !(script.unit_level(placed.id, made_level) &&
-              made_level == wanted_level->second.level)) {
-            apply_spawn_level(placed.id);
-        }
-        // `populateSectionOfLevel`: a champion's name is
-        // `CRandomNames::generateName(true)`, drawn on the game generator once
-        // the character is in the level, and `makeChampion` takes it.
-        if (champion) {
-            load_quest_book();
-            if (!random_names.empty()) {
-                unit_names[placed.id] = random_names.generate_name(true, g_rand);
-                TL_LOG_INFO("  champion: %s is '%s'", unit.c_str(), unit_names[placed.id].c_str());
-            }
-            // `makeChampion` on it: the
-            // champion's hit points, armour, experience and fame, and its size.
-            script.make_unit_champion(placed.id);
-        }
-        ++counts[unit];
-        // `addCharacter` -> `createPathfinder`: its minions, rolled after the
-        // name `makeChampion` took.
-        spawn_unit_minions(placed.id, phase.owner);
-        return true;
-    };
-    world.add_item = [&](const tl::core::PopulatedUnit& made, const std::string& unit,
-                         const tl::core::Vec3& at, const tl::core::PopulatedFacing& facing) {
-        const ogre::Quaternion turn = turn_of(facing);
-        if (!is_breakable_unit(unit)) {
-            // `addItem`, on the ground (`CItem::snapToGround`).
-            //
-            const ogre::Vector3 ground = snap_item_to_ground(ogre::Vector3(at.x, at.y, at.z));
-            const auto scale = made_scales.find(made.handle);
-            if (!place_populated_trigger(unit, ground, turn, next_spawned_id(),
-                                         scale != made_scales.end() ? scale->second : 1.0f)) {
-                return false;
-            }
-            ++triggers;
-            ++counts[unit];
-            return true;
-        }
-        // `CLevel::addItem(item, at, true)`:
-        // only a `CEquipment` is tossed, so a `CBreakable` stands where it was
-        // put, on the ground (`setActiveInLevel`).
-        const auto scale = made_scales.find(made.handle);
-        if (!place_breakable(unit, ogre::Vector3(at.x, at.y, at.z), turn, next_spawned_id(),
-                             nullptr, scale != made_scales.end() ? &scale->second : nullptr)) {
-            return false;
-        }
-        ++breakables;
-        ++counts[unit];
-        return true;
-    };
-    world.discard = [&](const tl::core::PopulatedUnit& made) {
-        made_characters.erase(made.handle);
-        made_scales.erase(made.handle);
-    };
-
-    const int placed =
-        tl::core::populate_phase(population_sections, sections, g_rand, spawn_class, wanted,
-                                 phase.champion, phase.markers, phase.empty_counts, world);
-    if (phase.markers) {
-        for (size_t i = 0; i < markers.size() && i < quest_boss_markers.size(); ++i) {
-            quest_boss_markers[i].taken = markers[i].taken;
-        }
-    }
-
-    std::string summary;
-    for (const auto& entry : counts) {
-        summary += (summary.empty() ? "" : ", ") + std::to_string(entry.second) + " " + entry.first;
-    }
-    if (triggers > 0) {
-        // The chests' own collision, into the soup and onto the map grid
-        // (`addToAvoidanceMap`), and the routes around them.
-        collision.build();
-        register_door_avoidance();
-        if (passability.ready()) nav.build(passability);
-    }
-    if (phase.props) {
-        TL_LOG_INFO(
-            "  props: %d of %u placed from '%s' over %zu section(s) (%d breakable(s), "
-            "%d trigger prop(s)%s%s)",
-            placed, wanted, spawn_class.c_str(), population_sections.size(), breakables, triggers,
-            summary.empty() ? "" : ": ", summary.c_str());
-    } else if (placed > 0) {
-        TL_LOG_INFO("  %s: %d of %u placed from '%s'%s (%s)", phase.label, placed, wanted,
-                    spawn_class.c_str(), phase.champion ? ", promoted to champion" : "",
-                    summary.c_str());
-    } else if (loaded) {
-        TL_LOG_WARN("  %s: none placed from '%s'", phase.label, spawn_class.c_str());
-    }
-    return placed;
-}
-
-// A CFormationNode: setLayoutFile loads the layout
-// hidden, its Monsters out of the level, until the player comes near (wake_formations()).
-bool World::add_pending_formation(const std::string& reference, const ogre::Vector3& at,
-                                  int monster_level) {
-    std::string formation_path = resolve_archive_path(reference);
-    if (formation_path.empty()) formation_path = resolve_archive_path(reference + ".cmp");
-    if (formation_path.empty()) {
-        TL_LOG_WARN("  formations: '%s' named but not found in the archive", reference.c_str());
-        return false;
-    }
-    const tl::formats::CmpScene* const scene = layout_file(formation_path);
-    if (scene == nullptr || !scene->ok) return false;
-    bool spawners = false;
-    for (const tl::formats::CmpNode& node : scene->nodes) {
-        if (node.type == tl::formats::cmp_type::kUnitSpawner) spawners = true;
-    }
-    pending_formations.push_back({formation_path, at, monster_level, false, spawners, reference});
-    TL_LOG_INFO("  formation %s%s waits at (%.2f, %.2f, %.2f)", formation_path.c_str(),
-                spawners ? " (unit spawners)" : "", static_cast<double>(at.x),
-                static_cast<double>(at.y), static_cast<double>(at.z));
-    return true;
-}
-
-// `CLevel::populate(true)`, the random
-// population: formations, the six counts, then monsters, champions, NPCs,
-// creeps, props and gold.
-void World::populate_level(const tl::core::LevelTemplate& level_template, int level,
-                           std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
-    tl::core::RunicRandom& g_rand = tl::core::game_random();
-    tl::core::RunicRandom& volatile_rolls = tl::core::volatile_random();
-    const tl::core::SpawnSlots& spawn_classes = level_template.chosen_spawn_classes;
-
-    // The one section randomizer every phase picks from: `CRandomizer(0)`, a
-    // choice a section, weight 100.
-    tl::core::Randomizer sections(tl::core::RandomizerType::kNormal);
-    for (size_t i = 0; i < population_sections.size(); ++i) {
-        sections.add_choice(static_cast<int32_t>(i), 100);
-    }
-
-    // The pathable area is `CLevel +0x58`, the cells `calculatePassability`
-    // left open before erosion (core/passability.h).
-    const uint32_t pathable_cells = passability.passable_cells();
-
-    // `populateFormations`, run only for a
-    // template that names a formations file (`+0x5b0`); its count is drawn
-    // inside, after the file randomizer is filled.
-    if (!spawn_classes[7].empty()) {
-        std::vector<tl::core::Vec3> existing;
-        for (const PendingFormation& formation : pending_formations) {
-            existing.push_back({formation.at.x, formation.at.y, formation.at.z});
-        }
-        int formations_placed = 0;
-        tl::core::FormationWorld world;
-        world.volatile_rolls = &volatile_rolls;
-        world.random_open_position = [this](const tl::core::Vec3& at, float radius) {
-            return populate_open_position(at, radius);
-        };
-        world.in_no_spawn_region = [this](const tl::core::Vec3& at, float radius) {
-            return tl::core::is_in_no_spawn_region(no_spawn_regions, at, radius);
-        };
-        world.add_formation = [&](const std::string& reference, const tl::core::Vec3& open) {
-            // `CFormationNode::setPosition(at)`; its monsters go to the ground
-            // as they join the level.
-            const ogre::Vector3 at = dropped_to_ground(ogre::Vector3(open.x, open.y, open.z));
-            if (!add_pending_formation(reference, at, level)) return;
-            placed_pieces.emplace_back(pending_formations.back().path, at);
-            ++formations_placed;
-        };
-        const uint32_t formations_wanted = tl::core::populate_formations(
-            population_sections, sections, formation_choices(spawn_classes[7]),
-            [&]() {
-                return static_cast<uint32_t>(
-                    tl::core::units_to_create(level_template, 7, pathable_cells, g_rand));
-            },
-            existing, g_rand, world);
-        TL_LOG_INFO("  Formations Created: %u (%d placed from '%s')", formations_wanted,
-                    formations_placed, spawn_classes[7].c_str());
-    }
-
-    // The counts, in `populate`'s order: slots 0
-    // (monsters), 2 (props), 1 (champions), 3 (NPCs), 4 (creeps) and 5 (gold).
-    // `KSETTINGS_NETBOOK_MODE` 1 would zero the creeps; it is 0 here.
-    const auto count = [&](size_t slot) {
-        return static_cast<uint32_t>(std::max<int64_t>(
-            0, tl::core::units_to_create(level_template, slot, pathable_cells, g_rand)));
-    };
-    const uint32_t monsters_wanted = count(0);
-    const uint32_t props_wanted = count(2);
-    const uint32_t champions_wanted = count(1);
-    const uint32_t npcs_wanted = count(3);
-    const uint32_t creeps_wanted = count(4);
-    const uint32_t gold_wanted = count(5);
-    TL_LOG_INFO(
-        "  pathable area %.1f m^2: wants %u monster(s), %u prop(s), %u champion(s), "
-        "%u NPC(s), %u creep(s), %u gold",
-        static_cast<double>(static_cast<float>(pathable_cells) / 6.5f), monsters_wanted,
-        props_wanted, champions_wanted, npcs_wanted, creeps_wanted, gold_wanted);
-
-    // The phases (monsters, champions, NPCs, creeps
-    // props). Only the monsters' loop lets ten empty rolls
-    // pass before counting one; only the NPCs stand on the level's markers.
-    PopulatePhase monsters{-2001, "monsters"};
-    PopulatePhase champions{-2003, "champions"};
-    champions.champion = true;
-    champions.empty_counts = true;
-    PopulatePhase npcs{-2004, "NPCs"};
-    npcs.markers = true;
-    npcs.empty_counts = true;
-    PopulatePhase creeps{-2002, "creeps"};
-    creeps.empty_counts = true;
-    PopulatePhase props{-2005, "props"};
-    props.empty_counts = true;
-    props.props = true;
-    populate_units(spawn_classes[0], monsters_wanted, level, sections, monsters);
-    populate_units(spawn_classes[1], champions_wanted, level, sections, champions);
-    populate_units(spawn_classes[3], npcs_wanted, level, sections, npcs);
-    populate_units(spawn_classes[4], creeps_wanted, level, sections, creeps);
-    // `setRandomizerToNormal(1.0)` ahead of the props.
-    sections.set_randomizer_to_normal(1.0f);
-    populate_units(spawn_classes[2], props_wanted, level, sections, props);
-
-    // Gold.
-    if (gold_wanted > 0 && !population_sections.empty()) {
-        tl::core::GoldWorld world;
-        world.volatile_rolls = &volatile_rolls;
-        world.random_open_item_position = [this](const tl::core::Vec3& at, float radius) {
-            return tl::core::random_open_item_position(
-                at, 0.0f, radius,
-                [this](const tl::core::Vec3& p) {
-                    return !passability.ready() || passability.map_passable(p);
-                },
-                tl::core::volatile_random());
-        };
-        world.in_no_spawn_region = [this](const tl::core::Vec3& at, float radius) {
-            return tl::core::is_in_no_spawn_region(no_spawn_regions, at, radius);
-        };
-        world.add_gold = [this](int32_t amount, const tl::core::Vec3& at) {
-            // `new CItemGold(rm, amount)`,
-            // `addItem(gold, at, false)`.
-            place_gold(tl::core::make_gold_pile(amount, tl::core::volatile_random()),
-                       ogre::Vector3(at.x, at.y, at.z), nullptr, /*drop_sound=*/false);
-        };
-        const int piles =
-            tl::core::populate_gold(population_sections, sections, gold_wanted, g_rand, world);
-        TL_LOG_INFO("  gold: %d of %u pile(s) placed", piles, gold_wanted);
-    }
-
-    if (!spawn_classes[6].empty()) {
-        TL_LOG_INFO("  fish: '%s' named, not placed - this engine has no fishing spots",
-                    spawn_classes[6].c_str());
-    }
 }
 
 // The collision mesh read once (`CCollisionModel::loadModel`): every
@@ -3084,19 +2807,35 @@ void World::add_collision_mesh(const std::string& path, const ogre::Matrix4& to_
         return;
     }
 
-    std::vector<ogre::Vector3> points;
-    for (const CollisionModel::Submesh& piece : model.submeshes) {
-        points.resize(piece.points.size());
-        for (size_t v = 0; v < piece.points.size(); ++v) points[v] = to_world * piece.points[v];
-        for (size_t i = 0; i + 2 < piece.corners.size(); i += 3) {
-            const ogre::Vector3& a = points[piece.corners[i + 0]];
-            const ogre::Vector3& b = points[piece.corners[i + 1]];
-            const ogre::Vector3& c = points[piece.corners[i + 2]];
-            collision.add_triangle({a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z},
-                                   piece.material);
-        }
+    // `bakeCollision`'s held pieces (`hold_random_pieces`): their faces join after the rooms' passes.
+    const bool held = recalculate && hold_random_pieces;
+    if (held) {
+        held_random_collision.push_back({path, to_world});
     }
-    ++collision_meshes;
+    // CCollisionList::addCollisionList and the box's corners put each point through
+    // `Ogre::Matrix4::operator*(const Vector3&)`, fused.
+    tl::core::OgreMatrix4 transform;
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < 4; ++column) transform.m[row][column] = to_world[row][column];
+    const auto through = [&transform](const ogre::Vector3& v) {
+        const tl::core::Vec3 r = tl::core::matrix_transform(transform, {v.x, v.y, v.z});
+        return ogre::Vector3(r.x, r.y, r.z);
+    };
+    if (!held) {
+        std::vector<ogre::Vector3> points;
+        for (const CollisionModel::Submesh& piece : model.submeshes) {
+            points.resize(piece.points.size());
+            for (size_t v = 0; v < piece.points.size(); ++v) points[v] = through(piece.points[v]);
+            for (size_t i = 0; i + 2 < piece.corners.size(); i += 3) {
+                const ogre::Vector3& a = points[piece.corners[i + 0]];
+                const ogre::Vector3& b = points[piece.corners[i + 1]];
+                const ogre::Vector3& c = points[piece.corners[i + 2]];
+                collision.add_triangle({a.x, a.y, a.z}, {b.x, b.y, b.z}, {c.x, c.y, c.z},
+                                       piece.material);
+            }
+        }
+        ++collision_meshes;
+    }
 
     // CLevel::bakeCollision: a room layout's
     // passability box is the union, over its collision-enabled pieces, of four
@@ -3108,10 +2847,10 @@ void World::add_collision_mesh(const std::string& path, const ogre::Matrix4& to_
         const tl::core::Vec3& low = model.low;
         const tl::core::Vec3& high = model.high;
         const ogre::Vector3 corners[4] = {
-            to_world * ogre::Vector3(low.x, low.y, low.z),
-            to_world * ogre::Vector3(high.x, high.y, high.z),
-            to_world * ogre::Vector3(high.x, low.y, low.z),
-            to_world * ogre::Vector3(low.x, high.y, high.z),
+            through(ogre::Vector3(low.x, low.y, low.z)),
+            through(ogre::Vector3(high.x, high.y, high.z)),
+            through(ogre::Vector3(high.x, low.y, low.z)),
+            through(ogre::Vector3(low.x, high.y, high.z)),
         };
         tl::core::Vec3 box_low{corners[0].x, corners[0].y, corners[0].z};
         tl::core::Vec3 box_high = box_low;
@@ -3125,11 +2864,11 @@ void World::add_collision_mesh(const std::string& path, const ogre::Matrix4& to_
         if (recalculate) {
             tl::core::PassabilityMap::Box box;
             box.merge(box_low, box_high);
-            passability_recalculate.push_back(std::move(box));
+            (held ? held_random_boxes : passability_recalculate).push_back(std::move(box));
         }
     }
 
-    // `CLevel::populate`: a section per room piece, its
+    // `CLevel::populate`: a section per room piece with a model, its
     // position plus the collision mesh's own bounds - no turn, no scale - with
     // the height pushed 1000 either way. The first corner is the list's `+0x1c`,
     // its minimum (`calculateFaceBounds` hands
@@ -3142,6 +2881,9 @@ void World::add_collision_mesh(const std::string& path, const ogre::Matrix4& to_
         section.second = {piece_at->x + model.high.x, piece_at->y + model.high.y + 1000.0f,
                           piece_at->z + model.high.z};
         population_sections.push_back(section);
+        TL_LOG_DEBUG("  populate section %zu: %s at (%a, %a, %a)", population_sections.size() - 1,
+                     path.c_str(), static_cast<double>(piece_at->x),
+                     static_cast<double>(piece_at->y), static_cast<double>(piece_at->z));
         if (collision_section >= 0 && collision_section < static_cast<int>(level_rooms.size())) {
             level_rooms[static_cast<size_t>(collision_section)].add(section);
         }
@@ -3150,10 +2892,16 @@ void World::add_collision_mesh(const std::string& path, const ogre::Matrix4& to_
 
 // A collision placement's triangles into the level's collision world, at its pose.
 void World::add_collision_placement(const MeshPlacement& placement) {
+    if (placement.room_piece && placement.has_mesh && !placement.linked) {
+        TL_LOG_DEBUG("  section piece: node %lld", static_cast<long long>(placement.node_id));
+    }
     ogre::Matrix4 to_world;
     to_world.makeTransform(placement.position, placement.scale, placement.orientation);
     add_collision_mesh(placement.mesh, to_world, placement.collision_group,
-                       placement.room_piece ? &placement.position : nullptr, placement.recalculate);
+                       placement.room_piece && placement.has_mesh && !placement.linked
+                           ? &placement.position
+                           : nullptr,
+                       placement.recalculate);
 }
 
 }  // namespace tl::core

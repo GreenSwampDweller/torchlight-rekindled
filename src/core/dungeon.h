@@ -287,16 +287,16 @@ public:
     std::array<bool, kSpawnSlotCount> spawn_classes_randomized{};  ///< +0x5d0
     SpawnSlots chosen_spawn_classes;  ///< +0x578, written by `chooseUnitSpawners`
 
-    /// +0x5dc / +0x5e0 + slot*8: density per square metre of pathable area, with
+    /// X360 +0x634 / +0x638 + slot*8: density per square metre of pathable area, with
     /// the constructor's defaults: monsters,
     /// champions, props, NPCs, creeps, gold, fish, formations, then the quest
-    /// slots.
+    /// slots. The console's champions top out at 0.0003 (the Linux build's 0.0004).
     std::array<float, kSpawnSlotCount> density_min = {0.01f, 0.00025f, 0.005f, 0.0f, 0.0f, 0.0012f,
                                                       0.0f,  0.001f,   0.0f,   0.0f, 0.0f};
     std::array<float, kSpawnSlotCount> density_max = {
-        0.0125f, 0.0004f, 0.0075f, 0.0f, 0.0f, 0.0017f, 0.0f, 0.002f, 0.0f, 0.0f, 0.0f};
-    std::array<float, kSpawnSlotCount> count_min{};  ///< +0x634 + slot*8, 0 in the constructor
-    std::array<float, kSpawnSlotCount> count_max{};  ///< +0x638 + slot*8, 0 in the constructor
+        0.0125f, 0.0003f, 0.0075f, 0.0f, 0.0f, 0.0017f, 0.0f, 0.002f, 0.0f, 0.0f, 0.0f};
+    std::array<float, kSpawnSlotCount> count_min{};  ///< X360 +0x68c + slot*8, 0 in the constructor
+    std::array<float, kSpawnSlotCount> count_max{};  ///< X360 +0x690 + slot*8, 0 in the constructor
     bool layout_created = false;                     ///< +0x762, set by `createRandomLayout`
 
     std::vector<ChunkType> chunk_types;  ///< +0x10 TArrayList<CChunkType*>

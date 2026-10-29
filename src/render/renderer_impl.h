@@ -633,8 +633,8 @@ struct Renderer::Impl : tl::core::World {
     /// config.txt's `fps_limit`: the rest of the frame slept out, after the present.
     void pace_frame();
     std::chrono::steady_clock::time_point next_frame;  ///< when the next frame may end
-    /// The desktop window as made, not as asked for: clamped to the screen, or made the
-    /// monitor's size by a window manager's fullscreen. `config`'s size becomes its size.
+    /// The desktop window as made (clamped to the screen, or a manager's fullscreen): `config`'s
+    /// size becomes its size, and the input takes keys only while it has the focus.
     void adopt_window_size();
     Ogre::SceneManager* scene = nullptr;
     /// See `TransparentsWithScenery`.
@@ -1103,8 +1103,8 @@ struct Renderer::Impl : tl::core::World {
     /// Spawned units playing their entrance, held out of their AI until it stops
     /// (`LevelScript::set_spawning`).
     std::map<int64_t, Ogre::AnimationState*> spawning_units;
-    static constexpr float kFormationWakeDistance = 25.0f;  ///< `distance < 25.0`
     void wake_formations();
+    size_t wake_formation_monsters(const PendingFormation& formation, const Ogre::Quaternion& turn);
 
     /// The Xbox `+` over the bag and its glow (`core/game_ui.h`).
     tl::core::AvailablePointsIcon available_points;
@@ -2093,7 +2093,7 @@ struct Renderer::Impl : tl::core::World {
     void player_weapon_trail_key(const tl::core::AnimationTag& tag) override;
     void player_shoot_tracer(const tl::core::Vec3& from, const tl::core::Vec3& to) override;
     void player_hide_hand_trails() override;
-    bool view_unit_falls(int64_t node) override;
+    bool view_unit_falls(int64_t node, const std::string& animation) override;
     bool view_ready() const override;
     void view_cast_shadows(Ogre::Entity* entity, bool on) override;
     void view_add_node_collision(Ogre::SceneNode* node, const std::string& path,

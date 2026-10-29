@@ -2193,8 +2193,7 @@ bool Renderer::Impl::save_character(const std::string& path, bool force) {
     // `CSharedStash::saveSharedStash` comes
     // first, beside the character file.
     m.save_shared_stash(save_directory_of(path));
-    // DIVERGENCE: `settle` runs `CLevel::updateLayouts` eleven times first; the
-    // level here is stored as it stands.
+    // DIVERGENCE: `settle` runs `CLevel::updateLayouts` eleven times first; here, stored as is.
     m.store_level_state();
     const tl::core::TravelRecord& travel = *m.config.travel;
 
@@ -2210,6 +2209,7 @@ bool Renderer::Impl::save_character(const std::string& path, bool force) {
     tl::formats::CharacterSaveState& p = file.player;
     const tl::core::CharacterProgression::Saved sheet = m.player_character.saved();
     p.name = m.player_character.name();
+    p.mods = m.config.mod_names;  // `CPlayer::fillSaveState`
     p.enabled = 1;
     p.alignment = 1;  // `setAlignment(1)`, the player's
     p.level = sheet.level;
@@ -2666,8 +2666,9 @@ void Renderer::restore_player_after_control(const CarriedPlayer& carried) {
     // The carried bags point at the old renderer's tables; recalculate before anything
     // reads them.
     m.refresh_inventory_effects();
-    // What the carried bag wears, on the new level's model.
-    m.dress_player();
+    // What the carried bag holds and wears, on the new level's model: the hands too, not
+    // only the wardrobe, or the unit file's starting weapon drawn on arrival stays.
+    m.sync_equipped_weapon();
     // The pet's spells, by name, into the book its new renderer's files fill.
     m.relearn_pet_spells(carried.pet_spells, carried.pet_spell_levels);
     if (carried.has_skills) {
@@ -2875,12 +2876,7 @@ MenuAction Renderer::run_character_create(const std::string& dump_png, std::stri
     pet.clear();
     if (!m.window) return MenuAction::Quit;
 
-    const std::vector<tl::core::PlayerClass>& classes = player_classes();
-    std::vector<CharacterCreate::Choice> offered;
-    for (const tl::core::PlayerClass& entry : classes) {
-        offered.push_back({entry.name, entry.display_name, entry.description, entry.icon});
-    }
-    if (!m.create_screen.create(kGameGroup, m.config.width, m.config.height, offered)) {
+    if (!m.create_screen.create(kGameGroup, m.config.width, m.config.height, player_classes())) {
         // Same failure as the main menu's: a console has no command line, so a
         // screen that could not be built must not leave the player stuck.
         // Starting the game as whatever the subject already is beats stopping.
@@ -3091,6 +3087,7 @@ void Renderer::Impl::show_load_character(const tl::core::ContinueMenu& state,
     screen.set_caption("CharacterName", shown_name);
     screen.set_hidden("DeleteConfirm", !state.delete_confirm_shown());
     screen.set_hidden("DeadConfirm", !state.dead_confirm_shown());
+    screen.set_hidden("CharacterModsWarning", !state.mods_warning());
     screen.refresh();
 }
 
@@ -3106,10 +3103,10 @@ MenuAction Renderer::run_load_character(tl::core::ContinueMenu& state,
     m.loading.hide();
     LayoutScreen& screen = m.character_load_screen;
     if (!screen.ready()) {
-        // Under the fishing ring (560) and over the HUD; nothing else of the
-        // front end is up while this is.
+        // Under the fishing ring (560), over the HUD. DIVERGENCE: with the PC's mods warning.
         screen.create_export(kGameGroup, m.config.width, m.config.height,
-                             "media/UI/characterload.uilayout", "tl/characterload", 520);
+                             "media/UI/characterload.uilayout", "tl/characterload", 520,
+                             {"CharacterModsWarning"});
         if (screen.ready()) {
             screen.offset("highlight", m.load_highlight_x, m.load_highlight_y);
             // activates the highlight each time it is placed, which
@@ -3123,8 +3120,8 @@ MenuAction Renderer::run_load_character(tl::core::ContinueMenu& state,
         return MenuAction::Back;
     }
 
-    // The game's mods, which `selectCharacter` holds a save's against: none.
-    const std::vector<std::string> mods;
+    // The game's mods, which `selectCharacter` holds a save's against (none on the console).
+    const std::vector<std::string>& mods = m.config.mod_names;
     MenuAction action = MenuAction::None;
     // One button, as `vfunc_12` takes it, and what it led to.
     auto press = [&](tl::core::PadButton button, bool bumpers) {
@@ -3708,11 +3705,11 @@ void Renderer::Impl::update_light_maps(const std::string& png_path) {
 bool Renderer::dump_frame(const std::string& png_path) {
     Impl& m = *impl_;
 
-    // Never a loading screen over a dumped frame (dump_loading_screen() excepted).
+    // Never a loading screen over a dumped frame (dump_loading_screen(), a backdrop excepted).
     const bool loading_was_up = m.loading.visible();
     m.loading.hide();
     if (keep_loading_screen && loading_was_up)
-        m.loading.show(kGameGroup, m.config.width, m.config.height);
+        m.loading.show_as_before(kGameGroup, m.config.width, m.config.height);
 
     // Nor the HUD (only `--hud-dump` asks for it).
     const bool hud_was_up = m.game_hud.visible();

@@ -399,8 +399,7 @@ void MainMenu::build_bar(const tl::formats::GuiLayout& layout, const std::string
     }
 
     for (const BarGroup& group : groups) {
-        // Unique over the menu's lifetime, as a button's name is: the bar is
-        // rebuilt when the difficulty screen takes the column over.
+        // Unique for the menu's life, as a button's name: the difficulty screen rebuilds the bar.
         const size_t serial = button_serial_++;
         const tl::formats::GuiWindow* window = layout.find(group.window);
         if (window == nullptr) continue;
@@ -412,6 +411,7 @@ void MainMenu::build_bar(const tl::formats::GuiLayout& layout, const std::string
         }
 
         BarItem item;
+        item.window = group.window;
         item.x = bar_top_left.x.offset + top_left.x.offset;
         item.y = bar_top_left.y.offset + top_left.y.offset;
 
@@ -652,7 +652,7 @@ void MainMenu::clear_editor_info() {
 // A debug editor (`Renderer::open_wardrobe`, `Renderer::open_bestiary`): one
 // row per thing it steps, then Back. A screen of this engine's own, like the
 // Choose Level list, so its look is borrowed from the buttons around it.
-void MainMenu::show_editor(const std::vector<std::string>& rows) {
+void MainMenu::show_editor(const std::vector<std::string>& rows, const std::string& back) {
     if (buttons_overlay_ == nullptr || text_root_ == nullptr) return;
     clear_buttons();
     list_mode_ = true;
@@ -662,7 +662,7 @@ void MainMenu::show_editor(const std::vector<std::string>& rows) {
     for (const std::string& caption : rows) {
         add_button(caption, MenuAction::EditorStep, slot++);
     }
-    add_button("Back", MenuAction::Back, slot);
+    if (!back.empty()) add_button(back, MenuAction::Back, slot);
     stack_console_list();
 
     // The text block beside the column, white over a black drop as every

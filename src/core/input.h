@@ -9,6 +9,7 @@
 // an XInput pad, or a keyboard laid out like one.
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace tl::core {
@@ -131,7 +132,9 @@ InputState poll_platform_input();
 /// stick), `dup`, `ddown`, `a`, `b`, `x`, `y`, `start`, `back`, `lt`, `rt`,
 /// `lb`, `rb`, `rs_up`, `rs_down` and `wait` - each held a few frames and
 /// released a few more. `text=<words>` queues an answer for the next
-/// `text_entry()`; `shot=<png>` saves the next frame drawn. Empty stops it.
+/// `text_entry()`; `type=<chars>` types them into the window when the script
+/// reaches it (`take_typed_text`); `shot=<png>` saves the next frame drawn.
+/// Empty stops it.
 void set_pad_script(const std::string& script);
 
 /// Whether a pad script is still running.
@@ -156,9 +159,33 @@ void queue_frame_shot(const std::string& png);
 ///
 /// False when the player cancelled or the platform has no keyboard to show;
 /// `text` is then left as it was. The Switch opens its software keyboard
-/// applet; the desktop has no such thing and answers only from a pad script.
+/// applet, Android and iOS the system keyboard in a dialog; the desktop has no
+/// such thing and answers only from a pad script (`typing_in_window` instead).
 bool text_entry(const std::string& title, const std::string& guide, std::string& text,
                 unsigned max_chars);
+
+/// Whether a line is typed into the game's own window instead: a real keyboard
+/// and no system one to open (the desktop). The screen then calls
+/// `set_typing(true)` and takes the keys with `take_typed_text()`.
+bool typing_in_window();
+
+/// What the platform's keyboard typed since the last call, as UTF-8; `\b` is
+/// Backspace, `\r` Enter and `\x1b` Escape. Empty on a platform without keys.
+std::string take_platform_typed_text();
+
+/// While true a line is being typed: the keyboard stops standing in for the
+/// pad, and stays out of it after until every key is up. Off by default.
+void set_typing(bool on);
+bool typing();
+
+/// The keys typed since the last call (`take_platform_typed_text`), with a pad
+/// script's `type=<chars>` steps in front.
+std::string take_typed_text();
+
+/// The desktop only: the game's window, as OGRE's `WINDOW` attribute gives it
+/// (an X11 `Window`, a Win32 `HWND`), so the keys are read only while it has
+/// the focus and a line can be typed into it.
+void set_input_window(std::uintptr_t window);
 
 /// A fixed, deterministic stick script, for verifying movement without a
 /// person holding a controller: a square - forward, right, back, left, 1.5

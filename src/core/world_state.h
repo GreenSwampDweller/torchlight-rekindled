@@ -53,6 +53,7 @@
 #include "core/light_override.h"
 #include "core/log.h"
 #include "core/merchant.h"
+#include "core/mesh_placement.h"
 #include "core/missile.h"
 #include "core/model_animation.h"
 #include "core/music_object.h"
@@ -154,71 +155,6 @@ constexpr float kQuestBannerSeconds = 2.0f;
 
 /// Where the ids given to spawned units start: a block no layout uses (`0x5350` is "SP").
 constexpr int64_t kSpawnedNodeBase = 0x5350000000000000LL;
-
-/// One thing a layout asks to be placed, with everything the layout says about it. Scale
-/// and brightness are apart from the transform: they come from named per-descriptor fields
-/// (tl::formats::cmp_field).
-struct MeshPlacement {
-    std::string mesh;
-
-    /// A `Unit Trigger`'s prop: its unit's `LAYOUT_STATE_1`, hung on it once
-    /// it stands (`Renderer::Impl::set_trigger_state_layout`).
-    std::string trigger_resting_layout;
-
-    /// The layout node this came from (its 64-bit id, how wires and timelines address it);
-    /// zero for anything not placed from a node.
-    int64_t node_id = 0;
-
-    /// For a collision placement: its `CollisionWorld` group, so it can be switched off;
-    /// zero (the level) for all but a `Unit Trigger`'s prop.
-    int64_t collision_group = 0;
-    /// The unit's `BLOCK`, for a unit's own collision model
-    /// (`CollisionWorld::set_group_blocks`).
-    bool collision_blocks = false;
-
-    ogre::Vector3 position = ogre::Vector3::ZERO;
-    ogre::Quaternion orientation = ogre::Quaternion::IDENTITY;
-    ogre::Vector3 scale = ogre::Vector3::UNIT_SCALE;
-
-    /// What the layout asked this thing to play: a `.SKELETON` stem beside the mesh (empty
-    /// or `bind`: the bind pose). `unit` is a `Monster`'s `MONSTER` name, the join an
-    /// `Animation Controller` uses.
-    std::string animation;
-    std::string unit;
-    float animation_rate = 1.0f;
-    bool loops = true;
-
-    /// True when `animation` is the default idle rather than named: a mesh without
-    /// `Idle.SKELETON` is then no fault.
-    bool idle_fallback = false;
-
-    /// Whether this mesh is somebody rather than something: units are skipped by
-    /// `ground_under()`, so one placed on a marker is not ground for the next.
-    bool is_unit = false;
-
-    /// `VISIBLE:false` at placement: placed and registered, started invisible, so a later
-    /// `Show` finds a scene node.
-    bool start_hidden = false;
-
-    /// A `Room Piece`: its materials take the light map's `LIGHTPASS` (`CLevel::bake`
-    /// into `CLevel +0x290`; `CLevel::setProjectorPass`).
-    ///
-    bool room_piece = false;
-    /// A room's own piece under a random Group (`CRoomPiece +0x159`, set by
-    /// `CRoomPiece::vfunc_2`): its box is cast again after the baked passes.
-    bool recalculate = false;
-    /// The piece's `PRERENDER` (-1) or `POSTRENDER` (+1) in its tileset table, 0 for neither:
-    /// `CLevel::bake` batches them into `stgeompre_` on queue 0x30 and
-    /// `stgeompost_` on 0x59, the rest into `stgeom_` on 0x31.
-    int render_phase = 0;
-    /// A room piece's `BAKE` (`CRoomPieceDescriptor::Set_setIsBakeable`, X360 +0x14f):
-    /// whether `CLevel::bake` batches it; true by default (`CRoomPiece::CRoomPiece`).
-    bool bake = true;
-
-    /// A layout `Light`'s `LIGHT DENSITY` (`CLight +0x100`, 1 from the constructor),
-    /// else 0: drawn into the light map only, that many times over.
-    unsigned light_density = 0;
-};
 
 /// The animation a unit plays when the layout names nothing else (an engine name, not data).
 constexpr const char* kUnitIdleAnimation = "Idle";
@@ -621,6 +557,12 @@ public:
     };
 
     std::map<int64_t, MachinePathBlocker> machine_path_blockers;
+    /// The enabled `Path Node Occupation` nodes of the layouts placed, in the level's frame, in
+    /// the order `CLevel::loadRoomLayout` (cases 8 and 9) walks them; a floor
+    /// lays them after its bake.
+    std::vector<PathBlocker> loaded_path_blockers;
+    /// They were laid as the floor loaded: the room machines' copies find their cells in.
+    bool path_blockers_laid = false;
 
     /// The `No Spawn Region` `Property Node`s as boxes, in the order `CLevel::loadRoomLayout`
     /// (case 3) adds them to `CLevel +0xd8`.
@@ -1087,6 +1029,10 @@ public:
     struct NestedScript {
         std::string reference;
         int64_t owner = 0;  ///< the `Layout Link` node in the parent
+        /// The `Layout Link` of the parent machine's own file it was reached through (its
+        /// `owner`, or a link above it when the files between own no machine): whose turn of
+        /// the parent's activation activates it.
+        int64_t turn_link = 0;
         std::string owner_name;
         /// The node map of the file holding that link (`Play` on the link is
         /// `CLayout::start` on its layout).
@@ -1749,9 +1695,13 @@ public:
         bool spawners = false;
         /// The formations file's name for the layout (`CFormationNodeSaveAndLoad +0x18`).
         std::string reference;
+        /// Each `Monster` node's unit as `setLayoutFile` made it, in node order.
+        std::vector<tl::core::LevelScript::UnitCreation> made;
     };
 
     std::vector<PendingFormation> pending_formations;
+    /// Merchants the population made and stocked, by its handle, until they are placed.
+    std::map<int64_t, MerchantState> made_merchants;
 
     /// `CLevel +0x28`, `populate`'s room records: one per placed room layout, the union of
     /// its sections (`getRoomIndexThatPositionIsIn`).
@@ -1799,6 +1749,11 @@ public:
     /// The `Layout Link` node whose file is currently being placed, and its
     /// name. Saved and restored around the recursive call, like `particle_owner`.
     int64_t nested_link = 0;
+    /// What a machine made now takes as its `NestedScript::turn_link`.
+    int64_t turn_link = 0;
+    /// Where the last frame's sound listener stood (`CSoundManager +0x14`..`+0x1C`): a level
+    /// loaded since hears its activation's sounds from there.
+    tl::core::Vec3 sound_listener;
     /// `CResourceManager+0x42` (X360 `+0x26`): set by `CLevel::loadRoomLayout` around each
     /// room piece, making `CLayout::loadLayoutFile` reseed; clear at first.
     ///
@@ -1873,6 +1828,25 @@ public:
     std::vector<tl::core::PassabilityMap::Box> collision_sections;
     /// `CLevel +0xB0`'s piece boxes: the `recalculate` pieces', in the order made.
     std::vector<tl::core::PassabilityMap::Box> passability_recalculate;
+    /// `CLevel::bakeCollision` on a level with pathing where a room has no
+    /// `.pth`: the `recalculate` pieces are kept out of the collision until the rooms' passes
+    /// are done, then added, their boxes cast again after the rooms' edge strips.
+    bool hold_random_pieces = false;
+    struct HeldCollision {
+        std::string path;
+        ogre::Matrix4 to_world;
+    };
+    std::vector<HeldCollision> held_random_collision;
+    std::vector<tl::core::PassabilityMap::Box> held_random_boxes;
+    /// The rooms' piece collision, added once every room is placed in the order the pieces were
+    /// made (`MeshPlacement::made`), each with its room (`collision_section`): `bakeCollision`
+    /// walks each room's `Room Piece` objects so.
+    struct RoomPieceCollision {
+        int section = -1;
+        MeshPlacement placement;
+    };
+    std::vector<RoomPieceCollision> room_piece_collision;
+    uint64_t room_pieces_made = 0;
     /// `ELevelEntryType`, which `CLevel::loadRoomLayout`
     /// picks the start by: 3 from `setGameState`, else `core::warp_entry_type`.
     int level_entry_type = 3;

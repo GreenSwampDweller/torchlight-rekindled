@@ -694,21 +694,32 @@ void init_item_copy(ItemStats& item, bool from_save, bool random_enchant_allowed
 // --------------------------------------------------------------------------
 // Part E
 
-GoldPile make_gold_pile(int32_t amount, RunicRandom& volatile_rng) {
+GoldPile make_gold_pile(int32_t amount, RunicRandom& volatile_rng, const GoldPileSounds& bank) {
     // `CItemGold::CItemGold(CResourceManager*, int)`.
     //
     GoldPile pile;
     pile.amount = amount;
+    // Its sound bank: `GOLDPICKUP` added at two slots, each
+    // `CSoundBank::addSample` leaving `g_Rand` as `setSeed(low word)`.
+    if (bank.sounds != nullptr && bank.game_rng != nullptr) {
+        const SoundData* named = bank.sounds->find("GOLDPICKUP");
+        if (named != nullptr && bank.sounds->find_by_guid(named->guid) != nullptr) {
+            for (int slot = 0; slot < 2; ++slot) {
+                bank.game_rng->set_seed(
+                    static_cast<int32_t>(static_cast<uint32_t>(bank.game_rng->state())));
+            }
+        }
+    }
     pile.heading = volatile_rng.between(0.0f, 360.0f);
     pile.scale = volatile_rng.between(0.8f, 1.2f);
     return pile;
 }
 
 void init_gold_copy(ItemStats& item, bool from_save, int32_t level_number, int32_t difficulty,
-                    const StatBook& graphs, RunicRandom& volatile_rng) {
+                    const StatBook& graphs, RunicRandom& volatile_rng, const GoldPileSounds& bank) {
     // `CResourceManager::createNewItem`:
     // `CItemGold(rm, 1)`.
-    item.gold = make_gold_pile(1, volatile_rng);
+    item.gold = make_gold_pile(1, volatile_rng, bank);
     // `CItemGold::unitInit` ->
     // `CItem::unitInit` ->
     // `CBaseUnit::unitInit`: `setScale(SCALE
@@ -751,7 +762,8 @@ std::vector<int> roll_money(const LootCharacter* killer, const LootCharacter* dr
             gold -= tl::formats::ppc_fctiwz(bonus);
         }
         piles.push_back(gold);
-        const GoldPile pile = make_gold_pile(gold, volatile_rng);
+        const GoldPile pile = make_gold_pile(
+            gold, volatile_rng, place != nullptr ? place->gold_sounds : GoldPileSounds{});
         const Vec3 at = place != nullptr ? place->at : Vec3{};
         const Vec3 where = random_open_item_position(
             at, 0.0f, 1.0f,

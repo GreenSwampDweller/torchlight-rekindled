@@ -78,6 +78,29 @@ void World::stock_merchant(MerchantState& state, int64_t node, const tl::core::U
         outcome.level, outcome.discarded, state.gambler ? ", gambler" : "");
 }
 
+// `CCharacter::unitInit` of a character the population makes: a merchant is
+// stocked as it is made (`generateMerchantInventory`, after
+// `createDefaultEquipment`), held by `handle` until it is placed (`place_made_merchant`).
+void World::stock_made_merchant(int64_t handle, const std::string& unit) {
+    load_unit_types();
+    const tl::core::UnitStats stats = stats_for_unit(unit);
+    const uint32_t type = unit_types.id_of(stats.unittype);
+    if (!unit_types.isa(type, tl::core::unit_type::kMerchant)) return;
+    MerchantState& state = made_merchants[handle];
+    state.unit = unit;
+    state.gambler = unit_types.isa(type, tl::core::unit_type::kGambler);
+    stock_merchant(state, handle, stats);
+}
+
+// The merchant `stock_made_merchant` held for `handle`, now the character `node`.
+void World::place_made_merchant(int64_t handle, int64_t node) {
+    const auto found = made_merchants.find(handle);
+    if (found == made_merchants.end()) return;
+    merchants[node] = std::move(found->second);
+    merchant_checked.insert(node);
+    made_merchants.erase(found);
+}
+
 // PORT: the level's merchants handed to `populate_new_merchants_inventory`, which holds the rule.
 void World::populate_new_merchants() {
     load_unit_types();

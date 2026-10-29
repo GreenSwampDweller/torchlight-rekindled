@@ -52,39 +52,48 @@ std::unordered_map<std::string, std::vector<std::string>> g_paths_under;
 
 std::vector<std::string> g_mod_roots;
 
+/// `CMod +0x18`, built by `CMod::reloadModFiles`: each mod's files, by their
+/// path relative to its folder (lower case, forward slashes), to the file's own path. In the
+/// order of `g_mod_roots`.
+struct ModFiles {
+    std::string root;
+    std::unordered_map<std::string, std::string> files;
+    std::vector<std::string> relative;  ///< as spelt on disk, in walk order
+};
+std::vector<ModFiles> g_mod_files;
+
 std::string normalise_mod_path(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
     while (!path.empty() && path.front() == '/') path.erase(path.begin());
     return path;
 }
 
-bool read_mod_file_case_insensitive(const std::string& root, const std::string& relative,
-                                    std::vector<uint8_t>& bytes) {
-    std::string path = root;
-    const std::string wanted = normalise_mod_path(relative);
-    size_t begin = 0;
-    while (begin < wanted.size()) {
-        const size_t slash = wanted.find('/', begin);
-        const std::string component =
-            wanted.substr(begin, slash == std::string::npos ? std::string::npos : slash - begin);
-        DIR* directory = opendir(path.c_str());
-        if (!directory) return false;
-        std::string match;
+void index_mod_folder(ModFiles& mod) {
+    std::vector<std::string> pending{mod.root};
+    while (!pending.empty()) {
+        const std::string current = pending.back();
+        pending.pop_back();
+        DIR* directory = opendir(current.c_str());
+        if (!directory) continue;
         while (dirent* entry = readdir(directory)) {
-            if (lowered(entry->d_name) == lowered(component)) {
-                match = entry->d_name;
-                break;
+            if (entry->d_name[0] == '.') continue;
+            const std::string child = join_path(current, entry->d_name);
+            if (is_dir(child)) {
+                pending.push_back(child);
+                continue;
             }
+            const std::string relative = child.substr(mod.root.size() + 1);
+            mod.files.emplace(lowered(relative), child);
+            mod.relative.push_back(relative);
         }
         closedir(directory);
-        if (match.empty()) return false;
-        path = join_path(path, match);
-        if (slash == std::string::npos) break;
-        begin = slash + 1;
     }
-    if (!is_file(path)) return false;
-    bytes = read_file(path);
-    return !bytes.empty();
+}
+
+// The file a mod holds at `relative`, or empty.
+const std::string* mod_file(const ModFiles& mod, const std::string& relative) {
+    const auto found = mod.files.find(lowered(normalise_mod_path(relative)));
+    return found == mod.files.end() ? nullptr : &found->second;
 }
 
 bool ends_with_lower(const std::string& text, const char* suffix) {
@@ -158,44 +167,105 @@ const std::vector<Ogre::FileInfo>* archive_entries(const std::string& basename) 
     return it == g_archive_index.end() ? nullptr : &it->second;
 }
 
-void set_mod_roots(const std::vector<std::string>& roots) { g_mod_roots = roots; }
+namespace {
+/// A mod's files, as read, kept while the same mods are mounted (set_mod_roots). They are
+/// loose files, each open several milliseconds on Android's shared storage, and a unit file
+/// is read again for every unit that inherits from it, and on every level. Bounded like
+/// `g_data_files`: a file past the budget is read the old way.
+struct ModFileCache {
+    std::unordered_map<std::string, std::vector<uint8_t>> files;
+    size_t bytes = 0;
+};
+ModFileCache g_mod_bytes;
+constexpr size_t kModFileBudget = 32u * 1024u * 1024u;
 
-bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes) {
-    for (const std::string& root : g_mod_roots) {
-        if (read_mod_file_case_insensitive(root, path, bytes)) return true;
+std::vector<uint8_t> read_mod_file(const std::string& file) {
+    const auto found = g_mod_bytes.files.find(file);
+    if (found != g_mod_bytes.files.end()) return found->second;
+    std::vector<uint8_t> bytes = read_file(file);
+    if (!bytes.empty() && g_mod_bytes.bytes + bytes.size() <= kModFileBudget) {
+        g_mod_bytes.bytes += bytes.size();
+        g_mod_bytes.files.emplace(file, bytes);
     }
-    return false;
+    return bytes;
+}
+}  // namespace
+
+void set_mod_roots(const std::vector<std::string>& roots) {
+    if (roots != g_mod_roots) g_mod_bytes = ModFileCache{};
+    g_mod_roots = roots;
+    g_mod_files.clear();
+    for (const std::string& root : roots) {
+        ModFiles mod;
+        mod.root = root;
+        while (mod.root.size() > 1 && (mod.root.back() == '/' || mod.root.back() == '\\')) {
+            mod.root.pop_back();
+        }
+        index_mod_folder(mod);
+        TL_LOG_INFO("mod folder %s: %zu file(s)", mod.root.c_str(), mod.relative.size());
+        g_mod_files.push_back(std::move(mod));
+    }
 }
 
-// Every file under the mod folder `root` ending in `suffix` whose path relative to it starts
-// with `prefix` (lower case), added to `paths` relative to `root`.
-void collect_mod_files(const std::string& root, const std::string& prefix, const char* suffix,
-                       std::vector<std::string>& paths) {
-    std::vector<std::string> pending{root};
-    while (!pending.empty()) {
-        const std::string current = pending.back();
-        pending.pop_back();
-        DIR* directory = opendir(current.c_str());
-        if (!directory) continue;
-        while (dirent* entry = readdir(directory)) {
-            if (entry->d_name[0] == '.') continue;
-            const std::string child = join_path(current, entry->d_name);
-            if (is_dir(child)) {
-                pending.push_back(child);
-                continue;
-            }
-            if (!ends_with_lower(entry->d_name, suffix)) continue;
-            const std::string relative = child.substr(root.size() + 1);
-            if (lowered(relative).compare(0, prefix.size(), prefix) == 0) paths.push_back(relative);
+// `CModFileFilter::getFilePath`: the first mod, in order, that has the file.
+// A compiled name (`.adm`, `.cmp`) is also answered by the mod's text source: the PC compiles a
+// mod's `.dat` and `.layout` beside themselves when it loads them, which the port does not need.
+const std::string* find_mod_file(const std::string& path) {
+    std::string source;
+    if (ends_with_lower(path, ".adm") || ends_with_lower(path, ".cmp")) {
+        source = path.substr(0, path.size() - 4);
+    }
+    for (const ModFiles& mod : g_mod_files) {
+        if (const std::string* file = mod_file(mod, path)) return file;
+        if (!source.empty()) {
+            if (const std::string* file = mod_file(mod, source)) return file;
         }
-        closedir(directory);
+    }
+    return nullptr;
+}
+
+bool mod_has_file(const std::string& path) { return find_mod_file(path) != nullptr; }
+
+std::string mod_file_path(const std::string& path) {
+    const std::string* file = find_mod_file(path);
+    return file == nullptr ? std::string() : *file;
+}
+
+std::vector<std::vector<uint8_t>> read_mod_copies(const std::string& path) {
+    std::vector<std::vector<uint8_t>> copies;
+    std::string source;
+    if (ends_with_lower(path, ".adm") || ends_with_lower(path, ".cmp")) {
+        source = path.substr(0, path.size() - 4);
+    }
+    for (const ModFiles& mod : g_mod_files) {
+        const std::string* file = mod_file(mod, path);
+        if (file == nullptr && !source.empty()) file = mod_file(mod, source);
+        if (file != nullptr) copies.push_back(read_mod_file(*file));
+    }
+    return copies;
+}
+
+bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes) {
+    const std::string* file = find_mod_file(path);
+    if (file == nullptr) return false;
+    bytes = read_mod_file(*file);
+    return !bytes.empty();
+}
+
+// `CModFileFilter::getFiles`: every mod's file under `prefix` (lower case)
+// ending in `suffix`, relative to its folder.
+void collect_mod_files(const ModFiles& mod, const std::string& prefix, const char* suffix,
+                       std::vector<std::string>& paths) {
+    for (const std::string& relative : mod.relative) {
+        if (!ends_with_lower(relative, suffix)) continue;
+        if (lowered(relative).compare(0, prefix.size(), prefix) == 0) paths.push_back(relative);
     }
 }
 
 std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix) {
     std::vector<std::string> paths;
     const std::string prefix = lowered(normalise_mod_path(dir));
-    for (const std::string& root : g_mod_roots) collect_mod_files(root, prefix, suffix, paths);
+    for (const ModFiles& mod : g_mod_files) collect_mod_files(mod, prefix, suffix, paths);
     std::sort(paths.begin(), paths.end(),
               [](const std::string& a, const std::string& b) { return lowered(a) < lowered(b); });
     paths.erase(std::unique(paths.begin(), paths.end(),
@@ -213,8 +283,11 @@ std::vector<std::string> with_mod_paths(std::vector<std::string> paths, const st
     std::vector<std::string> mod_adm = mod_paths_under(dir, ".dat.adm");
     mods.insert(mods.end(), mod_adm.begin(), mod_adm.end());
     for (const std::string& mod_path : mods) {
+        // A mod's `X.dat` is the archive's `X.dat.adm` when both are there: read_resource()
+        // answers that name from the mod.
         const auto same_path = [&](const std::string& path) {
-            return lowered(path) == lowered(mod_path);
+            return lowered(path) == lowered(mod_path) ||
+                   lowered(path) == lowered(mod_path) + ".adm";
         };
         if (std::none_of(paths.begin(), paths.end(), same_path)) paths.push_back(mod_path);
     }
@@ -349,7 +422,49 @@ std::string archive_dir_of(const std::string& resource_name) {
 /// keeps `media/levelSets/town1/`, so an exact match qualified nothing that a
 /// lower-cased path referred to - the town's birches, the mine's cobwebs and
 /// rails drew blank. The PC data spells them as its archive does.
+/// A playable class's own `.DAT`, the console's copy first.
+///
+/// Spelled as a path rather than looked up by basename, because the
+/// basename stopped being unique when `scripts/extract_console_ui.py` began
+/// putting the Xbox release's own class files under `xbox/` (that release
+/// re-laid every class's skills for a pad). `archive_path_unique` rightly
+/// refuses to choose between two candidates, so every caller of it for a
+/// class file quietly got nothing: the character sheet lost its strength,
+/// dexterity, magic, defense, health and mana, and the wardrobe lost the
+/// base textures. The console's copy wins, as it does everywhere else the
+/// console data is read (`build_player_skills`).
+///
+/// `console` reports which of the two roots answered, so a caller can
+/// follow the file's `BASEFILE` in the same tree.
+// PORT: asset lookup: a class's unit file, the console's tree first.
+std::string class_unit_path(const std::string& class_name, bool* console) {
+    if (console != nullptr) *console = false;
+    if (class_name.empty()) return {};
+    const std::string want = lowered(class_name) + ".dat.adm";
+    // A mod's class first, found as the game finds a unit, by `NAME`: its file can be named
+    // otherwise (`AmmutDisciple.dat` holds "Ammut Disciple").
+    for (const std::string& path : data_paths_under("media/units/players/")) {
+        if (!mod_has_file(path)) continue;
+        const std::vector<uint8_t> bytes = read_resource(path);
+        const tl::formats::AdmFile file = tl::formats::parse_adm(bytes.data(), bytes.size());
+        if (file.ok && lowered(file.string_or("NAME", "")) == lowered(class_name)) return path;
+    }
+    for (const char* root : {"xbox/media/units/players/", "media/units/players/"}) {
+        for (const std::string& path : archive_paths_under(root, ".dat.adm")) {
+            const size_t slash = path.find_last_of('/');
+            const std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+            if (lowered(base) != want) continue;
+            if (console != nullptr) *console = root[0] == 'x';
+            return path;
+        }
+    }
+    return {};
+}
+
 std::string archive_path_in_dir(const std::string& basename, const std::string& dir) {
+    // A mod's file first, its text source answering a compiled name (`zealot_pc.animation` for
+    // `zealot_pc.ANIMATION.adm`).
+    if (mod_has_file(dir + basename)) return dir + basename;
     const std::vector<Ogre::FileInfo>* found = archive_entries(basename);
     if (!found) return {};
 
@@ -524,8 +639,7 @@ std::string resolve_archive_path_impl(const std::string& reference, bool quiet) 
         if (c == '\\') c = '/';
     }
 
-    std::vector<uint8_t> mod_bytes;
-    if (read_mod_resource(path, mod_bytes)) return path;
+    if (mod_has_file(path)) return path;
 
     const size_t slash = path.find_last_of('/');
     const std::string basename = (slash == std::string::npos) ? path : path.substr(slash + 1);
@@ -602,7 +716,7 @@ std::vector<uint8_t> read_resource(const std::string& path) {
     }
     std::vector<uint8_t> mod_bytes;
     if (read_mod_resource(path, mod_bytes)) {
-        TL_LOG_INFO("mod override: %s", path.c_str());
+        TL_LOG_DEBUG("mod override: %s", path.c_str());
         if (data_file && !mod_bytes.empty() &&
             g_data_files.bytes + mod_bytes.size() <= kDataFileBudget) {
             g_data_files.bytes += mod_bytes.size();

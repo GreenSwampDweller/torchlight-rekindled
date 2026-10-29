@@ -5,6 +5,7 @@
 #include <cmath>
 #include <deque>
 #include <string>
+#include <utility>
 
 namespace tl::core {
 
@@ -14,6 +15,8 @@ namespace {
 std::deque<std::string> g_script;
 std::deque<std::string> g_script_text;
 std::string g_pending_shot;
+std::string g_script_typed;
+bool g_typing = false;
 /// Frames into the current step. A press is held for `kHeld` frames and then
 /// released for `kReleased`, so a screen that acts on the edge sees exactly one.
 int g_step_frame = 0;
@@ -95,7 +98,7 @@ int g_fps_toggles = 0;
 
 // L3's press counted here, whichever screen polled the pad: the FPS overlay is
 // every screen's, and its step (the renderer's, once a frame) takes the count.
-InputState noticing_fps_toggle(InputState in) {
+InputState noticing_fps_toggle(const InputState& in) {
     if (in.fps_toggle && !g_fps_toggle_held) ++g_fps_toggles;
     g_fps_toggle_held = in.fps_toggle;
     return in;
@@ -115,6 +118,7 @@ InputState poll_input() {
     if (g_step_frame == 0) {
         TL_LOG_INFO("pad script: %s", press.c_str());
         if (press.rfind("shot=", 0) == 0) g_pending_shot = press.substr(5);
+        if (press.rfind("type=", 0) == 0) g_script_typed += press.substr(5);
     }
     if (g_step_frame < kHeld) in = scripted_frame(press);
     if (++g_step_frame >= kHeld + kReleased) {
@@ -123,6 +127,17 @@ InputState poll_input() {
         if (g_script.empty()) TL_LOG_INFO("pad script: done");
     }
     return in;
+}
+
+void set_typing(bool on) { g_typing = on; }
+
+bool typing() { return g_typing; }
+
+std::string take_typed_text() {
+    std::string typed = std::move(g_script_typed);
+    g_script_typed.clear();
+    typed += take_platform_typed_text();
+    return typed;
 }
 
 float InputState::magnitude() const {

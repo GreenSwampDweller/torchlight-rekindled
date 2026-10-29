@@ -73,8 +73,9 @@ public:
     float between(float lo, float hi) {
         if (trace_ != nullptr) {
             char line[96];
-            std::snprintf(line, sizeof(line), "F %.9g %.9g %016llx port", static_cast<double>(lo),
-                          static_cast<double>(hi), static_cast<unsigned long long>(state_));
+            std::snprintf(line, sizeof(line), "F %.9g %.9g %016llx port @%p",
+                          static_cast<double>(lo), static_cast<double>(hi),
+                          static_cast<unsigned long long>(state_), __builtin_return_address(0));
             trace_->write(trace_->user, line);
         }
         if (hi == lo) return lo;
@@ -94,8 +95,8 @@ public:
     int integer_between(int lo, int hi) {
         if (trace_ != nullptr) {
             char line[96];
-            std::snprintf(line, sizeof(line), "I %d %d %016llx port", lo, hi,
-                          static_cast<unsigned long long>(state_));
+            std::snprintf(line, sizeof(line), "I %d %d %016llx port @%p", lo, hi,
+                          static_cast<unsigned long long>(state_), __builtin_return_address(0));
             trace_->write(trace_->user, line);
         }
         if (hi <= lo) return lo;

@@ -287,10 +287,16 @@ struct LootCharacter {
     SpawnCharacterContext spawn;
 };
 
-/// `CItemGold::CItemGold(CResourceManager*, int amount)`: two
-/// draws on `g_RandVolatile`, a turn about Y of 0..360 degrees and the size the pile grows to,
-/// 0.8..1.2. The model, sounds and particle are the caller's.
-GoldPile make_gold_pile(int32_t amount, RunicRandom& volatile_rng);
+/// What a gold pile's sound bank reads, and the `g_Rand` its samples reseed (`make_gold_pile`).
+struct GoldPileSounds {
+    const SoundDataInformation* sounds = nullptr;
+    RunicRandom* game_rng = nullptr;
+};
+
+/// `CItemGold::CItemGold(CResourceManager*, int amount)`: its
+/// sound bank's two samples (with `bank`), then two draws on `g_RandVolatile`, a turn about Y of
+/// 0..360 degrees and the size the pile grows to, 0.8..1.2. The model and particle are the caller's.
+GoldPile make_gold_pile(int32_t amount, RunicRandom& volatile_rng, const GoldPileSounds& bank = {});
 
 /// A `CREATEAS:GOLD` unit made from its data: `createNewItem`
 /// constructs `CItemGold(rm, 1)`, then `CItemGold::unitInit` draws the
@@ -298,7 +304,8 @@ GoldPile make_gold_pile(int32_t amount, RunicRandom& volatile_rng);
 /// amount: `MINVALUE`..`MAXVALUE` percent of the difficulty's `GOLDDROP` curve at the level's
 /// number plus one. The pile grows to the unit's scale.
 void init_gold_copy(ItemStats& item, bool from_save, int32_t level_number, int32_t difficulty,
-                    const StatBook& graphs, RunicRandom& volatile_rng);
+                    const StatBook& graphs, RunicRandom& volatile_rng,
+                    const GoldPileSounds& bank = {});
 
 /// Where a drop goes: `CLevel::addUnit` for what a spawn class
 /// made, `CLevel::addItem(gold, at, true)` for `rollMoney`'s
@@ -313,6 +320,8 @@ struct LootPlacement {
     std::function<bool(const Vec3&)> position_passable;
     std::function<void(const ItemStats& unit, const Vec3& where)> add_unit;
     std::function<void(const GoldPile& pile, const Vec3& where)> add_gold;
+    /// What a pile's sound bank reads and reseeds (`make_gold_pile`).
+    GoldPileSounds gold_sounds;
 };
 
 /// `CLevel::rollMoney(CCharacter* killer, CCharacter* dropper, const Vector3&)`:

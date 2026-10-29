@@ -191,6 +191,29 @@ bool World::send_pet_to_town() {
     return true;
 }
 
+namespace {
+
+// `CLayoutDescriptor::descriptorSceneActivated`: what the activation has fired by
+// the link's turn is done (the console acts at once), then the machines reached through it are
+// activated.
+void activate_linked_machines(World& world, LevelScript& parent, int64_t link,
+                              std::vector<ScriptEvent>& out) {
+    World::NodeMap* nodes = world.nodes_of(&parent);
+    if (nodes == nullptr) return;
+    if (!out.empty()) {
+        std::vector<ScriptEvent> fired;
+        fired.swap(out);
+        world.apply_script_events(fired, *nodes);
+    }
+    for (size_t i = 0; i < world.nested_scripts.size(); ++i) {
+        const World::NestedScript& linked = world.nested_scripts[i];
+        if (linked.retired || linked.turn_link != link || linked.owner_nodes != nodes) continue;
+        world.activate_room_machine(i, linked.reference);
+    }
+}
+
+}  // namespace
+
 void World::wire_script(tl::core::LevelScript& machine) {
     machine.set_animation_length([this](const std::string& unit, const std::string& animation) {
         return scene_animation_length(unit, animation);
@@ -234,6 +257,10 @@ void World::wire_script(tl::core::LevelScript& machine) {
     machine.set_trace_player_name(player_class.empty() ? std::string("PLAYER") : player_class);
     machine.set_animation_catalog(
         [this](const std::string& unit) { return animation_catalog(unit); });
+    machine.set_link_activation(
+        [this, &machine](int64_t link, std::vector<tl::core::ScriptEvent>& out) {
+            activate_linked_machines(*this, machine, link, out);
+        });
     // The player's skill manager, for a `Skill Controller` on `PLAYERS`
     // (`CSkillController::update`).
     tl::core::LevelScript::PlayerSkills skills;
@@ -308,7 +335,9 @@ void World::wire_script(tl::core::LevelScript& machine) {
             ensure_sound_index();
             const SoundDefinition* definition = sound_by_guid(guid);
             if (definition == nullptr) return false;
-            slot.files = definition->files;
+            // `addSample` keeps some of the recordings (`bank_recordings`).
+            for (const size_t file : tl::core::bank_recordings(*definition))
+                slot.files.push_back(definition->files[file]);
             slot.radius = definition->radius;
             slot.volume = definition->volume;
             slot.chance = definition->play_chance;

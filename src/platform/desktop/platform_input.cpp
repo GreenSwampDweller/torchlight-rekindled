@@ -2,12 +2,16 @@
 // (`core/gamepad.h`); without one the keyboard stands in key for key.
 //
 // Windows reads the pad through XInput and the keys through GetAsyncKeyState; Linux reads the pad
-// through evdev - the kernel's gamepad interface, whose BTN_SOUTH, BTN_EAST, ABS_RX, ... name the
-// same places on an Xbox, a PlayStation or any other pad - and the keys through X11. Both are
-// turned into one reading in XInput's layout, which the rest of this file maps.
+// through evdev - the kernel's gamepad interface, whose BTN_SOUTH, BTN_EAST, ABS_RX, ... name
+// places on the pad rather than labels, with one exception (button_bit) - and the keys through
+// X11. Both are turned into one reading in XInput's layout, which the rest of this file maps.
+//
+// A line of text (a character's name) is typed into the window: Windows' WM_CHAR through the
+// event pump (platform_frame.cpp), X11's KeyPress on the game's window.
 #include "core/input.h"
 
 #include "core/gamepad.h"
+#include "platform/desktop/typed_keys.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,6 +25,7 @@
 #else
 #include <X11/XKBlib.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -90,9 +95,47 @@ enum class Key {
     O
 };
 
+constexpr int kKeyCount = static_cast<int>(Key::O) + 1;
+
 bool focused();
 bool key_down(Key key);
 bool read_pad(PadReading& pad);
+
+/// Typed since the last take, as UTF-8, while a line is being typed.
+std::string g_typed;
+
+/// One character typed, unless no line is being typed. Backspace, Enter and Escape are kept as
+/// their control codes; any other control character is dropped.
+void note_typed(char32_t code) {
+    if (!typing()) return;
+    if (code == U'\b' || code == U'\r' || code == U'\x1b') {
+        g_typed += static_cast<char>(code);
+        return;
+    }
+    if (code < 0x20 || code == 0x7f || code > 0x10ffff) return;
+    if (code < 0x80) {
+        g_typed += static_cast<char>(code);
+    } else if (code < 0x800) {
+        g_typed += static_cast<char>(0xc0 | (code >> 6));
+        g_typed += static_cast<char>(0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+        g_typed += static_cast<char>(0xe0 | (code >> 12));
+        g_typed += static_cast<char>(0x80 | ((code >> 6) & 0x3f));
+        g_typed += static_cast<char>(0x80 | (code & 0x3f));
+    } else {
+        g_typed += static_cast<char>(0xf0 | (code >> 18));
+        g_typed += static_cast<char>(0x80 | ((code >> 12) & 0x3f));
+        g_typed += static_cast<char>(0x80 | ((code >> 6) & 0x3f));
+        g_typed += static_cast<char>(0x80 | (code & 0x3f));
+    }
+}
+
+bool any_key_down() {
+    for (int key = 0; key < kKeyCount; ++key) {
+        if (key_down(static_cast<Key>(key))) return true;
+    }
+    return false;
+}
 
 // The pad into the game's input, through the console's own filters.
 void map_pad(const PadReading& pad, InputState& in, float& x, float& y) {
@@ -225,6 +268,9 @@ bool read_pad(PadReading& pad) {
     return true;
 }
 
+/// WM_CHAR arrives through the event pump instead (note_typed_unit).
+void read_key_events() {}
+
 #else
 
 // --- Linux: X11 for the keys -----------------------------------------------------------------
@@ -234,15 +280,53 @@ Display* x_display() {
     return display;
 }
 
-/// The game's window has the keyboard: the X input focus is a window of this process's. OGRE
-/// makes its window on the default display, so its client is this one.
+/// The game's window, once the renderer has made it (set_input_window). OGRE opens its own
+/// connection to the display, so the window is another client's to this one.
+Window g_window = 0;
+
+/// The game's window has the keyboard: the X input focus is that window, or a window holding it
+/// (the frame some window managers focus). The focus and the key states are the whole display's,
+/// so without this the game would take keys typed into any other window.
 bool focused() {
     Display* display = x_display();
     if (display == nullptr) return false;
-    Window window = 0;
+    Window focus = 0;
     int revert = 0;
-    XGetInputFocus(display, &window, &revert);
-    return window != None && window != PointerRoot;
+    XGetInputFocus(display, &focus, &revert);
+    if (focus == None || focus == PointerRoot) return false;
+    // Not made yet (or no window at all): any focus, as before the window was known.
+    if (g_window == 0) return true;
+    Window window = g_window;
+    while (window != 0) {
+        if (window == focus) return true;
+        Window root = 0, parent = 0;
+        Window* children = nullptr;
+        unsigned count = 0;
+        if (XQueryTree(display, window, &root, &parent, &children, &count) == 0) return false;
+        if (children != nullptr) XFree(children);
+        if (parent == root) return false;
+        window = parent;
+    }
+    return false;
+}
+
+/// The KeyPress events of the game's window since the last call, as typed characters.
+void read_key_events() {
+    Display* display = x_display();
+    if (display == nullptr || g_window == 0) return;
+    while (XPending(display) > 0) {
+        XEvent event{};
+        XNextEvent(display, &event);
+        if (event.type != KeyPress) continue;
+        char bytes[32] = {};
+        KeySym sym = NoSymbol;
+        const int count = XLookupString(&event.xkey, bytes, sizeof bytes, &sym, nullptr);
+        // XLookupString's text is Latin-1; a keysym past it is Unicode's (0x01000000 + code).
+        if (count == 0 && (sym & 0xff000000UL) == 0x01000000UL) {
+            note_typed(static_cast<char32_t>(sym & 0x00ffffffUL));
+        }
+        for (int i = 0; i < count; ++i) note_typed(static_cast<unsigned char>(bytes[i]));
+    }
 }
 
 bool key_down(Key key) {
@@ -266,6 +350,8 @@ bool key_down(Key key) {
 
 struct EvdevPad {
     int fd = -1;
+    /// The top and left buttons by place (button_bit).
+    bool positional = false;
     input_absinfo axes[ABS_CNT] = {};
     PadReading reading;
     std::chrono::steady_clock::time_point next_search{};
@@ -279,6 +365,14 @@ EvdevPad& evdev_pad() {
 bool has_bit(const unsigned long* bits, int bit) {
     constexpr int kWord = static_cast<int>(sizeof(unsigned long) * 8);
     return ((bits[bit / kWord] >> (bit % kWord)) & 1UL) != 0;
+}
+
+/// Whether a pad's driver reports its top and left buttons by place, as the kernel's gamepad
+/// interface asks (button_bit): Sony's and Nintendo's do.
+bool reports_by_place(int fd) {
+    input_id id{};
+    if (ioctl(fd, EVIOCGID, &id) < 0) return false;
+    return id.vendor == 0x054c || id.vendor == 0x057e;
 }
 
 /// The first /dev/input/event* that is a gamepad (it has BTN_SOUTH), opened without blocking.
@@ -324,12 +418,16 @@ std::uint8_t trigger_value(const input_absinfo& info, int value) {
     return static_cast<std::uint8_t>(std::lround(std::fmax(0.0f, std::fmin(1.0f, unit)) * 255.0f));
 }
 
-std::uint16_t button_bit(int code) {
+/// The XInput bit of an evdev button. BTN_NORTH and BTN_WEST are also spelt BTN_X and BTN_Y,
+/// and xpad - every Xbox pad, and the virtual pad Steam gives games - reports them by those
+/// labels: X, the left button, as BTN_X (= BTN_NORTH), Y, the top one, as BTN_Y (= BTN_WEST).
+/// Taken by place they would swap the two.
+std::uint16_t button_bit(int code, bool positional) {
     switch (code) {
         case BTN_SOUTH: return kPadA;
         case BTN_EAST: return kPadB;
-        case BTN_NORTH: return kPadY;
-        case BTN_WEST: return kPadX;
+        case BTN_NORTH: return positional ? kPadY : kPadX;
+        case BTN_WEST: return positional ? kPadX : kPadY;
         case BTN_TL: return kPadShoulderL;
         case BTN_TR: return kPadShoulderR;
         case BTN_SELECT: return kPadBack;
@@ -347,7 +445,7 @@ std::uint16_t button_bit(int code) {
 void apply_event(EvdevPad& pad, const input_event& event) {
     PadReading& r = pad.reading;
     if (event.type == EV_KEY) {
-        const std::uint16_t bit = button_bit(event.code);
+        const std::uint16_t bit = button_bit(event.code, pad.positional);
         r.buttons = event.value != 0 ? (r.buttons | bit) : (r.buttons & ~bit);
         return;
     }
@@ -385,6 +483,7 @@ bool read_pad(PadReading& out) {
         pad.fd = open_gamepad(pad.axes);
         pad.reading = PadReading{};
         if (pad.fd < 0) return false;
+        pad.positional = reports_by_place(pad.fd);
     }
     input_event event{};
     ssize_t got = 0;
@@ -402,16 +501,27 @@ bool read_pad(PadReading& out) {
 
 #endif
 
+/// The keys were typing a line and some are still down: the Enter that ended it is not also A.
+bool g_keys_typing = false;
+
 }  // namespace
 
 InputState poll_platform_input() {
     InputState in;
-    if (!focused()) return in;
+    read_key_events();
+    const bool has_focus = focused();
+    if (!has_focus || !typing()) g_typed.clear();
+    if (!has_focus) return in;
 
     float x = 0.0f, y = 0.0f;
     PadReading pad;
     if (read_pad(pad)) map_pad(pad, in, x, y);
-    map_keyboard(in, x, y);
+    if (typing()) {
+        g_keys_typing = true;
+    } else if (g_keys_typing && !any_key_down()) {
+        g_keys_typing = false;
+    }
+    if (!g_keys_typing) map_keyboard(in, x, y);
 
     // Clamp to the unit disc so a diagonal is not 1.41 times as fast, as the console's round stick.
     const float m = std::sqrt(x * x + y * y);
@@ -425,6 +535,7 @@ InputState poll_platform_input() {
 }
 
 // No system keyboard on the desktop; a pad script can still answer (`text=` in `--pad-script`).
+// Otherwise the line is typed into the window (typing_in_window).
 bool text_entry(const std::string& /*title*/, const std::string& /*guide*/, std::string& text,
                 unsigned max_chars) {
     std::string scripted;
@@ -433,5 +544,48 @@ bool text_entry(const std::string& /*title*/, const std::string& /*guide*/, std:
     text = scripted;
     return true;
 }
+
+bool typing_in_window() { return true; }
+
+std::string take_platform_typed_text() {
+    read_key_events();
+    std::string typed = std::move(g_typed);
+    g_typed.clear();
+    return typed;
+}
+
+#if defined(_WIN32)
+
+void note_typed_unit(unsigned unit) {
+    // A character past the BMP comes as two units, high then low.
+    static unsigned high = 0;
+    if (unit >= 0xd800 && unit < 0xdc00) {
+        high = unit;
+        return;
+    }
+    if (unit >= 0xdc00 && unit < 0xe000) {
+        if (high != 0) note_typed(0x10000 + ((high - 0xd800) << 10) + (unit - 0xdc00));
+        high = 0;
+        return;
+    }
+    high = 0;
+    note_typed(unit);
+}
+
+// GetActiveWindow() already tells the game's window from any other.
+void set_input_window(std::uintptr_t window) { (void)window; }
+
+#else
+
+void set_input_window(std::uintptr_t window) {
+    g_window = static_cast<Window>(window);
+    Display* display = x_display();
+    if (display == nullptr || g_window == 0) return;
+    // Another client's window: KeyPress may be selected by any number of clients.
+    XSelectInput(display, g_window, KeyPressMask);
+    XFlush(display);
+}
+
+#endif
 
 }  // namespace tl::core

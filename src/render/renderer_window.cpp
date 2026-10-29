@@ -1,5 +1,5 @@
 // The render window's surface on Android, which the app going to the background takes
-// away and gives back, the desktop window's size as made, and the camera's aspect to the
+// away and gives back, the desktop window's size and handle as made, and the camera's aspect to the
 // window. Split from renderer_world.cpp.
 #include "render/renderer_impl.h"
 
@@ -40,8 +40,12 @@ void Renderer::Impl::watch_window_surface() {
 
 void Renderer::Impl::adopt_window_size() {
 #if !defined(TL_PLATFORM_SWITCH) && !defined(TL_PLATFORM_ANDROID) && !defined(TL_PLATFORM_IOS)
+    if (window == nullptr) return;
+    std::uintptr_t native_window = 0;
+    window->getCustomAttribute("WINDOW", &native_window);
+    tl::core::set_input_window(native_window);
     // A headless run draws offscreen at the size asked for; its hidden window is never read.
-    if (window == nullptr || config.headless) return;
+    if (config.headless) return;
 #if !defined(_WIN32)
     // X11: where OGRE's XRandR mode switch does not take (XWayland, several monitors), the
     // window manager makes the fullscreen window the monitor's size, in its own time.

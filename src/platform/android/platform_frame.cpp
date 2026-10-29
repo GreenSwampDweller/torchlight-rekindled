@@ -42,6 +42,10 @@ void platform_window_params(std::map<std::string, std::string>& params) {
     params["externalWindowHandle"] = std::to_string(reinterpret_cast<std::size_t>(glue->window));
     params["androidConfig"] = std::to_string(reinterpret_cast<std::size_t>(glue->config));
     params["preserveContext"] = "true";
+    // OGRE's Android window caps the depth buffer at 16 bits by default; a particle's
+    // `DEPTH BIAS` is scaled for 24, and at 16 it pulls a glow 256 times as far, in front of
+    // the walls and pillars around it.
+    params["maxDepthBufferSize"] = "24";
     if (const char* factor = android::content_scaling_factor()) {
         params["contentScalingFactor"] = factor;
     }

@@ -116,8 +116,13 @@ inline constexpr const char* kUiIconsImageset = "media/UI/uiicons.imageset";
 /// The PC's own `Logo`, `GuiLook`, `ui2` and `UIIcons`, which a console-style screen loads after
 /// its own sheets on a PC pak: the art the port's interface pack leaves out (the logo bars, the
 /// buttons, the panel looks, the HUD's slots and bars), found by name where a sheet lacks it.
-/// Empty on the Xbox 360 pak, which carries none of them.
+/// Empty on the Xbox 360 pak, which carries none of them. Then the mods' own imagesets
+/// (set_mod_imagesets), on either pak.
 std::vector<const char*> pc_imagesets();
+
+/// The imagesets the mounted mods bring under `media/UI/` (a class's portrait, its skill icons):
+/// the PC's interface loads every imageset it is given, a mod's among them.
+void set_mod_imagesets(std::vector<std::string> paths);
 
 /// The PC image that stands for a console one the mounted sheets lack (`skills_window_active` is
 /// `ActiveSkillHousing`), or empty when the PC has none like it. Looked up only after the console

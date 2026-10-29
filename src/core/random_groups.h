@@ -38,7 +38,9 @@ std::vector<size_t> choose_children_by_random_choice(const std::vector<LayoutGro
 
 /// `rollRandomGroups` with `rollGroup`:
 /// the ids of every group the layout does not create, descendants
-/// included. `groups` is in load (file) order.
-std::set<int64_t> roll_random_groups(const std::vector<LayoutGroup>& groups, RunicRandom& rng);
+/// included. `groups` is in load (file) order. `created`, when given, takes the ids of the groups
+/// made, in the order the load makes their objects.
+std::set<int64_t> roll_random_groups(const std::vector<LayoutGroup>& groups, RunicRandom& rng,
+                                     std::vector<int64_t>* created = nullptr);
 
 }  // namespace tl::core

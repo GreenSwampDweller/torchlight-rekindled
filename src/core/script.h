@@ -31,6 +31,7 @@
 #include "core/quest_book.h"
 #include "core/random_names.h"
 #include "core/route.h"
+#include "core/script_event.h"
 #include "core/skill_animation.h"
 #include "core/sound_data.h"
 #include "core/sound_object.h"
@@ -58,6 +59,8 @@ namespace tl::core {
 
 class Inventory;
 class LevelScript;
+struct EffectRolls;
+struct SkillConstruction;
 
 /// Where a layout file sits in the level: `origin + x * local.x + y * local.y + z *
 /// local.z`. Applied once at `build`; the machine then runs in level coordinates.
@@ -70,243 +73,6 @@ struct LayoutFrame {
     // PORT: a point of a layout file in the level's coordinates.
     Vec3 point(const Vec3& local) const { return origin + direction(local); }
     Vec3 direction(const Vec3& local) const { return x * local.x + y * local.y + z * local.z; }
-};
-
-/// What the script is asking the renderer to do.
-enum class ScriptAction {
-    SetVisible,      ///< `Show` / `Hide` on something the layout placed
-    SetEnabled,      ///< `Enable` / `Disable`; a particle link starts or stops
-    MoveNode,        ///< a timeline property track driving a target's position
-    CameraOn,        ///< a `Camera Controller` taking the camera
-    CameraOff,       ///< ... and handing it back
-    CameraLookAt,    ///< where a camera controller has the camera looking this frame
-    GameState,       ///< the interface state during a scripted scene
-    QuestChanged,    ///< a `Quest Controller` fired
-    Animation,       ///< a unit starts or stops an animation
-    MoveUnit,        ///< a unit walked by the script moved
-    Dialog,          ///< a `Quest Controller` opened or closed a line of dialogue
-    Hunt,            ///< a `Monster` started or stopped going after something
-    Kill,            ///< a `Monster` died: fall over, do not vanish; `on`: the player struck it
-    WalkPlayer,      ///< a `Pathing` node whose `GROUP` is PLAYER: walk the character
-    NestedTimeline,  ///< `Play` / `Play Backwards` / `Stop` on a `Layout Link Timeline`
-    Music,           ///< `Play` or `Play Level Music` on a `Music` node
-    SpawnerInput,    ///< an input reached a `Unit Spawner`: `spawner` takes `input`
-    /// `CTriggerUnit::setTriggerState` put a `Unit Trigger`
-    /// in `trigger_state`. `on`: `trigger` did it.
-    TriggerState,
-    /// `CItem::interact`, called by `trigger`
-    /// after its `setTriggerState`: the prop's quest event.
-    ItemInteracted,
-    TriggerCollidable,  ///< `Collidable` / `Not Collidable` on a `Unit Trigger` (`on`)
-    Warp,               ///< a `Warper` was activated: go to the dungeon named in `text`
-    /// a `Waypoint Activator` was activated: this level's depth becomes a waypoint
-    WaypointActivated,
-    OpenCinematic,  ///< a `Cinematic` node opens the `[CINEMATIC]` named in `text`
-    PlayerEnabled,  ///< the player character was enabled or disabled (`on`)
-    Strike,         ///< a character's blow landed: `target_node` takes `amount` (0 = the player)
-    /// `CEquipment::fireMissiles` for a character's weapon:
-    /// `node_id` looses `text` from its left hand (`on`) or right, at the target when `aimed`.
-    WeaponMissile,
-    Miss,            ///< a swing met nothing, or a wall (`CSoundBank` slot 0xf)
-    Unhandled,       ///< a wire this engine does not implement yet, named in `text`
-    ScaleNode,       ///< a timeline track driving a unit's `SCALE`: uniform `amount`
-    HideHandTrails,  ///< a unit's two hand weapon trails switched off and hidden
-    OrientNode,      ///< a timeline track turning a node: its world `axis_x`/`axis_y`/`axis_z`
-    Opacity,         ///< a character's fade (`+0x528`, `CGenericModel::setOpacity`): `amount`
-    /// `CCharacter::stopParticles(on)` on the unit placed by `node_id`: its
-    /// following and `BIND` particle triggers stopped (`ThemeParticleTriggers`)
-    StopUnitParticles,
-    CastShadows,  ///< a character casts a shadow or stops (`+0x530`): `on`
-    PlayerPet,    ///< `Add as Pet` (`on`) / `Remove as Pet`: `addPet` / `removePet` on the player
-    JumpLanded,   ///< a jump down reached the ground (`jumpDownAI`): `LAND_SOUND` at `position`
-    DeathLanded,  ///< a flung body reached the end of its flight (`completeDeath`); `on`: on ground
-    CompleteQuest,     ///< `OK` on a `[COMPLETE]` line: `CQuestManager::completeQuest` on `quest`
-    PlayerInvincible,  ///< a `Game State Controller`'s `INVULNERABLE`: the player's `+0x52e` (`on`)
-    HealPlayer,        ///< `Heal Player`: `modifyHP(maxHP())` on the player
-    /// a `Teleport` node's `Activate Teleport`: the player to `position`, facing `facing`
-    TeleportPlayer,
-    /// a `Dungeon Object`'s `Clear History`: `CPlayer::clearDungeonHistory(name)`
-    /// on every player, then `updateStoredLevels` on the level it stands in
-    ClearDungeonHistory,
-    ShowTip,            ///< `Show Tip`: `CGameUI::queueTip` with the tip in `input`
-    PlayerMeshVisible,  ///< the player's `setMeshVisible(on, true)` (`HIDE PLAYER`, a skip)
-    ParticleNode,  ///< a `Particle` node's own system: `CParticleTechWrapper::start` (`on`) / `stop`
-    ParticleLinkPause,  ///< a particle link's `CParticle::Pause`: `CLayout::pause` on its layout
-    AffectorEnabled,    ///< a particle affector's `ENABLE` (`CAffectorWrapper::setEnabled`): `on`
-    EmitterEnabled,  ///< an `Emitter` node's emission (`CParticleEmitterWrapper::setEnabled`): `on`
-    CameraShake,  ///< `Activate` on a `Camera Shake`: its `node`, about `position` (the layout's)
-    /// `CCharacter::convertCharacter` re-made `node_id` as
-    /// `unit` (it was `text`); the scene drops the old model, makes the new, plays `TRANSFORM`.
-    Transform,
-    /// `CSoundBank::playSample(slot, node, 0, 0, false)` on a character's own
-    /// bank (`+0x298`), at its node: `input` is the slot (`SoundSlot`).
-    UnitSample,
-    /// `CLayoutDescriptor::InputLogicEvent`: an input a
-    /// `Layout Link Timeline` has no case for goes to the link's layout
-    /// (`CLayout::processInputs`), and back to the link if that does not take it.
-    LinkInput,
-    /// `CCharacter::displayDamageAbsorbed`
-    /// has a number to show over a character: `amount`, and `on` when it is one
-    /// of the player's side (red, not orange).
-    DamageText,
-};
-
-/// One thing that happened this frame.
-struct ScriptEvent {
-    ScriptAction action = ScriptAction::SetVisible;
-
-    /// The node acted on, and its name for the log. Zero for events that are
-    /// about the level rather than about a node.
-    int64_t node_id = 0;
-    std::string name;
-
-    bool on = false;  ///< SetVisible / SetEnabled / GameState / PlayerEnabled
-    Vec3 position;    ///< MoveNode, CameraLookAt, MoveUnit, WalkPlayer, Spawn
-
-    /// CameraOn: the node the camera follows, or 0.
-    int64_t follow_id = 0;
-
-    /// CameraOn: `PAN TIME` and the ease point, for the log.
-    float pan_time = 0.0f;
-    float ease_at = 1.0f;
-
-    /// GameState: the `STATE` string (type in `input`). QuestChanged: the quest. Animation:
-    /// the animation. Dialog: the line, on the opening event. Hunt: what is hunted. Music: the
-    /// `FILE NAME` (`input` says which input). Unhandled: the wire.
-    std::string text;
-
-    /// Animation, MoveUnit, Dialog: the unit's `MONSTER` name.
-    /// Dialog: the line's `SOUND` definition (`CQuestDialog +0xa0`).
-    std::string sound;
-    std::string unit;
-    bool loops = false;
-    /// Animation: the unit is the level's player (an `Animation Controller`
-    /// whose `GROUP` is `PLAYER`), not a placed one.
-    bool to_player = false;
-
-    /// Animation: the blend in, from the controller's `BLEND TIME`.
-    float blend = 0.0f;
-
-    /// How fast to play it, as a multiple of the unit's own authored rate.
-    float rate = 1.0f;
-    /// Animation: seconds the units' models are stepped on at once after the
-    /// start (`CAnimationPlayer::setAnimationDuration`'s
-    /// `CGenericModel::updateAnimation(duration, true)`); 0 for none.
-    float advance = 0.0f;
-
-    /// Animation, on a play: back to `IDLE` once a one-shot has run, as
-    /// `CCharacter::setAIPlayAnimation` queues.
-    bool then_idle = false;
-    /// Animation, on a play: one-shots queued behind it, in order, before the
-    /// idle `then_idle` asks for (`queueBlendAnimation(name, false, ..)`).
-    std::vector<std::string> queue;
-
-    /// Hunt, on a target chosen: the node being hunted, or 0 for the player.
-    /// Strike: the node struck.
-    int64_t target_node = 0;
-    /// WeaponMissile: it has a target (`target_node`, `target_machine`).
-    bool aimed = false;
-    /// ... and the machine that runs it, which need not be the one that sent
-    /// the event: a room's units and the level's share one list. Null for the
-    /// player.
-    LevelScript* target_machine = nullptr;
-
-    /// Warp: the Warper's `LEVEL DELTA`, `LEVEL ABSOLUTE`, `WAYPOINT` and
-    /// `WARP NAME`. The dungeon is `text`.
-    int32_t level_delta = 1;
-    int32_t level_absolute = 0;
-    bool waypoint = false;
-    std::string warp_name;
-
-    /// MoveUnit: which way the unit is now facing, as a yaw in radians about +Y.
-    float facing = 0.0f;
-
-    /// MoveUnit: whether `facing` means anything this frame.
-    bool turned = false;
-
-    /// OrientNode: the node's orientation columns in the level (`RIGHT`, `UP`,
-    /// `FORWARD`), as `CPositionableObject +0xc0` holds them: not normalised.
-    Vec3 axis_x;
-    Vec3 axis_y;
-    Vec3 axis_z;
-
-    /// MoveUnit: walking (false) or running.
-    bool running = false;
-
-    /// Dialog: how long the line is up for, and whether it floats.
-    float seconds = 0.0f;
-    bool floaty = false;
-    /// Dialog (boxed): the controller's quest, whether the line is an `[INTRO]` offer, and on
-    /// closing the menu event (2 OK, 3 accepted, 4 declined; `CQuestDialogMenu::onClick`).
-    ///
-    std::string quest;
-    bool offer = false;
-    int32_t menu_event = 0;
-    /// Dialog (boxed): the line's `CAMERAMODX/Y/Z`, and the menu's unit when it is a character
-    /// (the player's target after `CGameUI::forceInteractiveDialog`),
-    /// which the close-up aims at; 0 for a prop's line.
-    Vec3 camera_mod;
-    int64_t speaker_node = 0;
-
-    /// NestedTimeline: which way round to play it.
-    bool backwards = false;
-
-    /// TriggerState: the state (0 the first), the prop's first and last, whether forced (a
-    /// prop already there plays it again) and animated, and whether its sound plays (only
-    /// while the level is active).
-    int32_t trigger_state = 0;
-    int32_t trigger_first = 0;
-    int32_t trigger_last = 1;
-    bool trigger_forced = false;
-    bool trigger_animate = true;
-    bool trigger_sound = false;
-    /// TriggerState from `trigger`: a one-shot reached its last state (its
-    /// `[TREASURE]` is spawned), and the prop's skill was rolled
-    /// (`selectRandomSkill`: a one-shot's last state, or any `Cycle` firing).
-    bool trigger_spent = false;
-    bool trigger_skill = false;
-    /// TriggerState from `trigger`: the character it was handed - the player's
-    /// `interact`, or none for a wire's `Trigger`.
-    bool by_player = false;
-
-    /// CameraShake: the node, whose fields the renderer reads with the shake
-    /// curves it holds (`camera_shake_from_node`).
-    const tl::formats::CmpNode* node = nullptr;
-
-    /// SpawnerInput: the spawner the machine holds for the node, the input
-    /// (`EINPUT_EVENTS`), and the machine, which takes the spawner's outputs.
-    UnitSpawner* spawner = nullptr;
-    uint32_t input = 0;
-    LevelScript* machine = nullptr;
-
-    QuestStatus status = QuestStatus::Unknown;
-
-    /// Strike: the damage after armour, and how it was dealt.
-    float amount = 0.0f;
-    bool critical = false;
-    bool blocked = false;
-    /// Strike: how many of the blow's `modifyDamage` calls the struck one's
-    /// `SHIELD BUFFER`s took whole, each an `Absorbed!` and
-    /// a slot 7 sound over it.
-    int absorbed = 0;
-    /// Strike: a damage-over-time shape's (`applyDamage` without its struck
-    /// flag, so no `CAST SKILL ON STRUCK`).
-    bool over_time = false;
-    /// Strike: `CCharacter::rollAttack` decided it, so its tail (knock-back, degraded armour,
-    /// `TRANSFER` effects) follows. A damage shape's strike is not one.
-    bool roll_attack = false;
-    /// Strike and Kill: the blow's direction and force (`applyDamage`'s, for
-    /// `die`), and on a Kill whether the body bursts (a critical, or a blow of
-    /// at least 1.75 times the maximum).
-    bool has_direction = false;
-    Vec3 direction;
-    float force = 0.0f;
-    bool burst = false;
-    /// Strike: `Blow::by_type` and `Blow::parts`, and the attack's own damage
-    /// type - what `rollAttack` hands `applyDamageEffects`.
-    std::array<int, kDamageTypeCount> by_type{};
-    int parts = 0;
-    int first_type = 0;
 };
 
 /// `LEVEL DELTA` that sends a warp to town instead of to a depth
@@ -735,6 +501,20 @@ public:
         animation_catalog_ = std::move(catalog);
     }
 
+    /// Where the sound listener stands while the machine is activated: the last frame's, which
+    /// the console's `CSoundManager` keeps through a load (`configureVolumeScale`).
+    void set_activation_listener(const Vec3& at) { activation_listener_ = at; }
+
+    /// The order `CEditorScene::loadCompressedLayout` makes the file's objects,
+    /// by id, for the next `build`: the order of its descriptors and of their objects.
+    void set_made_order(std::vector<int64_t> ids) { made_order_ = std::move(ids); }
+
+    /// `CLayoutDescriptor`'s scene activation: each `Layout Link`'s layout
+    /// activated in its turn of `level_activated`, handed what the activation fired before it.
+    void set_link_activation(std::function<void(int64_t link, std::vector<ScriptEvent>& out)> f) {
+        link_activation_ = std::move(f);
+    }
+
     /// How long a unit's animation runs in seconds, negative when it has none by that name:
     /// `CGenericModel::getAnimationLengthSeconds`.
     void set_animation_length(
@@ -1118,6 +898,11 @@ public:
     /// the level's monster level.
     UnitCreation roll_unit_creation(const std::string& unit, bool default_equipment = true,
                                     int level_default = 0);
+    /// A placed Monster's unit, made as its node was (`CMonsterDescriptor::Set_createNewCharacter`,
+    /// in the file's creation pass): `build` makes the node's character from it.
+    void preset_unit_creation(int64_t node, UnitCreation made) {
+        preset_creations_[node] = std::move(made);
+    }
 
     /// `createDefaultEquipment`'s spawn-class half (`loadAndEquipSpawnClass`),
     /// which needs the spawn classes: called for
@@ -1370,6 +1155,15 @@ public:
 
     /// A placed unit has been killed: `Monster Killed`.
     void unit_killed(int64_t id, QuestState& quests, std::vector<ScriptEvent>& out);
+    /// `CCharacter::die`'s `playSample(12)`, after its procs: the unit's
+    /// `DEATH_SOUND`, unless its death already played it.
+    void play_death_sample(int64_t id, std::vector<ScriptEvent>& out);
+    /// While set, a death leaves its sample to `play_death_sample` (the caller runs the
+    /// death's procs first).
+    void set_defer_death_sample(bool defer) { defer_death_sample_ = defer; }
+    /// `CCharacter::die`'s `findRandomAnimation("DIE")` for a death that
+    /// neither flies nor bursts: the name, empty when the model has none.
+    std::string death_animation(int64_t id) const;
     bool unit_is_dead(int64_t id) const;
     /// Whether any unit of this machine is dead (`unit_is_dead` is false for every id if not).
     bool has_dead_units() const { return !dead_.empty(); }
@@ -2596,6 +2390,8 @@ private:
     std::vector<int64_t> mastered_;
     void forget_character(int64_t id);
     std::set<int64_t> dead_;
+    bool defer_death_sample_ = false;
+    std::set<int64_t> death_sampled_;
     PassabilityMap* passability_ = nullptr;
     const StatBook* graphs_ = nullptr;
     int difficulty_ = difficulty::kHard;
@@ -2611,6 +2407,7 @@ private:
     float player_radius_ = kDefaultCollisionRadius;
     std::function<std::vector<std::pair<std::string, float>>(const std::string&)>
         animation_catalog_;
+    std::function<void(int64_t, std::vector<ScriptEvent>&)> link_activation_;
     /// `CLevel +0xd0`: this machine's character-update listeners (its Damage
     /// Shapes), the newest first, and `+0x2d8`, the removals waiting for
     /// `flushCharacterUpdateListeners`.
@@ -2624,6 +2421,7 @@ private:
     const RandomNames* random_names_ = nullptr;
     const UnitTypeHierarchy* unit_types_ = nullptr;
     EquipmentRoller equipment_roller_;
+    std::map<int64_t, UnitCreation> preset_creations_;  ///< by node, until `build` takes them
     UnitEquipment unit_equipment_;
     EffectManager::Context unit_effect_tables_;
     bool has_unit_effect_tables_ = false;
@@ -2645,6 +2443,18 @@ private:
     std::vector<int64_t> frame_order_;
     static bool updates_each_frame(uint32_t type);
     void build_update_order();
+    /// `level_activated`'s `Unit Spawner` and `Monster` turns.
+    void activate_spawner(Object& o, std::vector<ScriptEvent>& out);
+    void activate_monster(Object& o, std::vector<ScriptEvent>& out);
+    /// One character of `drop_characters_to_ground`.
+    void drop_character_to_ground(Object& o, std::vector<ScriptEvent>& out);
+    /// The skill an own effect teaches (`CBaseUnit::activateEffect`), or none.
+    const SkillDef* effect_skill(const Effect& effect) const;
+    /// A unit's own effects rolled as made (`graphs_` set), a skill one teaches constructed with `with`.
+    void roll_own_effects(std::vector<Effect>& effects, EffectRolls& rolls,
+                          SkillConstruction& with) const;
+    std::vector<int64_t> made_order_;
+    Vec3 activation_listener_;
     std::vector<int64_t> logic_groups_;
     std::vector<tl::formats::CmpTimeline> timelines_;
 

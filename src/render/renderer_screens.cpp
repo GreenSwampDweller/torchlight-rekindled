@@ -543,11 +543,8 @@ void Renderer::Impl::set_stats_overlay(bool on) {
 
 // PORT: the debug FPS overlay, the port's own diagnostic.
 void Renderer::Impl::step_stats_overlay() {
-    // L3 / 'F' on any screen (core/input.h), and config.txt keeps the choice.
-    if (tl::core::take_fps_toggle()) {
-        set_stats_overlay(!stats_overlay_on);
-        (void)tl::core::save_run_config_value("fps", stats_overlay_on);
-    }
+    // L3 / 'F' on any screen (core/input.h), for this run: the FPS Overlay mod is the setting.
+    if (tl::core::take_fps_toggle()) set_stats_overlay(!stats_overlay_on);
     if (!stats_overlay_on || frame_clock.timer == nullptr) return;
     ++stats_frames;
     const unsigned long long now = frame_clock.timer->getMicroseconds();

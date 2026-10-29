@@ -8,6 +8,7 @@
 #include "core/input.h"
 #include "core/new_game_menu.h"
 #include "core/randomizer.h"
+#include "core/units.h"
 #include "formats/cegui.h"
 #include "render/renderer.h"
 
@@ -17,6 +18,7 @@
 #include <OgreMaterial.h>
 #include <OgreTexture.h>
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <utility>
@@ -66,11 +68,28 @@ public:
     /// black, as it did before.
     bool show(const std::string& group, unsigned width, unsigned height);
 
+    /// Show it under the menus, without a tip: the mods page's backdrop. `hide()` puts it back
+    /// over them.
+    bool show_backdrop(const std::string& group, unsigned width, unsigned height);
+    /// Show it again as it was before the last `hide()`: over the menus or behind them.
+    bool show_as_before(const std::string& group, unsigned width, unsigned height) {
+        return hidden_backdrop_ ? show_backdrop(group, width, height) : show(group, width, height);
+    }
+
     void hide();
     void destroy();
     bool visible() const { return visible_; }
 
 private:
+    /// Over the menu's three layers (400-402) and under the HUD; the bars one above.
+    static constexpr unsigned short kZOrder = 450;
+    /// Under the main menu's frame.
+    static constexpr unsigned short kBackdropZOrder = 390;
+    /// How bright the artwork is behind the menus.
+    static inline const Ogre::ColourValue kBackdropDim{0.5f, 0.5f, 0.5f};
+    void set_z_order(unsigned short z_order);
+    void dim_pc_artwork(bool dim);
+
     /// Read the 21 authored tips, once. Empty when the archive has none, which
     /// leaves the bottom bar bare rather than failing.
     void load_tips(const std::string& group);
@@ -112,6 +131,10 @@ private:
     unsigned height_ = 0;
     bool built_ = false;
     bool visible_ = false;
+    bool backdrop_ = false;
+    bool hidden_backdrop_ = false;  ///< `backdrop_` as the last `hide()` found it
+    /// The panels `dim_pc_artwork` moved onto the dimmed material, with their own.
+    std::vector<std::pair<Ogre::PanelOverlayElement*, Ogre::MaterialPtr>> undimmed_;
 };
 
 /// The character creation screen. With the Xbox data, the console's own
@@ -127,13 +150,9 @@ public:
     CharacterCreate(const CharacterCreate&) = delete;
     CharacterCreate& operator=(const CharacterCreate&) = delete;
 
-    /// One choice on the screen.
-    struct Choice {
-        std::string name;          ///< the class's `NAME`
-        std::string display_name;  ///< what to print under the icons
-        std::string description;   ///< the sentence under that
-        std::string icon;          ///< `logo.imageset`'s name for the unselected art
-    };
+    /// One choice on the screen: a class, its `NAME`, `DISPLAYNAME`, `DESCRIPTION`, the
+    /// `logo.imageset` icon and, a mod's, its portrait.
+    using Choice = tl::core::PlayerClass;
 
     /// Build it over whatever backdrop is up. False when the interface data
     /// cannot be read, which the caller treats as "start the game anyway".
@@ -237,6 +256,18 @@ private:
     /// (`ceguiWidget/StaticShared` in the scheme's looknfeel).
     void add_console_frame(const char* window, bool item_frame, float dx, float dy,
                            const std::string& dims_with);
+    /// The classes offered, and the focus grid with the mods' among them.
+    void take_choices(const std::string& group, std::vector<Choice> choices);
+    /// The class row: the console's three by their windows, then the mods'.
+    void build_class_row();
+    /// A mod's class on the console screen, from its own portrait art, in the class row.
+    void add_mod_portrait(const Choice& choice);
+    /// The class row's cells, the console's three first, sharing the three's width.
+    void fit_class_row(size_t built_in);
+    /// Move the focus a step on the grid, past what is hidden.
+    void step_focus(int dx, int dy);
+    /// A on a mod's class.
+    void choose_mod_class(const std::string& name);
     MenuArtSet* art_named(const std::string& set);
     /// The set to draw `image` from: the one named when it has the image, else any loaded set
     /// that does (a look's fixed image the pack leaves to the PC's `GuiLook`). Null when none.
@@ -247,6 +278,19 @@ private:
     bool console_window_visible(const std::string& window) const;
     /// A on the focused window: its `onClick`, as `CNewGameMenu` answers it.
     MenuAction fire_console(const std::string& window);
+    /// A frame's new presses on the console screen: a step of the focus, A, B.
+    struct ConsolePress {
+        int dx = 0, dy = 0;
+        bool confirm = false, back = false;
+    };
+    MenuAction update_console(const ConsolePress& press);
+    /// What the keyboard gave for a name, taken as `CNewGameMenu::update` takes it.
+    void take_name(bool player, const std::string& text);
+    /// A name box's caption: the name, or the text being typed into it and a caret.
+    std::string shown_name(bool player) const;
+    /// One frame of a name typed into its box (`tl::core::typing_in_window`): the keys,
+    /// then Enter or A to keep it, Escape or B to leave the name as it was.
+    void step_typing(bool confirm_edge, bool back_edge);
 
     Ogre::PanelOverlayElement* make_panel(const std::string& name, Ogre::Overlay* overlay,
                                           const Ogre::MaterialPtr& material);
@@ -262,6 +306,10 @@ private:
     std::string pet_ = tl::core::kDefaultPet;
     std::string player_name_ = tl::core::kDefaultPlayerName;
     std::string pet_name_ = tl::core::kDefaultPetName;
+    /// A name being typed into its box, the player's or the pet's, and the text so far.
+    bool typing_ = false;
+    bool typing_player_ = true;
+    std::string typed_name_;
 
     tl::formats::Imageset logo_set_;
     tl::formats::Imageset gui_set_;
@@ -277,6 +325,11 @@ private:
 
     /// Which window has the focus (`CNewGameMenu +0x20C`, `+0x210`).
     tl::core::NewGameFocus focus_;
+    /// The grid it moves on: the console's, and the mods' classes on its top row.
+    tl::core::NewGameGrid grid_;
+    /// The mods' portraits' art; a deque, as each `Widget` points into it.
+    std::deque<MenuArtSet> portrait_art_;
+    std::string group_;
 
     MenuArtSet widgets_art_;
     MenuArtSet widgets1_art_;
@@ -386,8 +439,8 @@ public:
     /// both screens, and a block of text beside them (`set_editor_info`). Up
     /// and down pick a row; left and right (held: repeating) step it by one
     /// and the bumpers by ten, each returning `MenuAction::EditorStep`. A
-    /// steps it by one.
-    void show_editor(const std::vector<std::string>& rows);
+    /// steps it by one. `back` captions the last button; empty, there is none (the mods page).
+    void show_editor(const std::vector<std::string>& rows, const std::string& back = "Back");
     /// A row's caption, once its choice has changed.
     void set_row_caption(size_t row, const std::string& text);
     /// The editor's text block; lines split on '\n'.
@@ -395,6 +448,23 @@ public:
     /// The row and the step the last `EditorStep` was for.
     int editor_row() const { return editor_row_; }
     int editor_step() const { return editor_step_; }
+    /// The editor row the focus is on; -1 on the last button.
+    /// The copyright line off, until the next `layout()` shows it (the mods page, which has none;
+    /// renderer_mods_menu.cpp).
+    void hide_copyright();
+    /// A prompt of the bottom bar captioned `text`, found by its group's window (the mods page's
+    /// Start, `credits`). Until the bar is built again.
+    void set_bar_caption(const std::string& window, const std::string& text);
+    /// Put the focus on button `index`, or on none for -1 (the mods page's checkbox has it).
+    void set_focus(int index) {
+        selected_ = index;
+        apply_button_look();
+    }
+    int focused_row() const {
+        if (selected_ < 0 || selected_ >= static_cast<int>(buttons_.size())) return -1;
+        const Button& button = buttons_[static_cast<size_t>(selected_)];
+        return button.action == MenuAction::EditorStep ? button.slot : -1;
+    }
 
     /// Swap the button row for one biome's own floors: `entries` is
     /// (label, global floor number) pairs, each tagged `MenuAction::
@@ -676,6 +746,8 @@ private:
     /// The bottom bar's three groups - the glyph and the word beside it. The layout authors four;
     /// `invitefriend` is Xbox Live and is left out.
     struct BarItem {
+        /// The group's window in the layout (`credits`, ...).
+        std::string window;
         Piece glyph;
         Ogre::TextAreaOverlayElement* label = nullptr;
         Ogre::TextAreaOverlayElement* shadow = nullptr;

@@ -14,6 +14,7 @@
 #include <OgreTextureManager.h>
 #include <OgreTextureUnitState.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -33,6 +34,10 @@ constexpr const char* kLoadingImageset = "media/UI/loading.imageset";
 /// The console's loading screen: black, the artwork, the hourglass, the top
 /// border and the tip in its framed strip (`TipText`).
 constexpr const char* kConsoleLoadingFile = "media/UI/loading.uilayout";
+/// What a backdrop leaves out of it: the hourglass, the "Loading" box and its text, the tip
+/// strip and its text. And the artwork (`i_404`) dimmed, so the menu's text reads over it.
+constexpr std::array<const char*, 5> kNotOnBackdrop = {"HOURGLASS", "i_407", "i_408", "i_402",
+                                                       "TipText"};
 
 /// Where the loading screen's tips are authored: `[LOADINGTIPS]`'s `<TRANSLATE>TIP:` entries,
 /// read by `CGameGlobals::reload()`; `CGameUI::setLoadingVisible(true)` puts one in `TipText`
@@ -152,7 +157,7 @@ bool LoadingScreen::build_console(const std::string& group) {
     }
     console_ = std::make_unique<LayoutScreen>();
     if (!console_->create_export(group, width_, height_, kConsoleLoadingFile, "tl/loading/console",
-                                 450)) {
+                                 kZOrder)) {
         console_.reset();
         return false;
     }
@@ -216,11 +221,11 @@ bool LoadingScreen::show(const std::string& group, unsigned width, unsigned heig
             auto& overlays = Ogre::OverlayManager::getSingleton();
             overlay_ = overlays.create("tl/loading");
             // Over the menu's three layers and under the HUD.
-            overlay_->setZOrder(450);
+            overlay_->setZOrder(kZOrder);
             // The bars get an overlay of their own: within one overlay OGRE sorts transparent
             // renderables by pass, and the artwork and bars use different textures.
             bars_ = overlays.create("tl/loading/bars");
-            bars_->setZOrder(451);
+            bars_->setZOrder(kZOrder + 1);
 
             const float across = static_cast<float>(width_ ? width_ : 1);
             const float down = static_cast<float>(height_ ? height_ : 1);
@@ -303,12 +308,74 @@ bool LoadingScreen::show(const std::string& group, unsigned width, unsigned heig
     return true;
 }
 
+bool LoadingScreen::show_backdrop(const std::string& group, unsigned width, unsigned height) {
+    // Up as though already showing, so no tip is drawn: its roll is on `g_Rand`, which a screen
+    // of the port's own must not move.
+    const bool was_visible = visible_;
+    visible_ = true;
+    if (!show(group, width, height)) {
+        visible_ = was_visible;
+        return false;
+    }
+    set_z_order(kBackdropZOrder);
+    for (const char* window : kNotOnBackdrop) {
+        if (console_ != nullptr) console_->set_hidden(window, true);
+    }
+    if (console_ != nullptr) console_->set_tint("i_404", kBackdropDim);
+    dim_pc_artwork(true);
+    if (console_ != nullptr) console_->refresh();
+    if (tip_ != nullptr) tip_->hide();
+    backdrop_ = true;
+    return true;
+}
+
+// The PC screen's fill and artwork (the panels drawn from `loading.texture`), on a dimmed copy of
+// their material, or back on their own.
+void LoadingScreen::dim_pc_artwork(bool dim) {
+    if (!dim) {
+        for (auto& [panel, own] : undimmed_) panel->setMaterial(own);
+        undimmed_.clear();
+        return;
+    }
+    if (!loading_texture_ || !undimmed_.empty()) return;
+    Ogre::MaterialPtr dimmed = build_menu_material("tl/loading/backdrop", loading_texture_);
+    dimmed->getTechnique(0)->getPass(0)->getTextureUnitState(0)->setColourOperationEx(
+        Ogre::LBX_MODULATE, Ogre::LBS_TEXTURE, Ogre::LBS_MANUAL, Ogre::ColourValue::White,
+        kBackdropDim);
+    for (Ogre::PanelOverlayElement* panel : panels_) {
+        if (panel == nullptr) continue;
+        const Ogre::MaterialPtr& own = panel->getMaterial();
+        const Ogre::TextureUnitState* unit =
+            own ? own->getTechnique(0)->getPass(0)->getTextureUnitState(0) : nullptr;
+        if (unit == nullptr || unit->_getTexturePtr() != loading_texture_) continue;
+        undimmed_.emplace_back(panel, own);
+        panel->setMaterial(dimmed);
+    }
+}
+
+void LoadingScreen::set_z_order(unsigned short z_order) {
+    if (console_ != nullptr) console_->set_z_order(z_order);
+    if (overlay_ != nullptr) overlay_->setZOrder(z_order);
+    if (bars_ != nullptr) bars_->setZOrder(static_cast<unsigned short>(z_order + 1));
+}
+
 void LoadingScreen::hide() {
     if (console_ != nullptr) console_->hide();
     for (Ogre::Overlay* overlay : {overlay_, bars_}) {
         if (overlay != nullptr) overlay->hide();
     }
     visible_ = false;
+    hidden_backdrop_ = backdrop_;
+    if (backdrop_) {
+        set_z_order(kZOrder);
+        for (const char* window : kNotOnBackdrop) {
+            if (console_ != nullptr) console_->set_hidden(window, false);
+        }
+        if (console_ != nullptr) console_->set_tint("i_404", Ogre::ColourValue::White);
+        dim_pc_artwork(false);
+        if (console_ != nullptr) console_->refresh();
+        backdrop_ = false;
+    }
 }
 
 void LoadingScreen::destroy() {

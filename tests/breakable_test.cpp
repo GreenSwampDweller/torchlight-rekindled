@@ -5,6 +5,8 @@
 #include "test_support.h"
 
 #include <cmath>
+#include <optional>
+#include <string>
 
 namespace {
 
@@ -77,6 +79,36 @@ TL_TEST(breakable_reads_the_unit) {
     TL_CHECK(none.mesh.empty());
     TL_CHECK(none.interact_particle.empty());
     TL_CHECK(none.skills.empty());
+}
+
+/// With the skill files known: a block naming none is passed over, a `LEVEL` above the
+/// skill's count of `[LEVELn]` blocks is that count, and -1 is 1.
+TL_TEST(breakable_skills_known_and_capped) {
+    tl::formats::AdmFile file = barrel();
+    const auto level = [](const char* value) {
+        tl::formats::AdmRecord record;
+        record.key = "LEVEL";
+        record.type = tl::formats::AdmType::Integer;
+        record.integer = static_cast<uint32_t>(std::stoul(value));
+        return record;
+    };
+    file.root.children[0].records.push_back(level("7"));
+    file.root.children[1].records.push_back(level("4294967295"));
+    file.root.children.push_back(skill("NO SUCH TRAP"));
+    file.root.children.push_back(skill("THIRD TRAP"));
+    file.root.children[3].records.push_back(level("2"));
+    const BreakableData data =
+        tl::core::read_breakable(file, [](const std::string& upper) -> std::optional<uint32_t> {
+            if (upper == "EXPLOSION TRAP") return 1u;
+            if (upper == "SKELETON TRAP") return 0u;
+            if (upper == "THIRD TRAP") return 3u;
+            return std::nullopt;
+        });
+    TL_CHECK(data.skills.size() == 3);
+    TL_CHECK(data.skills[2] == "THIRD TRAP");
+    TL_CHECK(data.skill_levels[0] == 1u);
+    TL_CHECK(data.skill_levels[1] == 1u);
+    TL_CHECK(data.skill_levels[2] == 2u);
 }
 
 /// Every backslash turned, then every doubled slash collapsed - a directory

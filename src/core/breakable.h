@@ -21,6 +21,8 @@
 #include "formats/adm.h"
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,13 +62,22 @@ struct BreakableData {
     /// whether a ray meets the collision model (`CLevel::objectRayCollision`).
     ///
     bool block = false;
-    /// Each `[SKILL]` block's `NAME`, in file order: the skill manager's known
-    /// list (`+0x1c8 -> +0x60`) `selectRandomSkill` picks from.
+    /// Each `[SKILL]` block's `NAME`, in file order, that names a skill file
+    /// (`addSkillByName` passes over one that does not): the
+    /// skill manager's known list (`+0x1c8 -> +0x60`) `selectRandomSkill` picks
+    /// from.
     std::vector<std::string> skills;
-    /// Each block's `LEVEL`. Its default, the unit's own level, is not kept for
-    /// an item; 1 stands in.
+    /// Each block's `LEVEL` as `CSkill::_setLevelOfSkillFromSkillManager`
+    /// keeps it: -1 is 1, and a level above the skill's count of
+    /// `[LEVELn]` blocks (at least 1) is that count. Its default, the unit's own
+    /// level, is not kept for an item; 1 stands in.
     std::vector<uint32_t> skill_levels;
 };
+
+/// The skills a breakable's `[SKILL]` blocks may name: a skill's count of
+/// `[LEVELn]` blocks, or none for a name no skill file has. Unset, every block
+/// is kept with its `LEVEL` as authored.
+using BreakableSkillLevels = std::function<std::optional<uint32_t>(const std::string& upper_name)>;
 
 /// `CleanPath` as the paths above need it: backslashes to slashes, doubled
 /// slashes collapsed.
@@ -75,7 +86,8 @@ std::string breakable_clean_path(const std::string& path);
 /// `CBreakable::unitInit`'s reads of the
 /// unit's data group - the file over its `BASEFILE` chain, which the caller
 /// has merged (`core/unit_resource.h`).
-BreakableData read_breakable(const tl::formats::AdmFile& unit);
+BreakableData read_breakable(const tl::formats::AdmFile& unit,
+                             const BreakableSkillLevels& skill_levels = {});
 
 /// The flags of `CItem` and `CBreakable` the class runs on.
 struct Breakable {

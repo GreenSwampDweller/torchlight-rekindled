@@ -29,6 +29,12 @@ void remember_mounts(const std::string& mounts);
 /// filesystems are searched case-insensitively before the base archive.
 void set_mod_roots(const std::vector<std::string>& roots);
 bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes);
+/// Whether a mod answers `path` (read_mod_resource() would read it).
+bool mod_has_file(const std::string& path);
+/// The file a mod answers `path` with, on disk, or empty.
+std::string mod_file_path(const std::string& path);
+/// Each mod's own copy of `path`, in the mods' order.
+std::vector<std::vector<uint8_t>> read_mod_copies(const std::string& path);
 std::vector<std::string> mod_paths_under(const std::string& dir, const char* suffix);
 std::vector<std::string> data_paths_under(const std::string& dir);
 std::vector<std::string> data_paths_in_listing_order(const std::string& dir);

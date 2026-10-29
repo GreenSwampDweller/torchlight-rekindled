@@ -762,6 +762,10 @@ public:
     // PORT: the log's state set from outside (a test hands it the console's).
     void restore_offer(const QuestDefinition& quest, const Offered& rolled,
                        const std::string& giver);
+    /// A quest not held, its seed (`CQuest +0x10`), floor (`+0x14`) and rank (`+0x1ec`) as
+    /// the manager's reset rolled them.
+    // PORT: the log's state set from outside (the oracle hands it the console's).
+    void seed_dormant(const QuestDefinition& quest, uint32_t seed, int depth, int level);
     /// The level an offered quest is worth (`Offered::level`), or `fallback`
     /// for one no NPC has initialised.
     int offer_level(const QuestDefinition& quest, int fallback) const;
@@ -842,8 +846,10 @@ public:
     /// `log_full_for` first. `level` and `seed` are what `initializeQuestWithNPC`
     /// would have set. `depth`, when not negative, is the floor as a save holds
     /// it (`CQuest::load`); otherwise the offer's.
+    /// `resolve_units` false: a quest given with no NPC keeps its units unresolved, as the
+    /// manager's reset left them (its lookup had no level template); `populate` resolves them.
     bool accept(const QuestDefinition& quest, int level, uint32_t seed, const StatBook& graphs,
-                int depth = -1);
+                int depth = -1, bool resolve_units = true);
     /// The quest dialog's refusal, before it accepts: a quest that takes a
     /// journal row while the six are taken (`CQuestDialogMenu::onClick`).
     bool log_full_for(const QuestDefinition& quest) const;
@@ -984,6 +990,8 @@ public:
         std::vector<std::string> held;
         std::map<std::string, std::string> givers;
         std::map<std::string, Offered> offers;
+        /// The quests not held, as the manager keeps them (`dormant_`).
+        std::vector<std::pair<std::string, QuestEntry>> dormant;
     };
     Carried carry() const;
 
@@ -1065,6 +1073,23 @@ private:
     QuestDungeonSource dungeon_source_;
     const RandomNames* random_names_ = nullptr;
     std::map<std::string, Offered> offers_;  ///< by upper-cased quest name
+    /// The quests the player does not hold, as the manager keeps each (`CQuest` with its
+    /// `CQuestUnitData`): made the first time a level is populated, by upper-cased name.
+    std::map<std::string, QuestEntry> dormant_;
+    /// A dormant quest's state, made once (`dormant_`).
+    QuestEntry& dormant_entry(const QuestDefinition& quest);
+    using CreateQuestUnit =
+        std::function<void(const QuestEntry&, const QuestObjective&, const QuestUnitTag&)>;
+    /// One objective of `populate_level` that is on the level.
+    void populate_objective(QuestEntry& entry, QuestObjective& objective, bool active,
+                            const CreateQuestUnit& create_unit);
+    struct DormantSeed {
+        uint32_t seed = 0;
+        int depth = 0;
+        int level = 1;
+    };
+    /// Seeds handed in for dormant quests (`seed_dormant`), by upper-cased name.
+    std::map<std::string, DormantSeed> dormant_seeds_;
     QuestState state_;
     std::vector<QuestEntry> entries_;
     QuestPlayerSource player_source_;

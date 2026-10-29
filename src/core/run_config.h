@@ -5,10 +5,14 @@
 //             Choose Level, the frame dumps and the two-stick screenshot, and the
 //             log. Off, the menus do not offer them at all.
 //   logs=0    the log file, on its own (debug=1 turns it on too).
-//   fps=0     the frame-rate overlay; L3 switches it, and the choice is kept here.
+//   fps=0     read, not written: the frame-rate overlay is a mod now (core/mods.h), and this
+//             line of a file from before says whether that mod starts on.
 //   fps_limit=0   the most frames a second the game draws, 0 for no limit (Android: 60).
-//   free_camera=0 the right stick turns the camera (render/touch_camera.h), R3 resets it; the
-//                 Debug menu's FREE CAMERA switches it and keeps the choice here (iOS: 1).
+//   free_camera=0 read, not written: the free camera is a mod now (core/mods.h), and this line
+//                 of a file from before says whether that mod starts on (iOS: 1).
+//   mods_menu=1   the mods page before the game (not on iOS, `kModsPage`); 0 skips it and
+//                 starts without any mods. The page's "Don't show this menu again" sets it, and
+//                 the Android launcher's "Mod menu" switch.
 //
 // The desktop builds read four more (a device's screen is its own):
 //
@@ -27,6 +31,14 @@
 
 namespace tl::core {
 
+/// Whether this platform shows the mods page before the game (render/renderer_mods_menu.cpp):
+/// all but iOS, which takes `mods.dat` as it is.
+#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || !defined(TL_PLATFORM_IOS)
+inline constexpr bool kModsPage = true;
+#else
+inline constexpr bool kModsPage = false;
+#endif
+
 struct RunConfig {
     bool debug = false;
     bool logs = false;
@@ -43,6 +55,8 @@ struct RunConfig {
 #else
     bool free_camera = false;
 #endif
+    /// Where `kModsPage`: false skips the page and starts with no mods at all.
+    bool mods_menu = true;
 };
 
 /// The text a new `config.txt` holds: `defaults` written out, with a line

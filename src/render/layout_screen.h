@@ -25,6 +25,12 @@ class TextAreaOverlayElement;
 
 namespace tl::render {
 
+/// A window of a PC `.layout` (`UnifiedPosition` and `UnifiedSize`) in the console export's form
+/// (`UnifiedAreaRect`), hidden until shown, to stand in a console screen that has none. Its
+/// `Type` is unset when the layout or the window is not in the mounted data.
+tl::formats::GuiWindow pc_layout_window(const std::string& group, const std::string& layout,
+                                        const std::string& name);
+
 class LayoutScreen {
 public:
     LayoutScreen() = default;
@@ -44,14 +50,19 @@ public:
     /// of the same screen would have said them. A window is found by its
     /// `Name`; one authored `Visible` `False` is hidden as `set_hidden` hides
     /// it, so the screen's own logic can show it.
+    /// `pc_windows`, windows of the screen's PC twin (`characterload.layout` beside
+    /// `characterload.uilayout`) the console's lacks, are added to its root (pc_layout_window).
     bool create_export(const std::string& group, unsigned width, unsigned height,
-                       const std::string& layout, const std::string& tag, unsigned short z_order);
+                       const std::string& layout, const std::string& tag, unsigned short z_order,
+                       const std::vector<std::string>& pc_windows = {});
     void destroy();
     bool ready() const { return built_; }
 
     void show();
     void hide();
     bool visible() const { return visible_; }
+    /// Draw it at `z_order` from now on (text at `z_order + 2`), as `create` would have.
+    void set_z_order(unsigned short z_order);
 
     void resize(unsigned width, unsigned height);
 

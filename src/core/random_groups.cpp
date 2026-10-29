@@ -82,7 +82,8 @@ void roll_group(const std::vector<LayoutGroup>& groups, size_t group, std::vecto
 // by an ancestor's roll is skipped, one under a removed ancestor still rolls (and draws).
 // Pruning then removes every descendant of a removed group (`CEditorBaseObject::
 // isChildOfObject`).
-std::set<int64_t> roll_random_groups(const std::vector<LayoutGroup>& groups, RunicRandom& rng) {
+std::set<int64_t> roll_random_groups(const std::vector<LayoutGroup>& groups, RunicRandom& rng,
+                                     std::vector<int64_t>* created) {
     std::vector<size_t> removed;
     for (size_t g = 0; g < groups.size(); ++g) {
         if (std::find(removed.begin(), removed.end(), g) != removed.end()) continue;
@@ -95,6 +96,38 @@ std::set<int64_t> roll_random_groups(const std::vector<LayoutGroup>& groups, Run
 
     std::map<int64_t, int64_t> parent_of;
     for (const LayoutGroup& g : groups) parent_of.emplace(g.id, g.parent_id);
+    if (created != nullptr) {
+        // The list it hands back: every group in load order, then each removed one and every group
+        // under it (`CEditorBaseObject::isChildOfObject`) taken out as found - `TArrayList`'s removal
+        // puts the last entry in its place - the scan starting again at the second entry and the
+        // removed list at its first after each. Groups are made in this order.
+        const auto under = [&](size_t g, size_t ancestor) {
+            int64_t at = groups[g].parent_id;
+            for (size_t guard = 0; at != -1 && guard < groups.size(); ++guard) {
+                if (at == groups[ancestor].id) return true;
+                const auto it = parent_of.find(at);
+                if (it == parent_of.end()) break;
+                at = it->second;
+            }
+            return false;
+        };
+        std::vector<size_t> list(groups.size());
+        for (size_t g = 0; g < groups.size(); ++g) list[g] = g;
+        std::vector<size_t> pruned = removed;
+        for (size_t r = 0; r < pruned.size(); ++r) {
+            for (size_t i = 0; i < list.size(); ++i) {
+                if (list[i] != pruned[r] && !under(list[i], pruned[r])) continue;
+                if (std::find(pruned.begin(), pruned.end(), list[i]) == pruned.end())
+                    pruned.push_back(list[i]);
+                list[i] = list.back();
+                list.pop_back();
+                i = 0;
+                r = 0;
+            }
+        }
+        created->clear();
+        for (size_t g : list) created->push_back(groups[g].id);
+    }
     std::set<int64_t> out;
     for (size_t r : removed) out.insert(groups[r].id);
     for (const LayoutGroup& g : groups) {

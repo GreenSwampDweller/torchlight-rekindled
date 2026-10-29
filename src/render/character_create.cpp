@@ -158,6 +158,26 @@ constexpr FrameLook kItemFrame{
 /// (sets "0.5"; sets "1.0" on focus).
 constexpr float kUnfocusedAlpha = 0.5f;
 
+/// The UTF-8 character at `at` in `text`, and `at` moved past it.
+std::string next_utf8_char(const std::string& text, size_t& at) {
+    const unsigned char lead = static_cast<unsigned char>(text[at]);
+    const size_t width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    std::string piece = text.substr(at, width);
+    at += width;
+    return piece;
+}
+
+size_t utf8_chars(const std::string& text) {
+    size_t chars = 0;
+    for (char c : text) chars += (c & 0xc0) != 0x80 ? 1 : 0;
+    return chars;
+}
+
+void erase_last_utf8_char(std::string& text) {
+    while (!text.empty() && (text.back() & 0xc0) == 0x80) text.pop_back();
+    if (!text.empty()) text.pop_back();
+}
+
 }  // namespace
 
 CharacterCreate::~CharacterCreate() { destroy(); }
@@ -494,6 +514,114 @@ void CharacterCreate::add_console_widget(const char* window_name, std::vector<Wi
     into.push_back(widget);
 }
 
+void CharacterCreate::take_choices(const std::string& group, std::vector<Choice> choices) {
+    group_ = group;
+    choices_ = std::move(choices);
+    std::vector<std::string> mod_classes;
+    for (const Choice& choice : choices_) {
+        if (!choice.portrait_imageset.empty()) mod_classes.push_back(choice.name);
+    }
+    grid_ = tl::core::new_game_grid(mod_classes);
+}
+
+void CharacterCreate::build_class_row() {
+    // The three classes, **built in `choices_` order**, which is the order the
+    // rest of this class indexes them in. Each is found by its window name,
+    // which is the class's own.
+    for (const Choice& choice : choices_) {
+        add_console_widget(choice.name.c_str(), icons_, 0.0f, 0.0f);
+    }
+    const size_t built_in = icons_.size();
+    for (const Choice& choice : choices_) add_mod_portrait(choice);
+    fit_class_row(built_in);
+}
+
+// `CNewGameMenu`'s step on this screen's grid.
+void CharacterCreate::step_focus(int dx, int dy) {
+    focus_ = tl::core::step_new_game_focus(grid_, focus_, dx, dy, [this](const std::string& name) {
+        return console_window_visible(name);
+    });
+}
+
+// DIVERGENCE: a mod's class beside the console's three, drawn from the images its own
+// `charactercreate.layout` gives its radio button, in a cell made like the three's.
+void CharacterCreate::add_mod_portrait(const Choice& choice) {
+    if (choice.portrait_imageset.empty() || icons_.empty()) return;
+    std::vector<uint8_t> bytes;
+    if (!read_menu_resource(choice.portrait_imageset, group_, bytes)) return;
+    MenuArtSet art;
+    art.set = tl::formats::parse_imageset(bytes.data(), bytes.size());
+    if (!art.set.ok) {
+        TL_LOG_WARN("character creation: %s: %s", choice.portrait_imageset.c_str(),
+                    art.set.error.c_str());
+        return;
+    }
+    try {
+        art.texture = Ogre::TextureManager::getSingleton().load(art.set.image_file, group_);
+        art.material = build_menu_material("tl/create/mod/" + art.set.name, art.texture);
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_WARN("character creation: no portrait for %s: %s", choice.name.c_str(),
+                    e.getDescription().c_str());
+        return;
+    }
+    art.ok = static_cast<bool>(art.material);
+    if (!art.ok) return;
+    portrait_art_.push_back(std::move(art));
+    MenuArtSet* stored = &portrait_art_.back();
+    Widget widget = icons_.back();
+    widget.window = choice.name;
+    widget.normal = choice.portrait[0];
+    widget.hover = choice.portrait[1];
+    widget.selected = choice.portrait[2];
+    widget.normal_art = stored;
+    widget.hover_art = stored;
+    widget.set = &stored->set;
+    widget.texture = stored->texture;
+    widget.panel = make_panel("tl/create/console/mod/" + std::to_string(icons_.size()), widgets_,
+                              stored->material);
+    icons_.push_back(widget);
+}
+
+// A on a mod's class, which the layout has no window for: `GUISELECT1`, as its own
+// `charactercreate.layout` authors it.
+void CharacterCreate::choose_mod_class(const std::string& name) {
+    for (const Choice& choice : choices_) {
+        if (choice.name != name || choice.portrait_imageset.empty()) continue;
+        select(name);
+        TL_LOG_INFO("character creation: class %s (a mod's)", name.c_str());
+    }
+}
+
+// DIVERGENCE: with a mod's class the row holds more than the box's three cells; all of them
+// share the three's width, in the grid's order (the three as the layout places them, then
+// the mods').
+void CharacterCreate::fit_class_row(size_t built_in) {
+    if (icons_.size() <= built_in || built_in == 0) return;
+    std::vector<size_t> order(built_in);
+    for (size_t i = 0; i < built_in; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return icons_[a].off_x < icons_[b].off_x; });
+    for (size_t i = built_in; i < icons_.size(); ++i) order.push_back(i);
+    float left = icons_[0].off_x;
+    float right = left;
+    float top = icons_[0].off_y;
+    float tall = 0.0f;
+    for (size_t i = 0; i < built_in; ++i) {
+        left = std::min(left, icons_[i].off_x);
+        right = std::max(right, icons_[i].off_x + icons_[i].wide);
+        top = std::min(top, icons_[i].off_y);
+        tall = std::max(tall, icons_[i].tall);
+    }
+    const float cell = (right - left) / static_cast<float>(icons_.size());
+    for (size_t at = 0; at < order.size(); ++at) {
+        Widget& icon = icons_[order[at]];
+        icon.off_x = left + cell * static_cast<float>(at);
+        icon.off_y = top + (tall - cell) * 0.5f;
+        icon.wide = cell;
+        icon.tall = cell;
+    }
+}
+
 void CharacterCreate::add_console_frame(const char* window_name, bool item_frame, float dx,
                                         float dy, const std::string& dims_with) {
     const tl::formats::GuiWindow* window = console_.find(window_name);
@@ -564,7 +692,7 @@ bool CharacterCreate::create(const std::string& group, unsigned width, unsigned 
     destroy();
     width_ = width;
     height_ = height;
-    choices_ = std::move(choices);
+    take_choices(group, std::move(choices));
     // Every showing opens on the Destroyer and the dog (`CNewGameMenu::vfunc_7`,
     // sets `L"Destroyer"` and `L"Dog"` each time). The two
     // names and the focus are the screen's own and are kept, as the console
@@ -621,9 +749,8 @@ bool CharacterCreate::create(const std::string& group, unsigned width, unsigned 
             pet_title_ = nullptr;
             // The focus opens where it last was - the Destroyer, on a new
             // screen - through a (0, 0) step (`vfunc_7`).
-            focus_ = tl::core::step_new_game_focus(
-                tl::core::NewGameFocus{}, 0, 0,
-                [this](const std::string& name) { return console_window_visible(name); });
+            focus_ = tl::core::NewGameFocus{};
+            step_focus(0, 0);
             created_ = true;
             layout();
             apply_look();
@@ -774,12 +901,7 @@ void CharacterCreate::build_console_screen() {
     add_console_frame("i_443", true, 0.0f, 0.0f, "EditBox");
     add_console_frame("i_438", true, 0.0f, 0.0f, "EditBoxPet");
 
-    // The three classes, **built in `choices_` order**, which is the order the
-    // rest of this class indexes them in. Each is found by its window name,
-    // which is the class's own.
-    for (const Choice& choice : choices_) {
-        add_console_widget(choice.name.c_str(), icons_, 0.0f, 0.0f);
-    }
+    build_class_row();
 
     // The three pets, each in its own `spells_window` box. The boxes first, so
     // the animals sit inside them.
@@ -818,6 +940,8 @@ void CharacterCreate::build_console_screen() {
 }
 
 void CharacterCreate::destroy() {
+    typing_ = false;
+    tl::core::set_typing(false);
     if (frame_ != nullptr || widgets_ != nullptr || text_overlay_ != nullptr) {
         auto& overlays = Ogre::OverlayManager::getSingleton();
         for (Ogre::Overlay* overlay : {frame_, widgets_, text_overlay_}) {
@@ -865,6 +989,7 @@ void CharacterCreate::destroy() {
     }
     bars_.clear();
     icons_.clear();
+    portrait_art_.clear();
     buttons_.clear();
     console_labels_.clear();
     console_frame_.clear();
@@ -1056,7 +1181,10 @@ bool CharacterCreate::console_window_visible(const std::string& window) const {
 
 MenuAction CharacterCreate::fire_console(const std::string& window_name) {
     const tl::formats::GuiWindow* window = console_.find(window_name);
-    if (window == nullptr) return MenuAction::None;
+    if (window == nullptr) {
+        choose_mod_class(window_name);
+        return MenuAction::None;
+    }
     // `CNewGameMenu::vfunc_12` hands A to the focused
     // window's `onClick`, and `vfunc_9` answers it.
     const tl::core::NewGameCommand command =
@@ -1077,22 +1205,20 @@ MenuAction CharacterCreate::fire_console(const std::string& window_name) {
             // answer is taken as `update` takes it (`new_game_keyboard_name`),
             // and after the pet's `handle_SubmitPet` hands both names on.
             const bool player = command == tl::core::NewGameCommand::EditPlayerName;
-            std::string& name = player ? player_name_ : pet_name_;
-            std::string text = name;
+            std::string text = player ? player_name_ : pet_name_;
             if (tl::core::text_entry(player ? tl::core::kPlayerNameTitle : tl::core::kPetNameTitle,
                                      player ? tl::core::kPlayerNameGuide : tl::core::kPetNameGuide,
                                      text, tl::core::kNewGameNameChars)) {
-                name = tl::core::new_game_keyboard_name(text);
-                TL_LOG_INFO("character creation: %s name '%s'", player ? "player" : "pet",
-                            name.c_str());
-                if (!player) {
-                    const tl::core::NewGameSubmission submitted =
-                        tl::core::new_game_submit_pet(player_name_, pet_name_);
-                    if (submitted.submitted) {
-                        TL_LOG_INFO("character creation: '%s' and '%s' handed on",
-                                    submitted.player_name.c_str(), submitted.pet_name.c_str());
-                    }
-                }
+                take_name(player, text);
+            } else if (tl::core::typing_in_window()) {
+                // DIVERGENCE (platform): no system keyboard to open, so the name is typed
+                // into its own box, from empty; leaving keeps the name it had.
+                typing_ = true;
+                typing_player_ = player;
+                typed_name_.clear();
+                (void)tl::core::take_typed_text();
+                tl::core::set_typing(true);
+                TL_LOG_INFO("character creation: typing the %s name", player ? "player" : "pet");
             }
             return MenuAction::None;
         }
@@ -1104,6 +1230,52 @@ MenuAction CharacterCreate::fire_console(const std::string& window_name) {
     return MenuAction::None;
 }
 
+void CharacterCreate::take_name(bool player, const std::string& text) {
+    std::string& name = player ? player_name_ : pet_name_;
+    name = tl::core::new_game_keyboard_name(text);
+    TL_LOG_INFO("character creation: %s name '%s'", player ? "player" : "pet", name.c_str());
+    if (player) return;
+    const tl::core::NewGameSubmission submitted =
+        tl::core::new_game_submit_pet(player_name_, pet_name_);
+    if (submitted.submitted) {
+        TL_LOG_INFO("character creation: '%s' and '%s' handed on", submitted.player_name.c_str(),
+                    submitted.pet_name.c_str());
+    }
+}
+
+void CharacterCreate::step_typing(bool confirm_edge, bool back_edge) {
+    bool keep = confirm_edge;
+    bool leave = back_edge;
+    const std::string typed = tl::core::take_typed_text();
+    size_t i = 0;
+    while (i < typed.size() && !keep && !leave) {
+        const std::string piece = next_utf8_char(typed, i);
+        if (piece == "\r") {
+            keep = true;
+        } else if (piece == "\x1b") {
+            leave = true;
+        } else if (piece == "\b") {
+            erase_last_utf8_char(typed_name_);
+        } else if (utf8_chars(typed_name_) < tl::core::kNewGameNameChars) {
+            typed_name_ += piece;
+        }
+    }
+    if (!keep && !leave) return;
+    typing_ = false;
+    tl::core::set_typing(false);
+    if (keep) {
+        take_name(typing_player_, typed_name_);
+    } else {
+        TL_LOG_INFO("character creation: typing left, the name as it was");
+    }
+}
+
+std::string CharacterCreate::shown_name(bool player) const {
+    // A box being typed into shows the text so far and a caret.
+    if (typing_ && typing_player_ == player) return typed_name_ + "_";
+    return player ? player_name_ : pet_name_;
+}
+
 void CharacterCreate::apply_look() {
     if (!created_) return;
 
@@ -1112,7 +1284,7 @@ void CharacterCreate::apply_look() {
         // on the focused window's centre,
         // so CEGUI draws that button's `HoverImage`. Nothing marks the class
         // or pet already chosen - the model on the backdrop does that.
-        const std::string focused = tl::core::new_game_window(focus_);
+        const std::string focused = tl::core::new_game_window(grid_, focus_);
         auto look = [&](Widget& widget) {
             if (widget.panel == nullptr || widget.normal_art == nullptr) return;
             const bool lit = widget.window == focused;
@@ -1170,8 +1342,8 @@ void CharacterCreate::apply_look() {
                 for (Ogre::TextAreaOverlayElement* drop : label.drops) drop->setCaption(text);
             }
         };
-        set_caption("EditBox", player_name_);
-        set_caption("EditBoxPet", pet_name_);
+        set_caption("EditBox", shown_name(true));
+        set_caption("EditBoxPet", shown_name(false));
 
         if (selected_ < 0 || static_cast<size_t>(selected_) >= choices_.size()) return;
         const Choice& choice = choices_[static_cast<size_t>(selected_)];
@@ -1227,6 +1399,19 @@ void CharacterCreate::apply_look() {
     description_->setCaption(body);
 }
 
+MenuAction CharacterCreate::update_console(const ConsolePress& press) {
+    // `CNewGameMenu::vfunc_12`: the D-pad and the left
+    // stick move the focus (buttons 1-4 and 0x11-0x14), A fires the focused
+    // window (5), B leaves the screen (6).
+    MenuAction action = MenuAction::None;
+    if (press.dx != 0) step_focus(press.dx, 0);
+    if (press.dy != 0) step_focus(0, press.dy);
+    if (press.confirm) action = fire_console(tl::core::new_game_window(grid_, focus_));
+    if (press.back) action = MenuAction::Quit;
+    apply_look();
+    return action;
+}
+
 MenuAction CharacterCreate::update(const tl::core::InputState& input) {
     if (!created_) return MenuAction::None;
 
@@ -1245,19 +1430,15 @@ MenuAction CharacterCreate::update(const tl::core::InputState& input) {
 
     MenuAction action = MenuAction::None;
 
-    if (console_mode_) {
-        // `CNewGameMenu::vfunc_12`: the D-pad and the left
-        // stick move the focus (buttons 1-4 and 0x11-0x14), A fires the focused
-        // window (5), B leaves the screen (6).
-        const auto visible = [this](const std::string& name) {
-            return console_window_visible(name);
-        };
-        if (turn_edge) focus_ = tl::core::step_new_game_focus(focus_, right ? 1 : -1, 0, visible);
-        if (move_edge) focus_ = tl::core::step_new_game_focus(focus_, 0, down ? 1 : -1, visible);
-        if (confirm_edge) action = fire_console(tl::core::new_game_window(focus_));
-        if (back_edge) action = MenuAction::Quit;
+    if (typing_) {
+        step_typing(confirm_edge, back_edge);
         apply_look();
-        return action;
+        return MenuAction::None;
+    }
+
+    if (console_mode_) {
+        return update_console({turn_edge ? (right ? 1 : -1) : 0, move_edge ? (down ? 1 : -1) : 0,
+                               confirm_edge, back_edge});
     }
 
     // The PC screen, on a pad: up and down walk the classes, left and right

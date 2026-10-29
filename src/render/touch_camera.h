@@ -9,13 +9,11 @@ namespace tl::render {
 
 /// DIVERGENCE (platform): the free camera. The right stick turns the camera about the player
 /// (the heading the left stick walks by turns with it), a pinch zooms on a touch screen, iOS's
-/// right stick tilts it, and R3 puts it back to the console's view. `free_camera` in
-/// config.txt and the Debug menu's FREE CAMERA switch it, on any platform (on by default on iOS
-/// only); off, it changes nothing: the camera is the console's.
+/// right stick tilts it, and R3 puts it back to the console's view. The Free Camera mod
+/// (core/mods.h) switches it, on any platform; off, it changes nothing: the camera is the
+/// console's.
 struct TouchCamera {
     static bool enabled();
-    /// Switch it, and keep the choice in config.txt.
-    static void set_enabled(bool on);
 
     float orbit_input = 0.0f;   ///< this frame's turn, -1..1
     float pitch_input = 0.0f;   ///< this frame's tilt, -1..1

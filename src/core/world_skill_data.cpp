@@ -47,7 +47,10 @@ void World::ensure_player_skill_files() {
             if (bytes.empty()) continue;
             auto entry = std::make_unique<PlayerSkillFile>();
             entry->file = parse_data_group(bytes.data(), bytes.size());
-            if (!entry->file.ok || entry->file.section() != "SKILL") continue;
+            // A mod's skill is read whatever its group is called, as the PC reads every skill
+            // (`CSkillParser::parseSkill`, asks only for its NAME).
+            if (!entry->file.ok || (entry->file.section() != "SKILL" && !mod_has_file(path)))
+                continue;
             const std::string name = tl::core::upper_ascii(entry->file.string_or("NAME", ""));
             if (name.empty() || player_skill_files.count(name) != 0) continue;
             entry->def = tl::core::parse_skill_def(entry->file);

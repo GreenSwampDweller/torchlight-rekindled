@@ -43,6 +43,8 @@ struct GameConfig {
 
     /// Extracted mod roots containing MEDIA/ (or media/). Same-path files override the game.
     std::vector<std::string> mod_data;
+    /// The active mods' names (`CModFileFilter::getEnabledModNames`), as a save records them.
+    std::vector<std::string> mod_names;
 
     /// The install's own files, indexed case-insensitively. Not owned, must outlive the renderer;
     /// null means raw paths. Needed for the music, which is not in the archive and is cased
@@ -110,9 +112,12 @@ struct GameConfig {
     /// Whether the automap/minimap is enabled during gameplay.
     bool minimap = true;
 
-    /// Whether the frame-rate and resolution line starts on (on by default; the debug menu turns
-    /// it off). Headless runs leave it off unless `--fps` asks.
+    /// Whether the frame-rate and resolution line starts on: the FPS Overlay mod's
+    /// (core/mods.h). Headless runs leave it off unless `--fps` asks.
     bool stats_overlay = true;
+    /// Whether `stats_overlay` follows the mod, which the mods page may switch (no `--fps` or
+    /// `--no-fps`, and not headless).
+    bool stats_overlay_from_mods = false;
 
     /// Whether to start with fullscreen automap overlay.
     bool fullscreen_map = false;

@@ -118,46 +118,6 @@ float distance_squared(const Vec3& a, const Vec3& b) {
     return dx * dx + dy * dy + dz * dz;
 }
 
-/// `CLayoutScene::createDescriptors`: the creation order
-/// of a layout's descriptors, which `CDescriptorManager::update` steps. Those
-/// made only on demand (`Particle`, `Align`) follow, in order of first appearance.
-const uint32_t kDescriptorOrder[] = {
-    type::kGroup,
-    type::kMonster,
-    type::kUnitSpawner,
-    type::kLayoutLink,
-    type::kParticleLink,
-    type::kTimelineLink,
-    type::kModel,
-    type::kRoomPiece,
-    type::kSound,
-    type::kMusic,
-    type::kLight,
-    type::kTimeline,
-    type::kLogicGroup,
-    type::kPlayerSphereTrigger,
-    type::kPlayerBoxTrigger,
-    type::kUnitTrigger,
-    type::kCounter,
-    39 /* Random Choice */,
-    type::kWarper,
-    41 /* Teleport */,
-    type::kTimer,
-    43 /* Output Incrementor */,
-    44 /* Camera Shake */,
-    type::kMarker,
-    55 /* Damage Shape */,
-    46 /* Puzzle Input */,
-    type::kCameraController,
-    type::kGameStateController,
-    type::kQuestController,
-    type::kSkillController,
-    type::kPathing,
-    type::kAnimationController,
-    type::kSkipCutscene,
-    56 /* Cinematic */,
-};
-
 }  // namespace
 
 // `CLevel::findCharacterWithinView`, the test
@@ -787,8 +747,11 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
     // set as it is created.
     for (const Object& o : objects_) {
         if (o.type != type::kMonster || o.unit.empty()) continue;
-        make_character(o, o.position, yaw_of(o.forward));
+        const auto preset = preset_creations_.find(o.id);
+        make_character(o, o.position, yaw_of(o.forward),
+                       preset != preset_creations_.end() ? &preset->second : nullptr);
     }
+    preset_creations_.clear();
 
     // `CTimeline::loadTimelineFromDataGroup`: one
     // `CTimelineProperty` per authored property of each existing target, keyed by object id
@@ -906,16 +869,28 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
     build_update_order();
 }
 
-// PORT: the descriptors in their update order (`update_order_`), and those of them a frame
-// steps (`frame_order_`).
+// `CDescriptorManager` (adds, `update` and `CEditorScene::setActivated`
+// walk): a scene's descriptors in the order its load first asked for each - the game
+// never runs `CLayout::createDescriptors` (skips it once the game's flag is set) -
+// each one's objects in the order made. The made order is `set_made_order`'s, else the file's.
 void LevelScript::build_update_order() {
-    std::vector<uint32_t> order(std::begin(kDescriptorOrder), std::end(kDescriptorOrder));
+    std::vector<const Object*> made;
+    made.reserve(objects_.size());
+    std::set<int64_t> placed;
+    for (int64_t id : made_order_) {
+        const Object* o = find(id);
+        if (o != nullptr && placed.insert(id).second) made.push_back(o);
+    }
     for (const Object& o : objects_) {
-        if (std::find(order.begin(), order.end(), o.type) == order.end()) order.push_back(o.type);
+        if (placed.insert(o.id).second) made.push_back(&o);
+    }
+    std::vector<uint32_t> order;
+    for (const Object* o : made) {
+        if (std::find(order.begin(), order.end(), o->type) == order.end()) order.push_back(o->type);
     }
     for (uint32_t t : order) {
-        for (const Object& o : objects_) {
-            if (o.type == t) update_order_.push_back(o.id);
+        for (const Object* o : made) {
+            if (o->type == t) update_order_.push_back(o->id);
         }
     }
     for (int64_t id : update_order_) {
@@ -4365,25 +4340,35 @@ void LevelScript::level_deactivated(QuestState& quests, std::vector<ScriptEvent>
     }
 }
 
+// `CUnitSpawnerDescriptor::descriptorSceneActivated`: the
+// spawner works out its total; `SPAWN ON CREATE` releases at once, but with a remembered state
+// (`CLevel+600`) only a `Particle` or `Missiles` spawner does.
+void LevelScript::activate_spawner(Object& o, std::vector<ScriptEvent>& out) {
+    if (!o.spawner) return;
+    o.spawner->create_units_in_memory();
+    const UnitSpawnerSpec& spec = o.spawner->spec();
+    if (!spec.spawn_on_create) return;
+    if (has_saved_state_ && spec.group != "Particle" && spec.group != "Missiles") return;
+    spawner_input(o, kSpawnUnits, out);
+}
+
+// `CMonsterDescriptor::descriptorSceneActivated`: the character
+// to `CLevel::addCharacter`, which drops it, then an authored `PATH` is handed over by
+// name (`CCharacter::setPathToFollowByName`), no AI state change;
+// `CMonster::idleAI` walks it.
+void LevelScript::activate_monster(Object& o, std::vector<ScriptEvent>& out) {
+    const int64_t id = o.id;
+    drop_character_to_ground(o, out);
+    if (Object* again = find(id); again != nullptr && !again->path_name.empty())
+        set_path_to_follow_by_name(*again);
+}
+
 void LevelScript::level_activated(QuestState& quests, std::vector<ScriptEvent>& out) {
     // `CEditorScene::setActivated` runs once per scene.
     if (activated_) return;
     activated_ = true;
-    // `CUnitSpawnerDescriptor::descriptorSceneActivated`:
-    // every spawner works out its total; `SPAWN ON CREATE` releases at once, but with a
-    // remembered state (`CLevel+600`) only a `Particle` or `Missiles` spawner does.
-    for (Object& o : objects_) {
-        if (o.type != type::kUnitSpawner || !o.spawner) continue;
-        o.spawner->create_units_in_memory();
-        const UnitSpawnerSpec& spec = o.spawner->spec();
-        if (!spec.spawn_on_create) continue;
-        if (has_saved_state_ && spec.group != "Particle" && spec.group != "Missiles") continue;
-        spawner_input(o, kSpawnUnits, out);
-    }
-
     // `CEditorScene::setActivated` runs each
-    // descriptor's scene activation in descriptor order, `Logic Group`'s last
-    // of those that do anything here.
+    // descriptor's scene activation in the scene's descriptor order (`build_update_order`).
     for (int64_t id : update_order_) {
         Object* o = find(id);
         if (o == nullptr) continue;
@@ -4392,14 +4377,20 @@ void LevelScript::level_activated(QuestState& quests, std::vector<ScriptEvent>& 
                 // `CTimelineDescriptor::descriptorSceneActivated`
                 o->tl_playing = o->tl_start_on_load;
                 break;
+            case type::kUnitSpawner: activate_spawner(*o, out); break;
+            case type::kLayoutLink:
+                // `CLayoutDescriptor::descriptorSceneActivated`: the linked
+                // layout's `setActivated(true)` (vtable +0x108) before the later descriptors.
+                if (link_activation_) link_activation_(id, out);
+                break;
             case type::kSound:
                 // The `Sound` descriptor's: a node that
                 // starts on activation shown, enabled - which plays it - and
                 // played.
                 resolve_sound_slot(*o);
                 o->sound.at = o->position;
-                sound_object_scene_activated(o->sound, player_at_, sound_host_, volatile_random(),
-                                             sound_output(*o, quests, out));
+                sound_object_scene_activated(o->sound, activation_listener_, sound_host_,
+                                             volatile_random(), sound_output(*o, quests, out));
                 break;
             case type::kGroup:
                 // `CRandomGroupDescriptor::descriptorSceneActivated`:
@@ -4450,12 +4441,7 @@ void LevelScript::level_activated(QuestState& quests, std::vector<ScriptEvent>& 
                 //
                 if (o->anim_start_on_load) animation_play(*o, true, quests, out);
                 break;
-            case type::kMonster:
-                // `CMonsterDescriptor::descriptorSceneActivated`:
-                // an authored `PATH` is handed over by name (`CCharacter::setPathToFollowByName`),
-                // no AI state change; `CMonster::idleAI` walks it.
-                if (!o->path_name.empty()) set_path_to_follow_by_name(*o);
-                break;
+            case type::kMonster: activate_monster(*o, out); break;
             case type::kQuestController:
                 // `CQuestControllerDescriptor::descriptorSceneActivated`
                 // -> `CQuestController::initQuestController`: only for a
@@ -5312,36 +5298,39 @@ bool LevelScript::send_damage_shape_input(int64_t id, uint32_t in, QuestState& q
 // `CCharacter::dropToGround (4.0, false, level)`.
 // (`CMonster::updateAI`: every monster is a character with an AI.)
 void LevelScript::drop_characters_to_ground(std::vector<ScriptEvent>& out) {
-    if (collision_ == nullptr || collision_->empty()) return;
     for (Object& o : objects_) {
-        if (o.type != type::kMonster) continue;
-        Character* c = character(o.id);
-        if (c == nullptr || dead_.count(o.id) != 0) continue;
-        const bool was = c->on_grid;
-        avoidance_remove(*c);
-        drop_to_ground_open(*collision_, c->motion, 4.0f, [this](const Vec3& at, float radius) {
-            return random_open_position(
-                at, 0.0f, radius,
-                [this](const Vec3& p) {
-                    return passability_ == nullptr || !passability_->ready() ||
-                           (passability_->map_passable(p) && passability_->position_passable(p));
-                },
-                volatile_random());
-        });
-        if (was) avoidance_add(*c);
-        const Vec3 at = feet_of(*c);
-        o.position = at;
-        if (std::fabs(at.x - c->sent_at.x) > 1e-5f || std::fabs(at.y - c->sent_at.y) > 1e-5f ||
-            std::fabs(at.z - c->sent_at.z) > 1e-5f) {
-            c->sent_at = at;
-            ScriptEvent e;
-            e.action = ScriptAction::MoveUnit;
-            e.node_id = o.id;
-            e.unit = o.unit;
-            e.position = at;
-            e.facing = c->facing;
-            out.push_back(e);
-        }
+        if (o.type == type::kMonster) drop_character_to_ground(o, out);
+    }
+}
+
+void LevelScript::drop_character_to_ground(Object& o, std::vector<ScriptEvent>& out) {
+    if (collision_ == nullptr || collision_->empty()) return;
+    Character* c = character(o.id);
+    if (c == nullptr || dead_.count(o.id) != 0) return;
+    const bool was = c->on_grid;
+    avoidance_remove(*c);
+    drop_to_ground_open(*collision_, c->motion, 4.0f, [this](const Vec3& at, float radius) {
+        return random_open_position(
+            at, 0.0f, radius,
+            [this](const Vec3& p) {
+                return passability_ == nullptr || !passability_->ready() ||
+                       (passability_->map_passable(p) && passability_->position_passable(p));
+            },
+            volatile_random());
+    });
+    if (was) avoidance_add(*c);
+    const Vec3 at = feet_of(*c);
+    o.position = at;
+    if (std::fabs(at.x - c->sent_at.x) > 1e-5f || std::fabs(at.y - c->sent_at.y) > 1e-5f ||
+        std::fabs(at.z - c->sent_at.z) > 1e-5f) {
+        c->sent_at = at;
+        ScriptEvent e;
+        e.action = ScriptAction::MoveUnit;
+        e.node_id = o.id;
+        e.unit = o.unit;
+        e.position = at;
+        e.facing = c->facing;
+        out.push_back(e);
     }
 }
 

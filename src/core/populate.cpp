@@ -1,5 +1,7 @@
 #include "core/populate.h"
 
+#include "core/log.h"
+
 #include <cmath>
 
 namespace tl::core {
@@ -141,6 +143,7 @@ int populate_phase(const std::vector<PopulateSection>& sections, Randomizer& sec
     int empty_run = 0;
     do {
         const uint32_t index = static_cast<uint32_t>(sections_pick.get_random(g_rand));
+        TL_LOG_DEBUG("  populate: section %u of %zu", index, sections.size());
         int made = populate_section_of_level(section_at(sections, index), spawn_class, champion,
                                              use_markers, world);
         placed += made;

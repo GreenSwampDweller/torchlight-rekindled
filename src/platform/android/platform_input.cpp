@@ -7,16 +7,22 @@
 #include "core/input.h"
 
 #include "core/gamepad.h"
+#include "core/log.h"
+#include "core/platform.h"
 #include "core/touch_pad.h"
 #include "platform/android/android_glue.h"
 
 #include <android/input.h>
 #include <android/keycodes.h>
+#include <android_native_app_glue.h>
+#include <jni.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <thread>
 
 namespace tl::core {
 
@@ -226,7 +232,7 @@ InputState poll_platform_input() {
     filter_stick(rx, ry, kRightStickDeadzone);
     in.zoom = static_cast<float>(ry) / kStickMax;
     in.look_x = static_cast<float>(rx) / kStickMax;
-    // DIVERGENCE (platform): a pinch zooms, under the Debug menu's FREE CAMERA (render/touch_camera.h).
+    // DIVERGENCE (platform): a pinch zooms, under the Free Camera mod (render/touch_camera.h).
     in.zoom_delta = touch.pinch_dolly;
 
     in.confirm = (b & kA) != 0;
@@ -262,14 +268,80 @@ InputState poll_platform_input() {
     return in;
 }
 
-// No system keyboard yet; a pad script can still answer (`text=`).
-bool text_entry(const std::string& /*title*/, const std::string& /*guide*/, std::string& text,
+namespace {
+
+/// The activity's method `name` with the JNI signature `signature`, or null (an exception cleared).
+jmethodID activity_method(JNIEnv* env, jobject activity, const char* name, const char* signature) {
+    jclass type = env->GetObjectClass(activity);
+    jmethodID method = env->GetMethodID(type, name, signature);
+    env->DeleteLocalRef(type);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return method;
+}
+
+}  // namespace
+
+// `XamShowKeyboardUI`'s counterpart: the system keyboard in a dialog with the
+// console's title and guide line, capped at `max_chars` (GameActivity.startTextEntry). Blocks
+// until it closes, as on the 360, with the activity's events pumped meanwhile.
+bool text_entry(const std::string& title, const std::string& guide, std::string& text,
                 unsigned max_chars) {
     std::string scripted;
-    if (!take_scripted_text(scripted)) return false;
-    if (scripted.size() > max_chars) scripted.resize(max_chars);
-    text = scripted;
-    return true;
+    if (take_scripted_text(scripted)) {
+        if (scripted.size() > max_chars) scripted.resize(max_chars);
+        text = scripted;
+        return true;
+    }
+    android_app* glue = android::app();
+    if (glue == nullptr || glue->activity == nullptr) return false;
+    JavaVM* vm = glue->activity->vm;
+    jobject activity = glue->activity->clazz;
+    JNIEnv* env = nullptr;
+    // A thread already attached stays attached after.
+    const bool attached = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK;
+    if (!attached && vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+    const jmethodID start =
+        activity_method(env, activity, "startTextEntry",
+                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
+    const jmethodID state = activity_method(env, activity, "textEntryState", "()I");
+    const jmethodID typed = activity_method(env, activity, "textEntryText", "()[B");
+    int answer = 2;
+    if (start != nullptr && state != nullptr && typed != nullptr) {
+        jstring j_title = env->NewStringUTF(title.c_str());
+        jstring j_guide = env->NewStringUTF(guide.c_str());
+        jstring j_text = env->NewStringUTF(text.c_str());
+        env->CallVoidMethod(activity, start, j_title, j_guide, j_text,
+                            static_cast<jint>(max_chars));
+        env->DeleteLocalRef(j_title);
+        env->DeleteLocalRef(j_guide);
+        env->DeleteLocalRef(j_text);
+        answer = env->ExceptionCheck() ? 2 : 0;
+        if (answer != 0) env->ExceptionClear();
+        while (answer == 0 && should_keep_running()) {
+            pump_events();
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            answer = env->CallIntMethod(activity, state);
+        }
+        if (answer == 1) {
+            auto* bytes = static_cast<jbyteArray>(env->CallObjectMethod(activity, typed));
+            if (bytes != nullptr) {
+                const jsize length = env->GetArrayLength(bytes);
+                std::string answered(static_cast<size_t>(length), '\0');
+                env->GetByteArrayRegion(bytes, 0, length,
+                                        reinterpret_cast<jbyte*>(answered.data()));
+                env->DeleteLocalRef(bytes);
+                text = answered;
+            }
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+    if (!attached) vm->DetachCurrentThread();
+    if (answer == 1) TL_LOG_INFO("keyboard: '%s'", text.c_str());
+    return answer == 1;
 }
+
+// The keyboard is the system's (text_entry); nothing is typed into the window.
+bool typing_in_window() { return false; }
+std::string take_platform_typed_text() { return {}; }
 
 }  // namespace tl::core

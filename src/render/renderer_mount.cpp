@@ -64,6 +64,7 @@ void mount_mod_data(Ogre::ResourceGroupManager& groups, const std::vector<std::s
         groups.addResourceLocation(mod, "FileSystem", kGameGroup, true);
     }
     renderer_detail::set_mod_roots(mod_data);
+    set_mod_imagesets(renderer_detail::mod_paths_under("media/ui/", ".imageset"));
 }
 
 // OGRE's `Main/`: beside RTShaderLib in OGRE's own tree, inside it in a device's
@@ -121,6 +122,7 @@ bool Renderer::Impl::mount_resources() {
     // Mods first: OGRE's first-location-wins resource index lets their files
     // override the archive's.
     mount_mod_data(groups, config.mod_data);
+    read_mod_copies = renderer_detail::read_mod_copies;
 
     const std::string pak = game_pak(config);
     if (!config.pak.empty() && !is_file(pak)) {

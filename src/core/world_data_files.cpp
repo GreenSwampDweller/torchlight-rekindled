@@ -27,6 +27,12 @@ tl::formats::AdmFile World::parse_data_group(const uint8_t* data, size_t size) {
 std::string World::resolve_unit_link(const std::string& wanted, const std::string& first_root,
                                      bool is_first) const {
     std::string resolved;
+    // A mod's file stands in front of the archive's, `xbox/` copy included
+    // (`CModFileFilter::getFilePath`, asked before the pak).
+    for (const char* extension : {"", ".adm", ".dat"}) {
+        if (!is_first && extension[0] == '\0') continue;
+        if (mod_has_file(wanted + extension)) return resolve_archive_path(wanted + extension);
+    }
     if (is_first && first_root.empty() && wanted.size() > 4 &&
         wanted.compare(wanted.size() - 4, 4, ".dat") == 0) {
         resolved = resolve_archive_path(wanted);

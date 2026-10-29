@@ -3,16 +3,14 @@
 
 #include "core/gamepad.h"
 #include "core/log.h"
-#include "core/run_config.h"
+#include "core/mods.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace tl::render {
 
-bool TouchCamera::enabled() { return tl::core::run_config().free_camera; }
-
-void TouchCamera::set_enabled(bool on) { (void)tl::core::save_run_config_value("free_camera", on); }
+bool TouchCamera::enabled() { return tl::core::free_camera_mod_on(); }
 
 void TouchCamera::take(const tl::core::InputState& in, bool blocked) {
     const bool on = enabled() && !blocked;

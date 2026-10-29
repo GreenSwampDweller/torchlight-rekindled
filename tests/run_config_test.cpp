@@ -14,7 +14,8 @@ TL_TEST(a_new_config_file_reads_back_as_its_defaults) {
     const RunConfig read = parse_run_config(run_config_text(defaults), RunConfig{true, true, true});
     TL_CHECK(!read.debug);
     TL_CHECK(!read.logs);
-    TL_CHECK(!read.fps);
+    // Not written: the frame-rate overlay is a mod now.
+    TL_CHECK(run_config_text(defaults).find("fps=") == std::string::npos);
 }
 
 TL_TEST(config_values_ignore_case_spaces_and_comments) {
@@ -85,12 +86,25 @@ TL_TEST(the_frame_limit_is_in_every_file_and_reads_as_a_number) {
     TL_CHECK_EQ(parse_run_config("fps_limit=99999\n", phone).fps_limit, 60u);
 }
 
-TL_TEST(the_free_camera_is_in_every_file_and_a_file_from_before_keeps_the_default) {
+/// The mods page's switch: written where the page is shown, on unless the file says 0.
+TL_TEST(the_mods_menu_line_reads_back) {
+    RunConfig off;
+    off.mods_menu = false;
+    const std::string text = run_config_text(off);
+    TL_CHECK((text.find("mods_menu=0") != std::string::npos) == tl::core::kModsPage);
+    TL_CHECK(parse_run_config("debug=1\n", RunConfig{}).mods_menu);
+    TL_CHECK(!parse_run_config("mods_menu=0\n", RunConfig{}).mods_menu);
+    TL_CHECK(parse_run_config("mods_menu = 1\n", off).mods_menu);
+}
+
+/// The free camera is a mod now: a new file has no line for it, and one from before is still read
+/// (it says whether the mod starts on).
+TL_TEST(the_free_camera_line_is_read_not_written) {
     RunConfig on;
     on.free_camera = true;
     const std::string text = run_config_text(on);
-    TL_CHECK(text.find("free_camera=1") != std::string::npos);
-    TL_CHECK(parse_run_config(text, RunConfig{}).free_camera);
+    TL_CHECK(text.find("free_camera") == std::string::npos);
+    TL_CHECK(parse_run_config("free_camera=1\n", RunConfig{}).free_camera);
     TL_CHECK(!parse_run_config("free_camera=0\n", on).free_camera);
     // A file from before the key keeps the platform's default.
     TL_CHECK(parse_run_config("debug=1\n", on).free_camera);

@@ -119,6 +119,26 @@ void Renderer::Impl::pick_up_targeted_item() {
     refresh_game_hud();
 }
 
+// `../music/town.ogg` is relative to `media/`, so the leading `../` steps out of the archive and
+// into the install directory: a mod's own `music/` first (`CModFileFilter::getFilePath`,
+// keys a mod's files by their path in its folder), then the game folder's, through
+// the case-insensitive index (the data's music names are cased unlike the files).
+namespace {
+std::string music_file(const RendererConfig& config, const std::string& relative) {
+    std::string tail = relative;
+    while (tail.compare(0, 3, "../") == 0) tail.erase(0, 3);
+    std::string from_mod = renderer_detail::mod_file_path(tail);
+    if (!from_mod.empty()) return from_mod;
+    if (config.assets != nullptr) {
+        const std::string real = config.assets->resolve(tail);
+        if (!real.empty()) tail = real;
+    }
+    std::string full = config.game_data;
+    if (!full.empty() && full.back() != '/' && full.back() != '\\') full += '/';
+    return full + tail;
+}
+}  // namespace
+
 // What a `Music` node's CMusicObject (core/music_object.h) reaches: CSoundManager's music
 // channel and the level's `MUSIC`.
 tl::core::MusicHost Renderer::Impl::music_host(int64_t node) {
@@ -144,15 +164,7 @@ tl::core::MusicHost Renderer::Impl::music_host(int64_t node) {
             return 0.0f;
         }
         if (loops) return 0.0f;
-        std::string tail = relative;
-        while (tail.compare(0, 3, "../") == 0) tail.erase(0, 3);
-        if (config.assets != nullptr) {
-            const std::string real = config.assets->resolve(tail);
-            if (!real.empty()) tail = real;
-        }
-        std::string full = config.game_data;
-        if (!full.empty() && full.back() != '/' && full.back() != '\\') full += '/';
-        const std::vector<uint8_t> bytes = read_file(full + tail);
+        const std::vector<uint8_t> bytes = read_file(music_file(config, relative));
         return bytes.empty() ? 0.0f : tl::formats::ogg_duration(bytes.data(), bytes.size());
     };
     host.stop = [this]() { play_music(std::string(), false, ""); };
@@ -180,20 +192,7 @@ bool Renderer::Impl::play_music(const std::string& relative, bool loop, const ch
         return true;
     }
 
-    // `../music/town.ogg` is relative to `media/`, so the leading `../` steps
-    // out of the archive and into the install directory.
-    std::string tail = relative;
-    while (tail.compare(0, 3, "../") == 0) tail.erase(0, 3);
-
-    // Through the case-insensitive index: the data's music names are cased unlike the files.
-    if (config.assets != nullptr) {
-        const std::string real = config.assets->resolve(tail);
-        if (!real.empty()) tail = real;
-    }
-
-    std::string full = config.game_data;
-    if (!full.empty() && full.back() != '/' && full.back() != '\\') full += '/';
-    full += tail;
+    const std::string full = music_file(config, relative);
 
     if (silent) {
         // A track present counts as playing (getMusicFilePlaying), so a Music node runs its
@@ -620,8 +619,9 @@ bool Renderer::Impl::play_sound_2d(const std::string& name, const char* label) {
     if (definition->play_chance >= 0 && definition->play_chance <= rolls.integer_between(1, 100)) {
         return false;
     }
-    const std::string& file = definition->files[static_cast<size_t>(
-        rolls.integer_between(0, static_cast<int>(definition->files.size()) - 1))];
+    const std::vector<size_t> kept = tl::core::bank_recordings(*definition);
+    const std::string& file = definition->files[kept[static_cast<size_t>(
+        rolls.integer_between(0, static_cast<int>(kept.size()) - 1))]];
     if (!(definition->volume > 0.0f)) return false;
     const float gain =
         std::min(1.0f, definition->volume + rolls.between(0.0f, definition->volume_variation));

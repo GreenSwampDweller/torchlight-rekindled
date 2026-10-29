@@ -101,6 +101,28 @@ Vec3 snap_item_to_ground(const Vec3& at, const GroundRay& ray,
     return Vec3{tried.x, at.y, tried.z};
 }
 
+Vec3 drop_character_to_ground(const Vec3& at, float max_reach, const GroundRay& ray,
+                              const std::function<bool(const Vec3&)>& open, RunicRandom& rng) {
+    // `CCharacter::dropToGround`: the open-point search draws
+    // no no-spawn test (`randomOpenPosition`'s last argument 0); after thirty misses the point is
+    // left at 100, kept.
+    Vec3 tried = at;
+    float reach = 0.1f;
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        Vec3 hit;
+        uint32_t material = 0;
+        if (ray &&
+            ray(Vec3{tried.x, 100.0f, tried.z}, Vec3{tried.x, -100.0f, tried.z}, hit, material) &&
+            material != 100) {
+            return hit;
+        }
+        tried = random_open_position(Vec3{tried.x, 100.0f, tried.z}, 0.0f, reach, open, rng);
+        const float grown = reach + 0.1f;
+        reach = max_reach < grown ? max_reach : grown;
+    }
+    return Vec3{tried.x, 100.0f, tried.z};
+}
+
 // `CEquipment::drop`'s three `CPath::AddPoint` calls.
 DropArc make_drop_arc(const Vec3& from, const Vec3& to, RunicRandom& rng) {
     Vec3 middle;

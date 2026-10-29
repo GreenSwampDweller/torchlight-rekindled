@@ -867,7 +867,7 @@ TL_TEST(unit_counts_scale_the_density_by_pathable_area) {
         RunicRandom rng(seed);
         RunicRandom expected(seed);
         const int64_t n = tl::core::units_to_create(t, 0, cells, rng);
-        const float area = static_cast<float>(cells) / 6.5f;
+        const float area = static_cast<float>(cells) * 0.15384616f;
         const float wanted = expected.between(0.01f * area, 0.0125f * area);
         int64_t whole = static_cast<int64_t>(wanted);
         if (static_cast<float>(whole) < wanted) ++whole;

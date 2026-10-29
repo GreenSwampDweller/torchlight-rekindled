@@ -473,9 +473,11 @@ void World::update_unit_effects(float dt) {
                 machine->heal_unit(node, change);
             } else if (change < 0.0f) {
                 // `modifyHP` alone: no reaction.
+                machine->set_defer_death_sample(true);
                 const bool killed = machine->damage_unit(
                     node, -change, tl::core::LevelScript::kNoAttacker, quest_log.state(), events,
                     nullptr, nullptr, false, /*shown=*/false);
+                machine->set_defer_death_sample(false);
                 if (NodeMap* nodes = view.nodes; nodes != nullptr && !events.empty()) {
                     apply_script_events(events, *nodes);
                 }

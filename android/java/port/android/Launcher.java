@@ -16,10 +16,13 @@
 // Last, before the game starts, its settings: on sliders, the resolution it
 // renders at, as a share of the screen's (the system scales the smaller frame
 // up to the screen, its proportions kept), which the engine cannot change once
-// running and reads from `render_scale.txt`, a percentage, and the frame limit;
-// on switches, the frame-rate overlay and the free camera. Those three are lines
-// of the game folder's `config.txt` (`fps_limit`, `fps`, `free_camera`), which the
-// game reads and keeps too.
+// running and reads from `render_scale.txt`, a percentage, and the frame limit,
+// a line of the game folder's `config.txt` (`fps_limit`), which the game reads
+// and keeps too. The frame-rate overlay is a mod, switched on the mods page.
+//
+// Under them, a "Mod menu" switch: `config.txt`'s `mods_menu`. On, the game opens on its own
+// mods page (the engine's, as on the Switch and the desktop), where each mod in the game
+// folder's `mods/` is switched; off, it skips that page and starts without any mods.
 package port.android;
 
 import android.app.Activity;
@@ -33,7 +36,6 @@ import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
-import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.Switch;
@@ -115,7 +117,7 @@ public final class Launcher extends Activity {
             askAboutMusic(folder);
             return;
         }
-        askForResolution(folder);
+        askForSettings(folder);
     }
 
     /** The screen's size in landscape, which is how the game is played. */
@@ -189,13 +191,12 @@ public final class Launcher extends Activity {
         return toggle;
     }
 
-    private void askForResolution(String folder) {
+    /** The last question: the settings, the mods page's switch among them. */
+    private void askForSettings(String folder) {
         waiting = true;
         int[] screen = screenSize();
         int chosen = Math.max(MIN_SCALE, Math.min(100, prefs().getInt(KEY_SCALE, 100)));
         int limit = readConfig(folder, "fps_limit", DEFAULT_LIMIT);
-        boolean fps = readConfig(folder, "fps", 0) != 0;
-        boolean freeCamera = readConfig(folder, "free_camera", 0) != 0;
         int limitAt = 0;
         for (int i = 1; i < LIMITS.length - 1; ++i) {
             if (Math.abs(LIMITS[i] - limit) < Math.abs(LIMITS[limitAt] - limit)) limitAt = i;
@@ -210,11 +211,11 @@ public final class Launcher extends Activity {
                 p -> scaleText(screen, MIN_SCALE + p * SCALE_STEP), () -> {});
         SeekBar frames = slider(box, LIMITS.length - 1, limitAt, p -> limitText(LIMITS[p]),
                 () -> limitMoved[0] = true);
-        Switch overlay = toggle(box, "Frame-rate overlay", fps);
-        Switch camera = toggle(box, "Free camera", freeCamera);
+        boolean modMenu = readConfig(folder, "mods_menu", 1) != 0;
+        Switch mods = toggle(box, "Mod menu", modMenu);
 
         new AlertDialog.Builder(this)
-                .setTitle("Settings")
+                .setTitle("Torchlight")
                 .setView(box)
                 .setCancelable(false)
                 .setPositiveButton("Play", (d, w) -> {
@@ -223,13 +224,9 @@ public final class Launcher extends Activity {
                         writeConfig(folder, "fps_limit", LIMITS[frames.getProgress()], DEFAULT_LIMIT,
                                 "the most frames a second the game draws; 0 for no limit.");
                     }
-                    if (overlay.isChecked() != fps) {
-                        writeConfig(folder, "fps", overlay.isChecked() ? 1 : 0, 0,
-                                "the frame-rate overlay; L3 switches it in the game, and it is kept here.");
-                    }
-                    if (camera.isChecked() != freeCamera) {
-                        writeConfig(folder, "free_camera", camera.isChecked() ? 1 : 0, 0,
-                                "the right stick turns the camera and R3 resets it; a pinch zooms.");
+                    if (mods.isChecked() != modMenu) {
+                        writeConfig(folder, "mods_menu", mods.isChecked() ? 1 : 0, 1,
+                                "1 shows the mods page before the game; 0 skips it and starts without any mods.");
                     }
                     waiting = false;
                     start(folder);

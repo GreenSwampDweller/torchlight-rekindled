@@ -121,12 +121,16 @@ void Renderer::Impl::player_shoot_tracer(const tl::core::Vec3& from, const tl::c
 // PORT: drawing, the player's hands' trails off.
 void Renderer::Impl::player_hide_hand_trails() { player_trails.trails.hide_hands(); }
 
-// PORT: drawing, a placed unit's fall (`Die`, else `Die1`); hidden when it has neither.
-bool Renderer::Impl::view_unit_falls(int64_t node) {
+// PORT: drawing, a placed unit's fall in the animation its death chose; hidden without one.
+bool Renderer::Impl::view_unit_falls(int64_t node, const std::string& animation) {
     bool fell = false;
     for (auto& entry : scene_units) {
         if (entry.second.node != node) continue;
-        for (const char* stem : {"Die", "Die1"}) {
+        // INVENTED: with no machine's choice, `Die`, then `Die1`.
+        const std::vector<std::string> stems = animation.empty()
+                                                   ? std::vector<std::string>{"Die", "Die1"}
+                                                   : std::vector<std::string>{animation};
+        for (const std::string& stem : stems) {
             Ogre::AnimationState* started = nullptr;
             if (!play_scene_animation(entry.second.entity, entry.second.mesh, stem,
                                       /*loops=*/false, entry.second.rate,

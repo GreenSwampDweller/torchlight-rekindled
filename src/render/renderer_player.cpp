@@ -2100,18 +2100,14 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 bool fell = false;
                 for (auto it = scene_units.begin(); it != scene_units.end(); ++it) {
                     if (it->second.node != event.node_id) continue;
-                    // `CCharacter::die`:
-                    // sample 0xc, `DEATH_SOUND`, of the unit's own bank at its
-                    // node - every character, not only the player.
+                    // `CCharacter::die`: the
+                    // death particle (PARTICLE_DEATH or its censored twin) for a death the
+                    // level script deals. Its `DEATH_SOUND` is the machine's `UnitSample`.
                     if (it->second.entity != nullptr) {
                         if (const Ogre::SceneNode* at = it->second.entity->getParentSceneNode()) {
-                            // before the sound: the death particle (PARTICLE_DEATH
-                            // or its censored twin) for a death the level script deals.
                             play_death_particle(stats_for_unit(it->first),
                                                 at->_getDerivedPosition(),
                                                 character_ref(event.node_id));
-                            play_sound(stats_for_unit(it->first).sounds[tl::core::SoundSlot::Death],
-                                       at->_getDerivedPosition());
                         }
                     }
                     // The burst or the flight, which take the death from the

@@ -3,6 +3,7 @@
 #include "core/platform.h"
 
 #include "core/log.h"
+#include "platform/desktop/typed_keys.h"
 
 #include <cstdio>
 #include <thread>
@@ -82,6 +83,7 @@ void pump_events() {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
+        if (msg.message == WM_CHAR) note_typed_unit(static_cast<unsigned>(msg.wParam));
         DispatchMessageW(&msg);
     }
 #endif

@@ -484,6 +484,12 @@ struct PlayerClass {
 
     /// The `logo.imageset` icon name (with `lit` and `selected` twins).
     std::string icon;
+
+    /// A mod's class: the imageset its portrait is in and the radio button's three images
+    /// (`UnselectedImage`, `HoverImage`, `SelectedImage`) from the window its mod's
+    /// `charactercreate.layout` names after it. Empty for the game's own classes.
+    std::string portrait_imageset;
+    std::string portrait[3];
 };
 
 /// A `CItemGold`'s own figures (`CItemGold::CItemGold`).

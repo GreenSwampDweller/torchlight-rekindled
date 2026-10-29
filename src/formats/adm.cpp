@@ -1,6 +1,7 @@
 #include "formats/adm.h"
 
 #include "formats/byte_reader.h"
+#include "formats/dat_text.h"
 #include "formats/float_convert.h"
 
 #include <algorithm>
@@ -137,20 +138,23 @@ void AdmSection::visit(const std::function<void(const AdmSection&)>& fn) const {
     for (const AdmSection& child : children) child.visit(fn);
 }
 
+namespace {
+// Not a compiled file: `CDataGroup::LoadFile` reads the text form too (a mod's files are text).
+AdmFile not_compiled(const uint8_t* data, size_t size, uint32_t version) {
+    if (looks_like_dat_text(data, size)) return parse_dat_text(data, size);
+    AdmFile file;
+    file.error =
+        size < 8 ? "too small to be a .adm" : "unexpected .adm version " + std::to_string(version);
+    return file;
+}
+}  // namespace
+
 AdmFile parse_adm(const uint8_t* data, size_t size) {
     AdmFile file;
 
-    if (size < 8) {
-        file.error = "too small to be a .adm";
-        return file;
-    }
-
     const uint32_t version = u32_at(data, size, 0);
     const uint32_t table_entries = u32_at(data, size, 4);
-    if (version != 1) {
-        file.error = "unexpected .adm version " + std::to_string(version);
-        return file;
-    }
+    if (version != 1 || size < 8) return not_compiled(data, size, version);
     if (table_entries > kMaxTableEntries) {
         file.error = "implausible string table size";
         return file;

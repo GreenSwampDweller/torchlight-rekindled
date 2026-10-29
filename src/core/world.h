@@ -48,6 +48,12 @@ public:
     virtual tl::core::DungeonManager& loaded_dungeon_manager() const = 0;
     virtual std::vector<uint8_t> read_resource(const std::string& path) const = 0;
     virtual std::string resolve_archive_path(const std::string& reference) const = 0;
+    /// Every mod's own copy of `path` (or, for a compiled name, of its text source), in the mods'
+    /// order: what one mod's file would hide. Set by the renderer once the mods are mounted.
+    std::function<std::vector<std::vector<uint8_t>>(const std::string&)> read_mod_copies;
+    bool mod_has_file(const std::string& path) const {
+        return read_mod_copies && !read_mod_copies(path).empty();
+    }
 
     // PORT: the renderer's scene nodes, read and moved for the game (core/view_handles.h).
     virtual ogre::Vector3 view_position(const Ogre::SceneNode* node) const = 0;
@@ -75,7 +81,8 @@ public:
     virtual float view_animation_length(Ogre::Entity* entity, const std::string& name) const = 0;
     virtual void view_cast_shadows(Ogre::Entity* entity, bool on) = 0;
     virtual bool view_ready() const = 0;
-    virtual bool view_unit_falls(int64_t node) = 0;
+    /// `animation`: the `DIE` animation the death chose, empty when the machine has none.
+    virtual bool view_unit_falls(int64_t node, const std::string& animation) = 0;
     virtual Ogre::Entity* create_item_entity(const tl::core::ItemStats& item) = 0;
     virtual void draw_item_presence(Ogre::SceneNode* node, const tl::core::ItemPresence& p,
                                     const tl::core::ItemPresenceChange& change) = 0;
@@ -242,6 +249,9 @@ public:
                                             LinkParticleSettle what) = 0;
     virtual bool view_caching_particles() const = 0;
     virtual unsigned long view_milliseconds() const = 0;
+    /// `CGameUI::updateLoading`: the loading screen refreshed between
+    /// `CLevel::populate`'s phases, ten times a floor, at the console's own points. Nothing by default.
+    virtual void view_update_loading() {}
     virtual void view_automap_create() = 0;
     virtual size_t view_level_particle_node(size_t systems_before) = 0;
     virtual void view_stand_subject(const ogre::Vector3& at, const ogre::Vector3& facing) = 0;
@@ -342,8 +352,7 @@ public:
     /// `warpLevels(dungeon, 0, depth, true, L"", false)`.
     void warp_to_waypoint(const tl::core::WaypointRow& row);
     void load_cinematics();
-    /// `CCinematicMenu::update`, the music
-    /// half, every frame.
+    /// `CCinematicMenu::update`, the music half, every frame.
     void step_cinematic_music(float delta);
     void ensure_skill_index();
     void ensure_player_skill_files();
@@ -372,7 +381,6 @@ public:
     /// `maxMana()` (`CharacterProgression::max_hp_of`/`max_mp_of`).
     void refresh_player_maxima();
     /// An item's `RESPEC`: `CPlayer::resetSkills`.
-    ///
     void respec_player();
     /// A on the bag's own tray (past the vendor pages): gem, fish, useable
     /// item, else `wear_player_item`.
@@ -503,7 +511,6 @@ public:
     /// The definition name in a slot, or "-", for the log.
     const char* voice_or_none(tl::core::SoundSlot slot) const;
     /// Advance `play_voice()`'s queue (`CSoundManager::update`).
-    ///
     void step_voices(float delta);
     /// `CQuestDialog::playDialogSound` / `stopDialogSound`: the one dialogue
     /// recording that is sounding, by its voice key.
@@ -609,6 +616,8 @@ public:
     const tl::core::AnimationManifest& manifest_for(const std::string& mesh_path);
     /// Read the playable classes, once.
     void load_player_classes();
+    /// A mod's class's portrait, from its mod's `charactercreate.layout`.
+    void find_mod_class_portrait(tl::core::PlayerClass& entry) const;
     /// `CEquipment::calculateCombatStats` for the weapon in
     /// a hand: its attack (`+0x238` right, `+0x23c` left), or none.
     tl::core::UnitStats::WeaponAttack weapon_attack_of(const std::string& item_name,
@@ -718,6 +727,7 @@ public:
     std::vector<std::string> roll_unit_minions(const std::string& unit, int level);
     /// Both, for a character already in the level.
     void spawn_unit_minions(int64_t master, int64_t owner);
+    void make_populated_champion(int64_t id, const std::string& unit);
     std::vector<tl::core::FormationChoice> formation_choices(const std::string& table) const;
     /// `CGameClient::loadLevel`'s quest pass for a dungeon depth.
     void apply_floor_quests(const tl::core::DungeonDef& def, uint32_t depth);
@@ -781,12 +791,34 @@ public:
     void init_unit_triggers(tl::core::LevelScript& machine);
     /// What `CTriggerUnit::unitInit` loads as the unit is made: its
     /// skills' event files, its `LAYOUTFILE`, its state layouts.
-    void trigger_unit_loads(const std::string& unit, const TriggerProp& prop);
+    /// `skills_rolled`: the population made it and rolled its `[SKILL]`s already.
+    /// What `CBreakable::unitInit` loads after its skills: its interact
+    /// particle's file and its interact sound.
+    void breakable_unit_loads(const tl::core::BreakableData& data);
+    void trigger_unit_loads(const std::string& unit, const TriggerProp& prop,
+                            bool skills_rolled = false);
+    /// `CBaseUnit::unitInit`'s `[SKILL]`s for a prop (a breakable's or a chest's traps).
+    void roll_prop_skills(const std::string& unit);
+    /// A merchant the population makes, stocked as it is made (`made_merchants`).
+    void stock_made_merchant(int64_t handle, const std::string& unit);
+    void place_made_merchant(int64_t handle, int64_t node);
+    /// A placed layout's enabled `Path Node Occupation` nodes into `loaded_path_blockers`.
+    void collect_path_blockers(const tl::formats::CmpScene& layout, const std::set<int64_t>& gated,
+                               const ogre::Vector3& origin, const ogre::Quaternion& basis);
+    /// A floor's rooms activated after its population, then its triggers' marks.
+    void activate_deferred_rooms();
+    /// `loaded_path_blockers` onto the map after the floor's bake.
+    void lay_loaded_path_blockers();
+    /// The floor's LEVELPARTICLE layout, after its population.
+    void place_level_particle(const std::string& level_particle_ref,
+                              std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces);
     /// `CLayout::loadLayoutFile` of a file not placed as it is loaded:
     /// counted and seeded, its groups rolled, its links loaded. True when it made a `Timeline`.
     bool count_layout_load(const std::string& reference);
-    /// `rollRandomGroups` over a file's Groups: the nodes not created.
-    std::set<int64_t> roll_layout_groups(const tl::formats::CmpScene& layout);
+    /// `rollRandomGroups` over a file's Groups: the nodes not created; `created`, when given, the
+    /// groups made, in the order the load makes their objects.
+    std::set<int64_t> roll_layout_groups(const tl::formats::CmpScene& layout,
+                                         std::vector<int64_t>* created = nullptr);
     const std::set<int64_t>* load_particle_file(const std::string& path,
                                                 bool* added_sample = nullptr);
     std::string layout_archive_path(const std::string& reference) const;
@@ -881,6 +913,9 @@ public:
     tl::core::QuestRewardWorld quest_reward_world();
     /// `level_activated` on a placed room's machine, and its events applied.
     void activate_room_machine(size_t index, const std::string& path);
+    /// The rest of a level's own layout once its whole tree is placed (`place_layout`, depth 0).
+    void finish_level_layout(const std::string& path, const tl::formats::CmpScene& layout,
+                             const std::set<int64_t>& gated, const ogre::Vector3& origin);
     /// `CCharacter::applyInstantEffect`'s `OPEN TOWN PORTAL` on the player.
     void open_town_portal();
     // Waypoints (`core/waypoints.h`, renderer_portal.cpp).
@@ -1318,6 +1353,11 @@ public:
     /// `addCharacter`'s `dropToGround(4.0)` (`CQuestUnitData::createUnit`;
     /// `spawnUnit`).
     ogre::Vector3 dropped_to_ground(const ogre::Vector3& at) const;
+    /// `CLevel::addCharacter`'s `CCharacter::dropToGround(level, 4.0, ..., false)`: the search
+    /// (core/item_drop.h, `drop_character_to_ground`).
+    ogre::Vector3 character_to_ground(const ogre::Vector3& at);
+    /// The sound tables a gold pile's bank reads and `g_Rand` (`make_gold_pile`).
+    tl::core::GoldPileSounds gold_sounds();
     void create_quest_unit(const tl::core::QuestObjective& objective,
                            const tl::core::QuestUnitTag& tag, int64_t quest_guid);
     /// `CQuestUnitData::spawnUnit` past its checks; the

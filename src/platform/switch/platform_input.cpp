@@ -158,4 +158,8 @@ bool text_entry(const std::string& title, const std::string& guide, std::string&
     return true;
 }
 
+// The software keyboard is the applet's (text_entry); nothing is typed into the window.
+bool typing_in_window() { return false; }
+std::string take_platform_typed_text() { return {}; }
+
 }  // namespace tl::core

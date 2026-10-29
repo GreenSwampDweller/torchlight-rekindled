@@ -1,6 +1,7 @@
 #include "core/dungeon.h"
 #include "core/fused.h"
 #include "core/level_memory.h"
+#include "core/log.h"
 
 #include <algorithm>
 #include <cctype>
@@ -62,6 +63,19 @@ ChunkInstance make_instance(uint32_t type_index, float x, float y, float z) {
     instance.y = y;
     instance.z = z;
     return instance;
+}
+
+// `createRandomLayout`'s draw passed over: a type with one doorway drawn first, then a type with
+// no pieces, in that order.
+bool drawn_type_passed_over(const std::vector<Randomizer>& piece_randomizers, uint32_t t,
+                            bool first_with_one_doorway) {
+    if (first_with_one_doorway) {
+        TL_LOG_DEBUG("  layout: type %u drawn first with one doorway", t);
+        return true;
+    }
+    if (tarray_at(piece_randomizers, t).choice_count() != 0) return false;
+    TL_LOG_DEBUG("  layout: type %u drawn with no pieces", t);
+    return true;
 }
 
 }  // namespace
@@ -692,8 +706,8 @@ int32_t LevelTemplate::create_random_layout(RunicRandom& rng, int32_t seed) {
             const uint32_t t = static_cast<uint32_t>(ordinary_types.get_random(rng));
             const ChunkType& type = type_at(t);
             const int32_t exit_count = static_cast<int32_t>(type.exits.size());
-            if (placed == 0 && exit_count == 1) continue;
-            if (tarray_at(piece_randomizers, t).choice_count() == 0) continue;
+            if (drawn_type_passed_over(piece_randomizers, t, placed == 0 && exit_count == 1))
+                continue;
 
             const int32_t existing = static_cast<int32_t>(instances.size());
             bool added = false;
@@ -1040,7 +1054,7 @@ void choose_unit_spawners(LevelTemplate& level_template, const SpawnClassLookup&
 // `CLevelTemplateData::getNumberOfUnitsToCreate`:
 // the ends picked by `min`/`max` (a count
 // authored the wrong way round still works) and truncated; the density branch
-// divides by a float 6.5 before `ceilf`.
+// multiplies by the float 1 / 6.5 (the Linux build divides) before `ceilf`.
 int64_t units_to_create(const LevelTemplate& level_template, size_t slot, uint32_t pathable_cells,
                         RunicRandom& rng) {
     if (slot >= kSpawnSlotCount) return 0;
@@ -1054,7 +1068,7 @@ int64_t units_to_create(const LevelTemplate& level_template, size_t slot, uint32
     const float density_min = level_template.density_min[slot];
     const float density_max = level_template.density_max[slot];
     if (!(0.0f < density_min) || !(0.0f < density_max)) return 0;
-    const float area = static_cast<float>(pathable_cells) / 6.5f;
+    const float area = static_cast<float>(pathable_cells) * 0.15384616f;
     const float lo = (density_max < density_min ? density_max : density_min) * area;
     const float hi = (density_max > density_min ? density_max : density_min) * area;
     const float wanted = rng.between(lo, hi);

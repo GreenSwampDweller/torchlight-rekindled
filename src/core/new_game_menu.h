@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace tl::core {
 
@@ -32,6 +33,13 @@ NewGameFocus step_new_game_focus(NewGameFocus from, int dx, int dy,
 
 /// The window the focus is on.
 const char* new_game_window(NewGameFocus focus);
+
+/// A focus grid, row by row: `kNewGameGrid`, its top row going on with the mods' classes.
+using NewGameGrid = std::vector<std::vector<std::string>>;
+NewGameGrid new_game_grid(const std::vector<std::string>& mod_classes);
+NewGameFocus step_new_game_focus(const NewGameGrid& grid, NewGameFocus from, int dx, int dy,
+                                 const std::function<bool(const std::string&)>& visible);
+const std::string& new_game_window(const NewGameGrid& grid, NewGameFocus focus);
 
 /// What pressing A on a window does, from the `onClick` its layout authors.
 /// The layout spells these `GUISELECTn` and `GUINEWGAME`; `CNewGameMenu`'s

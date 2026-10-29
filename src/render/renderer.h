@@ -10,6 +10,7 @@
 #include "core/game_config.h"
 #include "core/inventory.h"
 #include "core/level_memory.h"
+#include "core/mods.h"
 #include "core/pet.h"
 #include "core/quest_book.h"
 #include "core/retirement.h"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -601,6 +603,17 @@ public:
                                    tl::core::DifficultyClick& click,
                                    const std::string& dump_png = {});
 
+    /// The mods page before the title (`run_start_mods_menu`): a scrolling column of a row per
+    /// mod, switched by A, and under it the "Don't show this menu again" checkbox.
+    /// `MenuAction::Back` for Start (or B), `MenuAction::Quit` when the window went; `list` left as
+    /// the player switched it, `dont_show_again` as the checkbox was left. Headless, or with
+    /// `dump_png`: dumps it and returns `Back`.
+    MenuAction run_mods_menu(tl::core::ModList& list, bool& dont_show_again,
+                             const std::string& dump_png = {});
+
+    /// The frame-rate overlay on or off, as the mods page left its mod.
+    void set_stats_overlay(bool on);
+
     /// The Load Character screen (`CContinueGameMenu`, `media/UI/characterload.uilayout`) over the
     /// menu's backdrop. `state` is the caller's (`ContinueMenu::open`).
     ///
@@ -952,5 +965,22 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+/// How `main` brings the renderer up (start_renderer).
+struct RendererStart {
+    std::string logic_trace;       ///< `--logic-trace`, set before `init`
+    std::string passability_dump;  ///< `--passability-dump`, set after it
+    bool start_in_menu = false;    ///< the game starts at its menu: the mods page first
+    int argc = 0;                  ///< the command line, for the mods' switches
+    char** argv = nullptr;
+};
+
+/// `init` with the run's traces, then, when the game starts at its menu, the mods page: shown
+/// when there are mods and `config.txt` does not say `mods_menu=0`; a change written to
+/// `mods.dat`, `rc`'s mods read again and the renderer restarted on them. `--mods-menu-dump
+/// <png>` takes a frame of the page, headless too, and goes on. The exit code when the run ends
+/// here (1: `init` failed; 0: the window closed on the page), else nothing.
+std::optional<int> start_renderer(Renderer& renderer, RendererConfig& rc,
+                                  const RendererStart& start);
 
 }  // namespace tl::render

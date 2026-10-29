@@ -26,18 +26,21 @@ const tl::core::AnimationManifest& World::manifest_for(const std::string& mesh_p
     const auto known = manifests_by_mesh.find(mesh_path);
     if (known != manifests_by_mesh.end()) return *known->second;
     const std::string dir = dir_of_asset(mesh_path);
-    const auto found = manifests.find(dir);
+    std::string stem = mesh_path;
+    const size_t slash = stem.find_last_of('/');
+    if (slash != std::string::npos) stem = stem.substr(slash + 1);
+    const size_t dot = stem.find_last_of('.');
+    if (dot != std::string::npos) stem.resize(dot);
+    // One per `.ANIMATION` file, as the console keeps a `CAnimationSet` per path: a folder can hold
+    // several (`media/models/skeleton`: the plain, armored, unarmed and warrior skeletons').
+    const std::string key = dir + "/" + tl::core::upper_ascii(stem);
+    const auto found = manifests.find(key);
     if (found != manifests.end()) {
         manifests_by_mesh.emplace(mesh_path, &found->second);
         return found->second;
     }
 
     tl::core::AnimationManifest manifest;
-    std::string stem = mesh_path;
-    const size_t slash = stem.find_last_of('/');
-    if (slash != std::string::npos) stem = stem.substr(slash + 1);
-    const size_t dot = stem.find_last_of('.');
-    if (dot != std::string::npos) stem.resize(dot);
 
     const std::string path = archive_path_in_dir(stem + ".ANIMATION.adm", dir);
     if (!path.empty()) {
@@ -54,7 +57,7 @@ const tl::core::AnimationManifest& World::manifest_for(const std::string& mesh_p
                     manifest.size());
     }
     const tl::core::AnimationManifest& made =
-        manifests.emplace(dir, std::move(manifest)).first->second;
+        manifests.emplace(key, std::move(manifest)).first->second;
     manifests_by_mesh.emplace(mesh_path, &made);
     return made;
 }
@@ -366,8 +369,10 @@ bool World::queue_global_sample(tl::core::SoundSlot slot, const std::string& nam
     // No samples, nothing; else one drawn on the volatile stream,
     // before `queueSound` decides whether to keep it.
     if (definition->files.empty()) return false;
-    const std::string& file = definition->files[static_cast<size_t>(
-        rolls.integer_between(0, static_cast<int>(definition->files.size()) - 1))];
+    // Among the recordings the bank kept (`bank_recordings`).
+    const std::vector<size_t> kept = tl::core::bank_recordings(*definition);
+    const std::string& file = definition->files[kept[static_cast<size_t>(
+        rolls.integer_between(0, static_cast<int>(kept.size()) - 1))]];
     tl::core::VoiceQueue::Entry entry;
     entry.slot = static_cast<int>(slot);
     entry.sample = name;
@@ -690,7 +695,9 @@ void World::clear_path_blocker_area(const PathBlocker& b) {
         std::vector<tl::core::ScriptEvent> events;
         std::vector<int64_t> killed;
         std::vector<std::pair<int64_t, std::string>> names;
+        view.script->set_defer_death_sample(true);
         view.script->kill_or_move_base_units(area, quest_log.state(), events, killed);
+        view.script->set_defer_death_sample(false);
         for (const int64_t id : killed) names.emplace_back(id, view.script->unit_of(id));
         if (view.nodes != nullptr && !events.empty()) apply_script_events(events, *view.nodes);
         for (const auto& dead : names) {
@@ -754,7 +761,7 @@ void World::apply_machine_path_blockers() {
                         static_cast<double>(b.box.low.z), static_cast<double>(b.box.high.x),
                         static_cast<double>(b.box.high.z), n.enabled ? "" : " (disabled)");
             if (!n.enabled) continue;
-            set_path_blocker_cells(b.box, true);
+            if (!path_blockers_laid) set_path_blocker_cells(b.box, true);
             ++blockers;
         }
     }

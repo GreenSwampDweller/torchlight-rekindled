@@ -54,4 +54,7 @@ bool text_entry(const std::string& title, const std::string& guide, std::string&
     text.assign(output.data(), ::strnlen(output.data(), output.size()));
     return true;
 }
+// The system keyboard is UIKit's (text_entry); nothing is typed into the window.
+bool typing_in_window() { return false; }
+std::string take_platform_typed_text() { return {}; }
 }  // namespace tl::core

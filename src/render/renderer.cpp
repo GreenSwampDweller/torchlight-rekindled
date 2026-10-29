@@ -1303,36 +1303,6 @@ std::vector<std::string> archive_animation_stems_matching(const std::string& dir
 /// Only useful when the name is unambiguous, which is the point: an ambiguous
 /// basename is the trap this codebase keeps hitting, so this deliberately
 /// refuses to guess between candidates.
-/// A playable class's own `.DAT`, the console's copy first.
-///
-/// Spelled as a path rather than looked up by basename, because the
-/// basename stopped being unique when `scripts/extract_console_ui.py` began
-/// putting the Xbox release's own class files under `xbox/` (that release
-/// re-laid every class's skills for a pad). `archive_path_unique` rightly
-/// refuses to choose between two candidates, so every caller of it for a
-/// class file quietly got nothing: the character sheet lost its strength,
-/// dexterity, magic, defense, health and mana, and the wardrobe lost the
-/// base textures. The console's copy wins, as it does everywhere else the
-/// console data is read (`build_player_skills`).
-///
-/// `console` reports which of the two roots answered, so a caller can
-/// follow the file's `BASEFILE` in the same tree.
-// PORT: asset lookup: a class's unit file, the console's tree first.
-std::string class_unit_path(const std::string& class_name, bool* console) {
-    if (console != nullptr) *console = false;
-    if (class_name.empty()) return {};
-    const std::string want = lowered(class_name) + ".dat.adm";
-    for (const char* root : {"xbox/media/units/players/", "media/units/players/"}) {
-        for (const std::string& path : archive_paths_under(root, ".dat.adm")) {
-            const size_t slash = path.find_last_of('/');
-            const std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
-            if (lowered(base) != want) continue;
-            if (console != nullptr) *console = root[0] == 'x';
-            return path;
-        }
-    }
-    return {};
-}
 
 /// Rewrites bare texture names in a material to full archive paths.
 ///
@@ -2609,12 +2579,11 @@ bool Renderer::wear_base_outfit() {
     }
 
     // The player unit's own .DAT. **The chosen class names it**; the subject's
-    // mesh stem is only the fallback for a `--mesh` run showing something that
-    // is not a class at all. The stem is not enough on its own: the Destroyer's
-    // mesh is `warrior/player.MESH` and the archive's only `PLAYER.DAT.adm` is
-    // a table of sound names.
+    // mesh stem is the fallback for a `--mesh` run and for a class no file names (its mod off).
+    // The stem is not enough on its own: the Destroyer's mesh is `warrior/player.MESH` and the
+    // archive's only `PLAYER.DAT.adm` is a table of sound names.
     std::string stem = m.player_class;
-    if (stem.empty()) {
+    if (stem.empty() || class_unit_path(stem).empty()) {
         stem = m.subject->getMesh()->getName();
         const size_t slash = stem.find_last_of('/');
         if (slash != std::string::npos) stem = stem.substr(slash + 1);

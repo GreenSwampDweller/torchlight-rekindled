@@ -1,0 +1,182 @@
+Torchlight: FileSystemArchive opens a file whatever its case, as
+OGRE_RESOURCEMANAGER_STRICT=0 promises, and answers exists() without a stat.
+
+A folder mounted as "FileSystem" (a PC pak's console_ui/, a mod folder, loose
+game data) is indexed without regard to case, but open(), exists() and
+getModifiedTime() joined the name as asked for onto the folder. Windows'
+filesystem forgives that; a case-sensitive one (Linux, SteamOS, Android) does
+not, and the game asks for one file under several spellings (media/UI/...,
+media/ui/...), so no single case on disk satisfies every request.
+
+Now each folder lists itself once (files and folders, again after create()
+or remove()) and looks a name up there: as spelt first, then in lower case.
+The listing also answers whether the file is there, with no stat: every
+mounted folder is asked for every file the group's index does not answer, the
+mod folders first, and on Android's shared storage each stat is a
+millisecond or more. (A first version walked the folder's directories at each
+miss, and a mod folder of 1,170 item files made a level load take minutes on
+Android.) The folders are the game's data and do not change while it runs,
+as OGRE's own index assumes. Not __SWITCH__-guarded: it is for every target
+whose filesystem minds case; Windows is left as it was.
+
+
+diff --git a/OgreMain/src/OgreFileSystem.cpp b/OgreMain/src/OgreFileSystem.cpp
+index 576896580..942e95fce 100644
+--- a/OgreMain/src/OgreFileSystem.cpp
++++ b/OgreMain/src/OgreFileSystem.cpp
+@@ -48,6 +48,15 @@ THE SOFTWARE.
+ //#  define _OGRE_FILESYSTEM_ARCHIVE_UNICODE // base path and resources subpathes expected to be in UTF-8 and wchar_t file IO routines are used
+ #endif
+ 
++// Torchlight: with OGRE_RESOURCEMANAGER_STRICT=0 a folder's files are indexed without regard to
++// case, but opened by the name asked for, which a case-sensitive filesystem refuses.
++#if !OGRE_RESOURCEMANAGER_STRICT && OGRE_PLATFORM != OGRE_PLATFORM_WIN32 && OGRE_PLATFORM != OGRE_PLATFORM_WINRT
++#   include <algorithm>
++#   include <unordered_map>
++#   include <unordered_set>
++#   define TL_FILESYSTEM_CASELESS 1
++#endif
++
+ namespace Ogre {
+ 
+ namespace {
+@@ -73,6 +82,17 @@ namespace {
+             StringVector* simpleList, FileInfoList* detailList) const;
+ 
+         OGRE_AUTO_MUTEX;
++
++        /// Torchlight: `filename` under the folder as the disk spells it (resolvePath), and
++        /// in `present` whether it is there: 1, 0, or -1 when it was not looked at.
++        String resolvePath(const String& filename, int* present = nullptr) const;
++#ifdef TL_FILESYSTEM_CASELESS
++        /// Every file's and folder's path as the disk spells it, and in lower case to that;
++        /// listed at the first lookup, again after create() or remove().
++        mutable std::unordered_set<String> mExactNames;
++        mutable std::unordered_map<String, String> mCaselessNames;
++        mutable bool mCaselessListed = false;
++#endif
+     public:
+         FileSystemArchive(const String& name, const String& archType, bool readOnly );
+         ~FileSystemArchive();
+@@ -162,6 +182,56 @@ namespace {
+             return name;
+         else
+             return base + '/' + name;
++    }
++    //-----------------------------------------------------------------------
++    // Torchlight: the folder's own spelling of `filename`, from a listing taken once, which also
++    // says whether it is there: no stat at all. Every mounted folder is asked for every file the
++    // index does not answer, and on Android's shared storage a stat is a millisecond or more.
++    String FileSystemArchive::resolvePath(const String& filename, int* present) const
++    {
++        String full_path = concatenate_path(mName, filename);
++        if (present)
++            *present = -1;
++#ifdef TL_FILESYSTEM_CASELESS
++        if (filename.empty() || is_absolute_path(filename.c_str()))
++            return full_path;
++        OGRE_LOCK_AUTO_MUTEX;
++        if (!mCaselessListed)
++        {
++            mCaselessListed = true;
++            mExactNames.clear();
++            mCaselessNames.clear();
++            for (bool dirs : {false, true})
++            {
++                StringVector names;
++                findFiles("*", true, dirs, &names, 0);
++                for (const String& name : names)
++                {
++                    mExactNames.insert(name);
++                    String key = name;
++                    StringUtil::toLowerCase(key);
++                    mCaselessNames.emplace(key, name);
++                }
++            }
++        }
++        String key = filename;
++        std::replace(key.begin(), key.end(), '\\', '/');
++        while (key.compare(0, 2, "./") == 0)
++            key.erase(0, 2);
++        if (mExactNames.count(key))
++        {
++            if (present)
++                *present = 1;
++            return concatenate_path(mName, key);
++        }
++        StringUtil::toLowerCase(key);
++        auto found = mCaselessNames.find(key);
++        if (present)
++            *present = found != mCaselessNames.end() ? 1 : 0;
++        if (found != mCaselessNames.end())
++            return concatenate_path(mName, found->second);
++#endif
++        return full_path;
+     }
+ 	//-----------------------------------------------------------------------
+ #ifdef _OGRE_FILESYSTEM_ARCHIVE_UNICODE
+@@ -339,7 +409,7 @@ namespace {
+ 
+         if(!readOnly) mode |= std::ios::out;
+ 
+-        return _openFileStream(concatenate_path(mName, filename), mode, filename);
++        return _openFileStream(resolvePath(filename), mode, filename);
+     }
+     DataStreamPtr _openFileStream(const String& full_path, std::ios::openmode mode, const String& name)
+     {
+@@ -424,6 +494,9 @@ namespace {
+         rwStream->open(full_path.c_str(), mode);
+ #endif
+ 
++#ifdef TL_FILESYSTEM_CASELESS
++        mCaselessListed = false;
++#endif
+         // Should check ensure open succeeded, in case fail for some reason.
+         if (rwStream->fail())
+         {
+@@ -449,6 +522,9 @@ namespace {
+ 		::_wremove(to_wpath(full_path).c_str());
+ #else
+         ::remove(full_path.c_str());
++#endif
++#ifdef TL_FILESYSTEM_CASELESS
++        mCaselessListed = false;
+ #endif
+     }
+     //-----------------------------------------------------------------------
+@@ -497,15 +573,20 @@ namespace {
+         if (filename.empty())
+             return false;
+ 
+-        String full_path = concatenate_path(mName, filename);
+-
++        // Torchlight: resolvePath has looked already, unless the name is absolute.
++        int present = -1;
++        String full_path = resolvePath(filename, &present);
++        bool ret = present == 1;
++        if (present < 0)
++        {
+ #ifdef _OGRE_FILESYSTEM_ARCHIVE_UNICODE
+-        struct _stat64i32 tagStat;
+-        bool ret = (_wstat(to_wpath(full_path).c_str(), &tagStat) == 0);
++            struct _stat64i32 tagStat;
++            ret = (_wstat(to_wpath(full_path).c_str(), &tagStat) == 0);
+ #else
+-        struct stat tagStat;
+-        bool ret = (stat(full_path.c_str(), &tagStat) == 0);
++            struct stat tagStat;
++            ret = (stat(full_path.c_str(), &tagStat) == 0);
+ #endif
++        }
+ 
+         // stat will return true if the filename is absolute, but we need to check
+         // the file is actually in this archive
+@@ -528,7 +609,7 @@ namespace {
+     //---------------------------------------------------------------------
+     time_t FileSystemArchive::getModifiedTime(const String& filename) const
+     {
+-        String full_path = concatenate_path(mName, filename);
++        String full_path = resolvePath(filename);
+ 
+ #ifdef _OGRE_FILESYSTEM_ARCHIVE_UNICODE
+ 		struct _stat64i32 tagStat;

@@ -23,6 +23,7 @@
 #include "core/level_memory.h"
 #include "core/log.h"
 #include "core/menu_manager.h"
+#include "core/mods.h"
 #include "core/pet.h"
 #include "core/platform.h"
 #include "core/run_config.h"
@@ -505,8 +506,6 @@ struct Options {
     /// More archives or directories to mount beside the install
     /// (`RendererConfig::extra_data`).
     std::vector<std::string> extra_data;
-    /// `--mod-data <dir>`: a mod root containing MEDIA/, mounted before base data.
-    std::vector<std::string> mod_data;
     /// `--console-ui DIR`: the console interface for a PC archive
     /// (`RendererConfig::console_ui`), unused beside the Xbox 360 pak.
     std::string console_ui;
@@ -810,8 +809,6 @@ Options parse_args(int argc, char** argv) {
             o.pet_fish.push_back(argv[++i]);
         } else if (arg == "--extra-data" && has_next) {
             o.extra_data.push_back(argv[++i]);
-        } else if (arg == "--mod-data" && has_next) {
-            o.mod_data.push_back(argv[++i]);
         } else if (arg == "--fps") {
             o.fps_overlay = 1;
         } else if (arg == "--no-fps") {
@@ -1192,7 +1189,6 @@ Options with_run_config(Options o) {
         o.dump_frame.clear();
         o.hud_dump.clear();
     }
-    if (o.fps_overlay == -1) o.fps_overlay = config.fps ? 1 : 0;
     if (o.fps_limit == -1) o.fps_limit = static_cast<int>(config.fps_limit);
 #else
     const bool player = player_folder();
@@ -1205,7 +1201,6 @@ Options with_run_config(Options o) {
     const tl::core::RunConfig config =
         tl::core::load_run_config("config.txt", defaults, /*create=*/player);
     if (player || present != nullptr) {
-        if (o.fps_overlay == -1) o.fps_overlay = config.fps ? 1 : 0;
         if (!o.size_given && config.width > 0 && config.height > 0) {
             o.width = config.width;
             o.height = config.height;
@@ -1452,10 +1447,13 @@ int main(int argc, char** argv) {
     rc.fov_degrees = opts.fov;
     rc.extra_data = opts.extra_data;
     rc.console_ui = console_interface(opts.console_ui, opts.extra_data);
-    rc.mod_data = opts.mod_data;
+    tl::core::mods_from_command_line(argc, argv, opts.game_data, rc.mod_data, rc.mod_names);
     rc.game_hud = !opts.no_hud;
     rc.minimap = !opts.no_minimap;
-    rc.stats_overlay = opts.fps_overlay == 1 || (opts.fps_overlay == -1 && !rc.headless);
+    // `--fps` and `--no-fps` before the FPS Overlay mod.
+    rc.stats_overlay_from_mods = opts.fps_overlay == -1 && !rc.headless;
+    rc.stats_overlay =
+        opts.fps_overlay == 1 || (rc.stats_overlay_from_mods && tl::core::fps_overlay_mod_on());
     // A headless run is a check: a tip opening over it would take the pad from
     // its script and sit in its frames.
     rc.context_tips = opts.tips == 1 || (opts.tips == -1 && !rc.headless);
@@ -1475,13 +1473,10 @@ int main(int argc, char** argv) {
     rc.starting_fish = !opts.no_starting_fish;
 
     tl::render::Renderer renderer;
-    if (!opts.logic_trace.empty()) renderer.set_logic_trace(opts.logic_trace);
-    if (!renderer.init(rc)) {
-        TL_LOG_ERROR("renderer initialisation failed");
-        tl::core::log_shutdown();
-        return 1;
-    }
-    if (!opts.passability_dump.empty()) renderer.set_passability_dump(opts.passability_dump);
+    // Up, and past the mods page, before anything is built on the mods.
+    const std::optional<int> ended = tl::render::start_renderer(
+        renderer, rc, {opts.logic_trace, opts.passability_dump, opts.start_in_menu, argc, argv});
+    if (ended) return *ended;
 
     // What the subject is built from: copies of `opts`, because the creation screen
     // decides two of them at runtime. The character is built twice when the game
@@ -1766,7 +1761,7 @@ int main(int argc, char** argv) {
         tl::render::LoadCharacterHost host;
         host.list = list_continue_entries;
         host.remove = [](const std::string& path) { std::remove(path.c_str()); };
-        const tl::core::ContinuePress opened = continue_menu.open(host.list(), {});
+        const tl::core::ContinuePress opened = continue_menu.open(host.list(), rc.mod_names);
         // Whose character stands behind the menu: the newest save's, as the
         // menu's level is, until another is applied.
         std::string shown_file = backdrop_file;
@@ -1869,7 +1864,7 @@ int main(int argc, char** argv) {
                 tl::core::set_active_menu(front_end_menus, next, continue_menu.can_continue());
             if (change.select_first_character) {
                 tl::core::ContinuePress selected;
-                continue_menu.select_character(0, true, {}, selected);
+                continue_menu.select_character(0, true, rc.mod_names, selected);
             }
             switch (tl::core::open_menu(front_end_menus)) {
                 case tl::core::kMenuMain: {

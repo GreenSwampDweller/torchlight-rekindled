@@ -58,14 +58,15 @@ std::string run_config_text(const RunConfig& defaults) {
     out << "# The port's own switches (0 off, 1 on).\n"
         << "# debug: the debug menu, bestiary, wardrobe, Choose Level, frame dumps and logs.\n"
         << "# logs:  the log file on its own.\n"
-        << "# fps:   the frame-rate overlay; L3 switches it in the game, and it is kept here.\n"
         << "debug=" << (defaults.debug ? 1 : 0) << "\n"
         << "logs=" << (defaults.logs ? 1 : 0) << "\n"
-        << "fps=" << (defaults.fps ? 1 : 0) << "\n"
         << "# fps_limit: the most frames a second the game draws; 0 for no limit.\n"
-        << "fps_limit=" << defaults.fps_limit << "\n"
-        << "# free_camera: the right stick turns the camera and R3 resets it; a pinch zooms.\n"
-        << "free_camera=" << (defaults.free_camera ? 1 : 0) << "\n";
+        << "fps_limit=" << defaults.fps_limit << "\n";
+    if (kModsPage) {
+        out << "# mods_menu: 1 shows the mods page before the game; 0 skips it and starts\n"
+            << "# without any mods.\n"
+            << "mods_menu=" << (defaults.mods_menu ? 1 : 0) << "\n";
+    }
     if (defaults.width > 0 && defaults.height > 0) {
         out << "# width, height: the window's size, or the screen's resolution in fullscreen.\n"
             << "# fullscreen: 1 fills the screen at that resolution.\n"
@@ -93,6 +94,7 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
         if (key == "fullscreen") config.fullscreen = on;
         if (key == "vsync") config.vsync = on;
         if (key == "free_camera") config.free_camera = on;
+        if (key == "mods_menu") config.mods_menu = on;
         if (key == "fps_limit") {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             if (number >= 0 && number <= 1000) config.fps_limit = static_cast<unsigned>(number);
@@ -153,7 +155,7 @@ bool save_run_config_value(const std::string& key, bool value) {
     if (wanted == "debug") g_config.debug = value;
     if (wanted == "logs") g_config.logs = value;
     if (wanted == "fps") g_config.fps = value;
-    if (wanted == "free_camera") g_config.free_camera = value;
+    if (wanted == "mods_menu") g_config.mods_menu = value;
     if (g_path.empty()) return false;
     std::string text;
     if (!read_file(g_path, text)) text = run_config_text(g_config);

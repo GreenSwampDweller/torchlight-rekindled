@@ -1165,7 +1165,7 @@ tl::core::ItemStats World::create_item(const tl::core::ItemStats& data, bool fro
         // (`CItemGold::unitInit`); `enchant` is `CEquipment`'s.
         load_stat_graphs();
         tl::core::init_gold_copy(copy, from_save, level_monster_level, config.difficulty,
-                                 stat_graphs, tl::core::volatile_random());
+                                 stat_graphs, tl::core::volatile_random(), gold_sounds());
         return copy;
     }
     tl::core::init_item_copy(copy, from_save, random_enchant_allowed, force_enchant,

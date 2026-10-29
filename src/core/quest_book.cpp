@@ -1,4 +1,5 @@
 #include "core/quest_book.h"
+#include "core/log.h"
 #include "core/logic_events.h"
 #include "core/quest_names.h"
 #include "core/runic_strings.h"
@@ -497,6 +498,8 @@ void QuestLog::reset(const QuestState& state) {
     held_.clear();
     givers_.clear();
     offers_.clear();
+    dormant_.clear();
+    dormant_seeds_.clear();
     notices_.clear();
     state_ = state;
 }
@@ -541,6 +544,12 @@ QuestLog::Carried QuestLog::carry() const {
         carried.entries.emplace_back(entry.definition->name, std::move(copy));
     }
     carried.held = held_;
+    for (const auto& kept : dormant_) {
+        if (kept.second.definition == nullptr) continue;
+        QuestEntry copy = kept.second;
+        copy.definition = nullptr;
+        carried.dormant.emplace_back(kept.second.definition->name, std::move(copy));
+    }
     return carried;
 }
 
@@ -584,6 +593,14 @@ void QuestLog::restore(const Carried& carried) {
     items_handed_ = carried.items_handed;
     givers_ = carried.givers;
     offers_ = carried.offers;
+    dormant_.clear();
+    for (const auto& named : carried.dormant) {
+        const QuestDefinition* definition = book_ != nullptr ? book_->find(named.first) : nullptr;
+        if (definition == nullptr) continue;
+        QuestEntry entry = named.second;
+        entry.definition = definition;
+        dormant_[upper(definition->name)] = std::move(entry);
+    }
     entries_.clear();
     for (const auto& named : carried.entries) {
         const QuestDefinition* definition = book_ != nullptr ? book_->find(named.first) : nullptr;
@@ -1093,15 +1110,17 @@ std::string spawn_class_unit_looking_for(QuestObjective& objective, const QuestE
 /// generator holds after the unit is resolved - the first draw off the quest's seed unless a
 /// spawn class was rolled.
 void reinitialize_objectives(std::vector<QuestObjective>& list, const QuestEntry& entry,
-                             const QuestUnitWorld& world, const RandomNames* names) {
+                             const QuestUnitWorld& world, const RandomNames* names,
+                             bool resolve = true, RunicRandom* rng = nullptr) {
     const int32_t seed = static_cast<int32_t>(entry.seed);
-    RunicRandom& g_rand = game_random();
+    RunicRandom& g_rand = rng != nullptr ? *rng : game_random();
     for (QuestObjective& objective : list) {
         objective.done = false;
         objective.populated = false;
-        reinitialize_objectives(objective.children, entry, world, names);
+        reinitialize_objectives(objective.children, entry, world, names, resolve, rng);
         g_rand.set_seed(seed);
-        const bool named = resolve_objective_unit(objective, entry, world);
+        if (!resolve) objective.resolved.clear();
+        const bool named = resolve && resolve_objective_unit(objective, entry, world);
         // The champion's name off the quest's seed, the generator restored:
         // a generator of its own here.
         if (objective.make_champion && named && names != nullptr && !names->empty()) {
@@ -1112,6 +1131,20 @@ void reinitialize_objectives(std::vector<QuestObjective>& list, const QuestEntry
         objective.wanted = g_rand.integer_between(objective.min_count, objective.max_count);
         objective.have = 0;
     }
+}
+
+/// `CQuestUnitData::getBaseUnitDataGroup` of an objective with no unit, as
+/// `populate` asks it: the unit, then a champion's name off the quest's seed, `g_Rand` put back
+/// to its low word.
+void resolve_unresolved_objective(QuestObjective& objective, const QuestEntry& entry,
+                                  const QuestUnitWorld& world, const RandomNames* names) {
+    const bool named = resolve_objective_unit(objective, entry, world);
+    if (!named || !objective.make_champion || names == nullptr || names->empty()) return;
+    RunicRandom& g_rand = game_random();
+    const int32_t saved = static_cast<int32_t>(static_cast<uint32_t>(g_rand.state()));
+    g_rand.set_seed(static_cast<int32_t>(entry.seed));
+    objective.champion_name = names->generate_name(true, g_rand);
+    g_rand.set_seed(saved);
 }
 
 /// `m_gQuestUnitDataID`, which every `CQuestUnitData` takes a number from.
@@ -1199,7 +1232,7 @@ bool QuestLog::log_full_for(const QuestDefinition& quest) const {
 }
 
 bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
-                      const StatBook& graphs, int depth) {
+                      const StatBook& graphs, int depth, bool resolve_units) {
     QuestEntry* existing = find(quest.name);
     QuestEntry fresh;
     QuestEntry& entry = existing != nullptr ? *existing : fresh;
@@ -1241,9 +1274,9 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
 
     // `CQuest::reinitializeQuest` calls each
     // unit's `reinitialize(true)`, which resolves its unit.
-    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_);
-    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_);
-    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_);
+    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_, resolve_units);
+    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_, resolve_units);
+    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_, resolve_units);
     // The printed name is the resolved unit's (`getUnitName`).
     //
     if (unit_namer_) {
@@ -1520,208 +1553,6 @@ void QuestLog::completion_consequences(const QuestDefinition& quest) {
     broadcast_quest_event(4, quest.name);
 }
 
-namespace {
-
-// Whether a unit carries this objective's tag. PORT: the tag as the port keeps it.
-bool tagged_for(const QuestUnitTag& tag, const QuestEntry& entry, const QuestObjective& o) {
-    return !tag.empty() && same_name(tag.quest, entry.name()) && tag.objective == o.id;
-}
-
-// Whether a unit is tagged for this quest. PORT: the tag as the port keeps it.
-bool tagged_for_quest(const QuestUnitTag& tag, const QuestEntry& entry) {
-    return !tag.empty() && same_name(tag.quest, entry.name());
-}
-
-/// What one event walks the quest's objectives with.
-struct QuestEvent {
-    QuestEntry& entry;
-    QuestEventUnit& unit;
-    const QuestUnitWorld& world;
-    std::vector<QuestProgressText>& texts;
-};
-
-/// The pair of lines both counting events put up
-/// (`STRINGS::GetValueAsWString`).
-void progress_text(const QuestObjective& o, QuestEvent& e, const std::string& word) {
-    QuestProgressText text;
-    if (e.entry.definition != nullptr) {
-        text.big = replace_quest_tags(e.entry.definition->display_name, e.entry);
-    }
-    text.small = e.unit.shown_name + " - " + value_as_string(static_cast<uint32_t>(o.have)) + "/" +
-                 value_as_string(static_cast<uint32_t>(o.wanted)) + word;
-    e.texts.push_back(std::move(text));
-}
-
-// `CQuestUnitData::getBaseUnitDataGroup` in the events: an objective left with no unit
-// resolves again, each time an event reaches it.
-void ensure_resolved(QuestObjective& o, QuestEvent& e) {
-    if (o.resolved.empty()) resolve_objective_unit(o, e.entry, e.world);
-}
-
-// The `tagged` half every quest event computes: the unit is of the objective's
-// `UNITTYPE`, or carries the objective's own tag. PORT: a helper of `quest_event`.
-bool tagged_for_objective(const QuestObjective& o, const QuestEvent& e) {
-    return (o.unit_type_id != unit_type::kNone && e.unit.is_a(o.unit_type_id)) ||
-           tagged_for(e.unit.tag, e.entry, o);
-}
-
-/// `CQuestUnitData::spawnChildrenUnits`, through
-/// `spawnUnit`: a child counts as placed even when nothing
-/// was.
-void spawn_children(QuestObjective& o, QuestEvent& e) {
-    for (size_t i = 0; i < o.children.size(); ++i) {
-        QuestObjective& child = o.children[i];
-        float radius = static_cast<float>(i) * 0.5f;
-        if (radius <= 1.0f) radius = 1.0f;
-        Vec3 at = e.world.random_open_position
-                      ? e.world.random_open_position(e.unit.position, radius)
-                      : e.unit.position;
-        at.y += 1.5f;
-        if (!child.resolved.empty() && !child.done && e.world.spawn_unit) {
-            e.world.spawn_unit(e.entry, child, QuestUnitTag{e.entry.name(), child.id}, at);
-        }
-        child.populated = true;
-    }
-}
-
-/// `CQuestUnitData::unitDefeated(CBaseUnit*)`.
-/// An objective that creates its units from no
-/// `SPAWNFROMUNITTYPE` counts only what it tagged. The count goes up before it is compared,
-/// so a target of 0 needs one.
-bool credit_defeat(QuestObjective& o, QuestEvent& e) {
-    if (!o.populated) return false;
-    ensure_resolved(o, e);
-    bool matched = o.matches(e.unit.name) || e.unit.is_a(o.unit_type_id);
-    const bool tagged = tagged_for_objective(o, e);
-    if (o.spawn_from_unittype.empty() && o.create) matched = tagged;
-    if (!o.done) {
-        if (!matched) return false;
-        o.have += 1;
-        if (e.unit.on_level && e.unit.is_a(unit_type::kCharacter) && !e.unit.shown_name.empty()) {
-            progress_text(o, e, " Defeated");
-        }
-        if (static_cast<uint32_t>(o.wanted) > static_cast<uint32_t>(o.have)) return false;
-        spawn_children(o, e);
-        o.done = true;
-        return true;
-    }
-    if (matched) return false;
-    for (QuestObjective& child : o.children) {
-        if (credit_defeat(child, e)) return true;
-    }
-    return false;
-}
-
-/// `CQuestUnitData::unitPickedUp(CBaseUnit*)`.
-/// A `[DEFEAT]`/`[POPULATE]` objective
-/// takes nothing itself, but once done hands its quest's items to its children (the
-/// champion's dropped stone).
-bool credit_pickup(QuestObjective& o, QuestEvent& e) {
-    if (!o.populated) return false;
-    if (o.kind == 0) {
-        if (o.done && tagged_for_quest(e.unit.tag, e.entry)) {
-            for (QuestObjective& child : o.children) {
-                if (credit_pickup(child, e)) return true;
-            }
-        }
-        return false;
-    }
-    ensure_resolved(o, e);
-    if (!e.unit.tag.empty() && !tagged_for_quest(e.unit.tag, e.entry)) return false;
-    const bool matched = o.matches(e.unit.name);
-    const bool tagged = tagged_for_objective(o, e);
-    const bool was_done = o.done;
-    bool counted = false;
-    if (!o.create) {
-        if (matched) {
-            e.unit.tag.quest = e.entry.name();
-            o.have += 1;
-        }
-        counted = matched;
-        if (!was_done && static_cast<uint32_t>(o.wanted) <= static_cast<uint32_t>(o.have)) {
-            o.done = true;
-        }
-    } else if (!was_done) {
-        if (tagged && matched) {
-            e.unit.tag.quest = e.entry.name();
-            o.have += 1;
-            counted = true;
-        }
-        if (static_cast<uint32_t>(o.wanted) <= static_cast<uint32_t>(o.have)) o.done = true;
-    }
-    if (o.done && static_cast<uint32_t>(o.wanted) < static_cast<uint32_t>(o.have)) {
-        o.have = o.wanted;
-    }
-    if (!was_done && counted && e.unit.on_level && e.unit.is_a(unit_type::kItem) &&
-        !e.unit.shown_name.empty() && !e.entry.complete_announced) {
-        progress_text(o, e, " Found");
-    }
-    if (o.done) {
-        if (!counted && tagged_for_quest(e.unit.tag, e.entry) && !o.children.empty()) {
-            for (QuestObjective& child : o.children) {
-                if (credit_pickup(child, e)) return true;
-            }
-            return false;
-        }
-        if (!was_done) spawn_children(o, e);
-    }
-    return counted;
-}
-
-/// `CQuestUnitData::unitInteracted(CBaseUnit*)`:
-/// a unit with a level only, placed or not.
-/// Matched as a kill is (data group or `ISA`), with no `CREATE` rule;
-/// counted until done, the children spawned when it finishes. A finished
-/// objective hands a unit that is not its own to its children.
-bool credit_interact(QuestObjective& o, QuestEvent& e) {
-    if (!e.unit.on_level) return false;
-    ensure_resolved(o, e);
-    const bool matched = o.matches(e.unit.name) || e.unit.is_a(o.unit_type_id);
-    const bool tagged = tagged_for_objective(o, e);
-    if (!o.done && matched) {
-        o.have += 1;
-        if (static_cast<uint32_t>(o.have) < static_cast<uint32_t>(o.wanted)) return false;
-        spawn_children(o, e);
-        o.done = true;
-        return true;
-    }
-    if (tagged || !o.done) return false;
-    for (QuestObjective& child : o.children) {
-        if (credit_interact(child, e)) return true;
-    }
-    return false;
-}
-
-/// `CQuestUnitData::unitDropped(CBaseUnit*)`:
-/// placed objectives only, the children first; then a unit of the objective's
-/// `UNITTYPE` or carrying its own tag takes one off the count (not below 0) and
-/// undoes it. An item the pickup only stamped with the quest (not the objective) does not
-/// match, so dropping it leaves the count alone.
-bool credit_drop(QuestObjective& o, QuestEvent& e) {
-    if (!o.populated) return false;
-    for (QuestObjective& child : o.children) {
-        if (credit_drop(child, e)) return true;
-    }
-    ensure_resolved(o, e);
-    if (!tagged_for_objective(o, e)) return false;
-    if (o.have != 0) o.have -= 1;
-    o.done = false;
-    return true;
-}
-
-/// `CQuest::questEventUpdate`'s walk: the `[ACQUIRE]`
-/// lists, then the `[DEFEAT]` lists. A list is one `[UNIT]` here (`calculateUnitsFromTag`),
-/// so every objective is offered the event.
-template <typename Credit>
-void credit_lists(QuestEvent& e, Credit credit) {
-    for (QuestObjective& o : e.entry.acquire) credit(o, e);
-    for (QuestObjective& o : e.entry.defeat) credit(o, e);
-    // The first group again, as many times as the list holds it again.
-    for (uint32_t i = 0; i < e.entry.defeat_repeats; ++i) credit(e.entry.defeat.front(), e);
-}
-
-}  // namespace
-
 bool objective_on_level(QuestObjective& objective, const std::string& quest_dungeon,
                         int quest_depth, const std::string& level_dungeon, int level_depth) {
     // `CQuestUnitData::populate`. A quest
@@ -1758,12 +1589,107 @@ void QuestLog::tag_unit_of_type(uint32_t type, const QuestUnitTag& tag) {
     }
 }
 
+// A quest the player does not hold, as `CQuest::CQuest` and the manager's
+// `reinitializeQuest` left it: seed -1 (+0x10), floor 0 (+0x14), rank 1 (+0x1ec) unless an
+// NPC's offer rolled them, its units unresolved (no level template then) and their counts
+// drawn off the seed. `g_Rand` is left as it was.
+QuestEntry& QuestLog::dormant_entry(const QuestDefinition& quest) {
+    const std::string key = upper(quest.name);
+    const auto found = dormant_.find(key);
+    if (found != dormant_.end()) return found->second;
+    QuestEntry& entry = dormant_[key];
+    entry.definition = &quest;
+    const Offered* rolled = offered(quest);
+    entry.seed =
+        rolled != nullptr ? static_cast<uint32_t>(rolled->seed) : static_cast<uint32_t>(-1);
+    entry.depth = rolled != nullptr ? rolled->depth : 0;
+    entry.level = rolled != nullptr ? rolled->level : 1;
+    if (const auto given = dormant_seeds_.find(key); given != dormant_seeds_.end()) {
+        entry.seed = given->second.seed;
+        entry.depth = given->second.depth;
+        entry.level = given->second.level;
+    }
+    // The counts were drawn at the reset, long before: on a generator of their own here.
+    RunicRandom counts(0u);
+    uint32_t groups = 0;
+    if (rolled != nullptr && 0 <= rolled->defeat_groups) {
+        groups = static_cast<uint32_t>(rolled->defeat_groups);
+    } else {
+        // INVENTED: the reset's `[DEFEAT]` group draw is not followed; one off the quest's seed
+        // stands in (the shipped random quests take one group, 1..1).
+        RunicRandom groups_rng(entry.seed);
+        groups = take_defeat_groups(quest, groups_rng);
+    }
+    entry.defeat.assign(quest.defeat.begin(),
+                        quest.defeat.begin() + std::min<size_t>(groups, quest.defeat.size()));
+    entry.acquire = quest.acquire;
+    entry.populate = quest.populate;
+    number_objectives(entry.defeat);
+    number_objectives(entry.acquire);
+    number_objectives(entry.populate);
+    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_, false, &counts);
+    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_, false, &counts);
+    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_, false, &counts);
+    return entry;
+}
+
+// PORT: a dormant quest's seed, floor and rank set from outside (the oracle hands the console's).
+void QuestLog::seed_dormant(const QuestDefinition& quest, uint32_t seed, int depth, int level) {
+    const std::string key = upper(quest.name);
+    dormant_seeds_[key] = DormantSeed{seed, depth, level};
+    dormant_.erase(key);
+}
+
+// `CQuestUnitData::populate` of an objective on the level.
+void QuestLog::populate_objective(QuestEntry& entry, QuestObjective& objective, bool active,
+                                  const CreateQuestUnit& create_unit) {
+    // The unit first: `getBaseUnitDataGroup` while it has none, five times at
+    // most; still none marks it complete and populated.
+    for (int tries = 0; objective.resolved.empty() && tries < 5; ++tries)
+        resolve_unresolved_objective(objective, entry, unit_world_, random_names_);
+    if (objective.resolved.empty()) {
+        TL_LOG_INFO("Unable to spawn unit for quest %s", entry.name().c_str());
+        objective.done = true;
+        objective.populated = true;
+        return;
+    }
+    // INVENTED: a completed quest's own unit still standing in the level is removed here
+    // (`getBaseUnitByDataGroup` and `removeUnit` unless `NEVERDESTROY`); not modelled.
+    if (objective.done || !active || objective.populated) return;
+    objective.populated = true;
+    // A `UNITTYPE` objective places nothing.
+    if (objective.unit_type_id != unit_type::kNone) return;
+    const QuestUnitTag tag{entry.name(), objective.id};
+    // `SPAWNFROMUNITTYPE`'s id, which `CQuestUnitData::reinitialize`
+    // looks up by name, `NONE` when there is none.
+    const uint32_t from_type = objective.spawn_from_unittype.empty() || !unit_world_.type_id
+                                   ? unit_type::kNone
+                                   : unit_world_.type_id(objective.spawn_from_unittype);
+    if (from_type == unit_type::kNone) {
+        // `createUnit` returns at once without `CREATE`.
+        if (!objective.create) return;
+        for (int i = 0; i < objective.wanted; ++i) create_unit(entry, objective, tag);
+        return;
+    }
+    tag_unit_of_type(from_type, tag);
+}
+
 void QuestLog::populate_level(const std::string& level_dungeon, int level_depth,
                               const std::function<void(const QuestEntry&, const QuestObjective&,
                                                        const QuestUnitTag&)>& create_unit) {
-    // INVENTED: the original walks its quest map, whose key was not read; the log's own order
-    // stands in. Only the order of `createUnit`'s marker draws depends on it.
-    for (QuestEntry& entry : entries_) {
+    // `CLevel::populate` walks the manager's map, every quest
+    // the game knows in `NAME` order, held or not: `CQuest::populate`.
+    std::vector<QuestEntry*> walk;
+    if (book_ != nullptr) {
+        for (const QuestDefinition* quest : book_->in_manager_order()) {
+            QuestEntry* held = find(quest->name);
+            walk.push_back(held != nullptr ? held : &dormant_entry(*quest));
+        }
+    } else {
+        for (QuestEntry& entry : entries_) walk.push_back(&entry);
+    }
+    for (QuestEntry* walked : walk) {
+        QuestEntry& entry = *walked;
         if (entry.definition == nullptr) continue;
         std::string dungeon = entry.definition->dungeon;
         for (char& c : dungeon) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1776,169 +1702,10 @@ void QuestLog::populate_level(const std::string& level_dungeon, int level_depth,
                                         level_depth)) {
                     continue;
                 }
-                // INVENTED: a completed quest's own unit still standing in the
-                // level is removed here (`getBaseUnitByDataGroup` and
-                // `removeUnit` unless `NEVERDESTROY`); not modelled.
-                if (objective.done || !active || objective.populated) continue;
-                objective.populated = true;
-                // A `UNITTYPE` objective places nothing.
-                if (objective.unit_type_id != unit_type::kNone) continue;
-                const QuestUnitTag tag{entry.name(), objective.id};
-                // `SPAWNFROMUNITTYPE`'s id, which
-                // `CQuestUnitData::reinitialize`
-                // looks up by name, `NONE` when
-                // there is none.
-                const uint32_t from_type =
-                    objective.spawn_from_unittype.empty() || !unit_world_.type_id
-                        ? unit_type::kNone
-                        : unit_world_.type_id(objective.spawn_from_unittype);
-                if (from_type == unit_type::kNone) {
-                    // `createUnit` returns at once without `CREATE`.
-                    if (!objective.create) continue;
-                    for (int i = 0; i < objective.wanted; ++i) create_unit(entry, objective, tag);
-                    continue;
-                }
-                tag_unit_of_type(from_type, tag);
+                populate_objective(entry, objective, active, create_unit);
             }
         }
     }
-}
-
-std::vector<const QuestDefinition*> QuestLog::quest_event(int event, QuestEventUnit& unit,
-                                                          bool by_player) {
-    // `CQuestManager::questEventUpdate`:
-    // every quest it holds that is not complete - every one for a drop (event
-    // 5) - through `CQuest::questEventUpdate`; the banner for one this event completed,
-    // only the first time.
-    std::vector<const QuestDefinition*> finished;
-    for (QuestEntry* held : held_entries_mutable()) {
-        QuestEntry& entry = *held;
-        if (entry.status != QuestStatus::Active) continue;
-        const bool was_complete = entry.objectives_complete();
-        if (was_complete && event != 5) continue;
-        QuestEvent e{entry, unit, unit_world_, progress_texts_};
-        switch (event) {
-            case 0: credit_lists(e, credit_pickup); break;
-            case 1: credit_lists(e, credit_defeat); break;
-            // Only the character the manager belongs.
-            case 2:
-                if (by_player) credit_lists(e, credit_interact);
-                break;
-            case 5: credit_lists(e, credit_drop); break;
-            default: break;
-        }
-        // The refresh `refreshQuestMenu` is asked for:
-        // set by a quest this event completed
-        // and had not yet announced, and by one whose completion this event
-        // left as it was - not by one completed again after its banner, nor by
-        // one a drop took out of completion.
-        const bool now_complete = entry.objectives_complete();
-        if (!now_complete || was_complete || entry.complete_announced) {
-            if (now_complete == was_complete) quest_menu_refresh_ = true;
-            continue;
-        }
-        quest_menu_refresh_ = true;
-        entry.complete_announced = true;
-        if (entry.definition != nullptr) finished.push_back(entry.definition);
-    }
-    return finished;
-}
-
-// `CQuestManager::questEventUpdate(3 or 4, 0, 0)` (`CQuest`'s):
-// `setQuestAccepted(true)` sends 3,
-// `completeQuest` 4. Each held quest not complete flags the names of its
-// lists now active (`CQuestManager::getQuestIsActive`) or done; the ones this completes are
-// queued for the banner.
-void QuestLog::broadcast_quest_event(int event, const std::string& completing) {
-    for (QuestEntry* held : held_entries_mutable()) {
-        QuestEntry& entry = *held;
-        if (entry.status != QuestStatus::Active || entry.definition == nullptr) continue;
-        if (entry.objectives_complete()) continue;
-        const bool accepted = event == 3;
-        const std::vector<std::string>& names = accepted
-                                                    ? entry.definition->complete_on_quest_accept
-                                                    : entry.definition->complete_on_quest_complete;
-        std::vector<uint8_t>& flags = accepted ? entry.accepted_named : entry.completed_named;
-        for (size_t i = 0; i < names.size() && i < flags.size(); ++i) {
-            if (flags[i] != 0) continue;
-            const bool met = accepted
-                                 ? quest_is_active(names[i])
-                                 : quest_complete(names[i]) && !same_name(names[i], completing);
-            if (met) flags[i] = 1;
-        }
-        if (!entry.objectives_complete() || entry.complete_announced) continue;
-        entry.complete_announced = true;
-        finished_.push_back(entry.definition);
-    }
-}
-
-// `CQuestManager::getQuestIsActive`: a quest
-// of that name on the player's list - here the held
-// entries and the quests given into the state alike.
-bool QuestLog::quest_is_active(const std::string& name) const {
-    return state_.status(name) == QuestStatus::Active;
-}
-
-// `CQuestManager::getQuestComplete`: the
-// completed map's flag, which `completeQuest` writes as "not
-// `REPEATABLE`" - a repeatable quest done is not complete to it.
-bool QuestLog::quest_complete(const std::string& name) const {
-    if (state_.status(name) != QuestStatus::Complete) return false;
-    const QuestDefinition* quest = book_ != nullptr ? book_->find(name) : nullptr;
-    return quest == nullptr || !quest->repeatable;
-}
-
-// PORT: what the log has queued for the renderer, taken.
-std::vector<const QuestDefinition*> QuestLog::take_finished() {
-    std::vector<const QuestDefinition*> out;
-    out.swap(finished_);
-    return out;
-}
-
-// PORT: what the log has queued for the renderer, taken.
-std::vector<QuestProgressText> QuestLog::take_progress_texts() {
-    std::vector<QuestProgressText> out;
-    out.swap(progress_texts_);
-    return out;
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::unit_defeated(QuestEventUnit& unit) {
-    return quest_event(1, unit, false);
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::item_picked_up(QuestEventUnit& unit) {
-    return quest_event(0, unit, false);
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::unit_interacted(QuestEventUnit& unit,
-                                                              bool by_player) {
-    return quest_event(2, unit, by_player);
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::item_dropped(QuestEventUnit& unit) {
-    return quest_event(5, unit, false);
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::unit_defeated(const std::string& unit_name,
-                                                            const QuestUnitTag& tag) {
-    QuestEventUnit unit;
-    unit.name = unit_name;
-    unit.tag = tag;
-    return unit_defeated(unit);
-}
-
-// PORT: a quest event of this kind handed to `quest_event`, which holds the rule.
-std::vector<const QuestDefinition*> QuestLog::item_picked_up(const std::string& item_name,
-                                                             const QuestUnitTag& tag) {
-    QuestEventUnit unit;
-    unit.name = item_name;
-    unit.tag = tag;
-    return item_picked_up(unit);
 }
 
 // PORT: the active quests the journal lists (`shows_in_journal`).

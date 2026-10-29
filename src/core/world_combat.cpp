@@ -124,6 +124,49 @@ size_t add_unit_files(World& m, tl::formats::AdmFile& file, bool all_groups, siz
     return added;
 }
 
+/// The mods' own unit files in the unit list: the PC rebuilds its table with them
+/// (`masterresourceunits.dat`, which a mod's install notes say to delete). A unit the list
+/// already has, by GUID, is the mod's file in its place; one it lacks is added. Returns the
+/// units added; `items` counts the items among them.
+size_t add_mod_unit_files(World& m, tl::formats::AdmFile& file, size_t& items) {
+    static const char* const kDirs[] = {"media/units/items/", "media/units/monsters/",
+                                        "media/units/players/", "media/units/props/"};
+    size_t added = 0;
+    for (uint32_t group = 0; group < std::size(kDirs); ++group) {
+        const auto resource_group = static_cast<tl::core::ResourceGroup>(group);
+        for (const std::string& unit_path : m.data_paths_under(kDirs[group])) {
+            if (!m.mod_has_file(unit_path)) continue;
+            std::string dat = unit_path.substr(
+                0, unit_path.size() - (ends_with_lower(unit_path, ".adm") ? 4 : 0));
+            tl::formats::AdmFile unit_file =
+                m.read_unit_file(tl::core::upper_ascii(dat), std::string(), &resource_group);
+            if (!unit_file.ok || unit_file.root.name != "UNIT" ||
+                unit_file.root.bool_or("DONTCREATE", false)) {
+                continue;
+            }
+            const std::string name = unit_file.root.string_or("NAME", "");
+            const std::string guid = unit_file.root.string_or("UNIT_GUID", "");
+            if (name.empty() || guid.empty()) continue;
+            const int64_t value = std::strtoll(guid.c_str(), nullptr, 10);
+            tl::formats::AdmSection merged = std::move(unit_file.root);
+            merged.name = kUnitSections[group];
+            if (m.master_unit_by_guid.count(value) != 0) {
+                for (tl::formats::AdmSection& listed : file.root.children) {
+                    if (listed.name == merged.name && listed.string_or("UNIT_GUID", "") == guid)
+                        listed = merged;
+                }
+                continue;
+            }
+            m.master_unit_by_guid[value] = name;
+            m.master_guid_by_unit[tl::core::upper_ascii(name)] = value;
+            file.root.children.push_back(std::move(merged));
+            ++added;
+            if (group == 0) ++items;
+        }
+    }
+    return added;
+}
+
 /// The table's and the scanned files' names and GUIDs, filed as the console's loader does:
 /// a later record replaces an earlier one of the same GUID or name
 /// (`CUnitResourceList::addNewItem`, only logs one).
@@ -139,60 +182,6 @@ void file_unit_names(World& m, const tl::formats::AdmFile& file) {
 }
 
 }  // namespace
-
-/// Read the three playable classes out of `media/units/players/`, in the order
-/// `charactercreate.layout` authors its radio buttons; a missing class file is left out.
-// INVENTED: the three classes the creation screen offers, by file and icon, in
-// this order; the console's creation menu has its own list, not transcribed.
-void World::load_player_classes() {
-    if (!player_classes.empty()) return;
-
-    // Each entry: the unit file and which of the layout's three icons goes with it.
-    struct Known {
-        const char* file;
-        const char* icon;
-    };
-    static const Known kKnown[] = {
-        {"media/units/players/Destroyer/DESTROYER.DAT.adm", "destroyericon"},
-        {"media/units/players/Vanquisher/VANQUISHER.DAT.adm", "vanquishericon"},
-        {"media/units/players/Alchemist/ALCHEMIST.DAT.adm", "alchemisticon"},
-    };
-
-    for (const Known& known : kKnown) {
-        const std::string path = resolve_archive_path(known.file);
-        if (path.empty()) {
-            TL_LOG_WARN("no '%s' in the archive; that class is not offered", known.file);
-            continue;
-        }
-        const std::vector<uint8_t> bytes = read_resource(path);
-        if (bytes.empty()) continue;
-        const tl::formats::AdmFile file = parse_data_group(bytes.data(), bytes.size());
-        if (!file.ok) {
-            TL_LOG_WARN("could not parse '%s': %s", path.c_str(), file.error.c_str());
-            continue;
-        }
-
-        tl::core::PlayerClass entry;
-        entry.name = file.string_or("NAME", "");
-        entry.display_name = tl::core::strip_markup(file.string_or("DISPLAYNAME", entry.name));
-        entry.description = tl::core::strip_markup(file.string_or("DESCRIPTION", ""));
-        entry.icon = known.icon;
-        // `RESOURCEDIRECTORY` plus `MESHFILE`, not the basename (the Destroyer's is
-        // `player.MESH`).
-        const std::string dir = file.string_or("RESOURCEDIRECTORY", "");
-        const std::string mesh = file.string_or("MESHFILE", "");
-        if (!dir.empty() && !mesh.empty()) {
-            entry.mesh = resolve_archive_path(dir + mesh + ".MESH");
-        }
-        if (entry.name.empty() || entry.mesh.empty()) {
-            TL_LOG_WARN("'%s' names no unit or no mesh; that class is not offered", path.c_str());
-            continue;
-        }
-        TL_LOG_INFO("class: %s, %s", entry.display_name.c_str(), entry.mesh.c_str());
-        player_classes.push_back(std::move(entry));
-    }
-    TL_LOG_INFO("%zu playable class(es)", player_classes.size());
-}
 
 /// Load the authored stat curves (`media/graphs/stats/`, `[POINT] X, Y` lists) that turn
 /// a unit's percentages into numbers.
@@ -1034,6 +1023,11 @@ void World::ensure_item_index() {
     const size_t loose_units =
         from_list ? 0 : add_unit_files(*this, file, !from_table, loose_items);
     if (!from_list) file_unit_names(*this, file);
+    size_t mod_items = 0;
+    const size_t mod_units = add_mod_unit_files(*this, file, mod_items);
+    if (mod_units != 0) {
+        TL_LOG_INFO("unit index: %zu unit(s) from the mods (%zu item(s))", mod_units, mod_items);
+    }
 
     // An item's own `[EFFECT]` blocks resolve their `TYPE` against the effect list.
     ensure_effect_data();
@@ -1257,8 +1251,11 @@ void World::hurt_unit(int64_t node, const std::string& unit, float amount, bool 
     tl::core::LevelScript* owner = owner_hint != nullptr ? owner_hint : script_owning(node);
     if (owner != nullptr) {
         std::vector<tl::core::ScriptEvent> events;
+        // A death here runs `kill_unit` next, which plays its sample after the procs.
+        owner->set_defer_death_sample(true);
         const bool killed = owner->damage_unit(node, amount, attacker, quest_log.state(), events,
                                                nullptr, blow, struck);
+        owner->set_defer_death_sample(false);
         float hp = 0.0f;
         float max = 0.0f;
         owner->unit_health(node, hp, max);
@@ -1339,6 +1336,7 @@ void World::drop_death_loot(int64_t node, const std::string& unit, int64_t attac
 tl::core::LootPlacement World::loot_placement_at(const ogre::Vector3& at) {
     tl::core::LootPlacement place;
     place.at = tl::core::Vec3{at.x, at.y, at.z};
+    place.gold_sounds = gold_sounds();
     place.map_passable = [this](const tl::core::Vec3& p) {
         return !passability.ready() || passability.map_passable(p);
     };
@@ -1410,29 +1408,6 @@ void World::drop_death_loot_at(const ogre::Vector3& at, int64_t node, const std:
         drop.items.size(), drop.gold.size(), gold,
         dying.treasure.spawn_class != nullptr ? stats.treasure_class.c_str() : "BARREL_TREASURE",
         names.c_str());
-}
-
-void World::breakable_avoidance(BreakableWorld& b, bool add) {
-    // `CBaseUnit::addToAvoidanceMap` / `removeFromAvoidanceMap`:
-    // in a level, `OCCUPIESNODES`, not
-    // takeable (ISA 0x1f) nor interactable (0x20); adding also wants `COLLIDEABLE` and
-    // the model live. A breakable takes a circle of `+0x194 + 0.4`.
-    if (!passability.ready() || b.node == nullptr) return;
-    if (add) {
-        if (b.state.on_grid || !b.state.collideable || !b.state.collision_live) return;
-    } else if (!b.state.on_grid) {
-        return;
-    }
-    const float r = tl::core::kBreakableRadius + 0.4f;
-    const ogre::Vector3 p = view_position(b.node);
-    const tl::core::Vec3 low{p.x + -r, p.y + 0.0f, p.z + -r};
-    const tl::core::Vec3 high{p.x + r, p.y + 0.0f, p.z + r};
-    if (add) {
-        passability.increment_map_passability(low, high, r);
-    } else {
-        passability.decrement_map_passability(low, high, r);
-    }
-    b.state.on_grid = add;
 }
 
 void World::load_player_stats() {
@@ -2231,9 +2206,6 @@ void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t 
         quest_event(quest_log.unit_defeated(dead));
     }
 
-    const bool fell = !fall || view_unit_falls(node);
-    TL_LOG_INFO("combat: %s dies%s", unit.c_str(),
-                fell ? "" : " (no death animation beside its mesh)");
     if (!events.empty()) apply_script_events(events, scripted_nodes);
 
     index_unit(unit);
@@ -2246,7 +2218,24 @@ void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t 
         const ProcTarget by = proc_target_attacker(attacker);
         unit_execute_procs(*owner, node, tl::core::kEffectCastSkillOnDeath, by.machine, by.node,
                            by.any() || attacker == 0);
+        std::vector<tl::core::ScriptEvent> sample;
+        owner->play_death_sample(node, sample);
+        if (NodeMap* nodes = nodes_of(owner); nodes != nullptr && !sample.empty()) {
+            apply_script_events(sample, *nodes);
+        }
     }
+    // a death with no blow to fly from and no burst:
+    // `findRandomAnimation("DIE")` blended in.
+    std::string animation;
+    if (fall) {
+        if (const tl::core::LevelScript* owner = script_owning(node)) {
+            animation = owner->death_animation(node);
+        }
+    }
+    const bool fell = !fall || view_unit_falls(node, animation);
+    TL_LOG_INFO("combat: %s dies%s%s%s", unit.c_str(),
+                fell ? "" : " (no death animation beside its mesh)",
+                animation.empty() ? "" : ", playing ", animation.c_str());
 
     // The treasure at the end of `CCharacter::die`,
     // after `fireSkillsOnDeath` and before `applyDamage` pays the experience.
@@ -2289,92 +2278,6 @@ void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t 
         update_menu();
         refresh_game_hud();
     }
-}
-
-bool World::place_breakable(const std::string& unit, const ogre::Vector3& at,
-                            const ogre::Quaternion& facing, int64_t id, const ogre::Vector3* settle,
-                            const float* drawn_scale) {
-    if (!view_ready()) return false;
-    ensure_prop_index();
-    const auto found = prop_files.find(lowered(unit));
-    if (found == prop_files.end()) return false;
-    // The unit as the list holds it: the file over its `BASEFILE`
-    // (`CUnitResourceList::parseChildFile`).
-    const tl::formats::AdmFile file = read_unit_file(found->second);
-    if (!file.ok) return false;
-
-    BreakableWorld b;
-    b.unit = unit;
-    b.id = id;
-    b.data = tl::core::read_breakable(file);
-    // `CBaseUnit::unitInit`, via `CItem::unitInit`: the
-    // scale, drawn before `populate` turns it.
-    const float scale = drawn_scale != nullptr
-                            ? *drawn_scale
-                            : tl::core::breakable_scale(b.data, tl::core::volatile_random());
-
-    // `createGenericModel` for the mesh; nothing is made without one.
-    std::string mesh = b.data.mesh.empty() ? std::string() : resolve_archive_path(b.data.mesh);
-    if (mesh.empty()) {
-        TL_LOG_WARN("breakable '%s': no mesh '%s'", unit.c_str(), b.data.mesh.c_str());
-        return false;
-    }
-    const size_t dot = mesh.find_last_of('.');
-    if (dot != std::string::npos) mesh.resize(dot);
-    tl::core::ItemStats model;
-    model.mesh = mesh;
-    model.display_name = unit;
-    b.entity = create_item_entity(model);
-    if (b.entity == nullptr) return false;
-    view_cast_shadows(b.entity, b.data.shadows);
-    tl::core::breakable_unit_init(b.state, b.data);
-
-    // `CLevel::addItem`: the position, then
-    // `setActiveInLevel(true)`: `snapToGround`, then
-    // `addToAvoidanceMap` (vtable +0x270). No toss: a `CBreakable` is not a `CEquipment`.
-    const ogre::Vector3 ground = snap_item_to_ground(at);
-    b.node = view_place_entity(b.entity, ground, facing);
-    view_set_scale(b.node, scale);
-    // `addItem` sets the opacity to 1 (`updateOpacity(0, true)`); `+0x199` stays false
-    // until the first `CItem::update` measures it.
-    b.presence.opacity = 1.0f;
-    {
-        tl::core::ItemPresenceChange change;
-        tl::core::update_item_opacity(b.presence, 0.0f, true, change);
-        draw_item_presence(b.node, b.presence, change);
-    }
-    breakable_avoidance(b, true);
-    // `spawnUnitByIndex` then moves it; the map grid keeps the cells it was
-    // registered on, as the original's does.
-    if (settle != nullptr) view_set_position(b.node, *settle);
-
-    // `CMasterResourceManager::addCollisionModel(COLLISIONFILE)`, the model the
-    // unit carries with it, in place where it ends up.
-    const std::string collider = resolve_archive_path(b.data.collision);
-    if (!collider.empty()) {
-        view_add_node_collision(b.node, collider, id);
-        collision.build();
-        b.has_collision = collision.has_group(id);
-        collision.set_group_blocks(id, b.data.block);
-    }
-    // As `unitInit` left it (live when `COLLIDEABLE`) until the first
-    // `CBreakable::update` asks the range.
-    if (b.has_collision) collision.set_group_enabled(id, b.state.collision_live);
-
-    const ogre::Vector3 where = view_position(b.node);
-    breakables.push_back(std::move(b));
-    tl::core::Vec3 box_low{0.0f, 0.0f, 0.0f};
-    tl::core::Vec3 box_high{0.0f, 0.0f, 0.0f};
-    const bool boxed =
-        breakables.back().has_collision && collision.group_bounds(id, box_low, box_high);
-    TL_LOG_INFO("breakable: %s at (%.2f, %.2f, %.2f)%s, collision %.2f x %.2f x %.2f", unit.c_str(),
-                static_cast<double>(where.x), static_cast<double>(where.y),
-                static_cast<double>(where.z),
-                breakables.back().has_collision ? "" : ", no collision model",
-                static_cast<double>(boxed ? box_high.x - box_low.x : 0.0f),
-                static_cast<double>(boxed ? box_high.y - box_low.y : 0.0f),
-                static_cast<double>(boxed ? box_high.z - box_low.z : 0.0f));
-    return true;
 }
 
 }  // namespace tl::core

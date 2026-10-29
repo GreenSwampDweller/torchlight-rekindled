@@ -290,13 +290,6 @@ World::CombinerState* World::combiner_named(const std::string& unit) {
     return nullptr;
 }
 
-int World::breakable_index(int64_t id) const {
-    for (size_t i = 0; i < breakables.size(); ++i) {
-        if (breakables[i].id == id && breakables[i].node != nullptr) return static_cast<int>(i);
-    }
-    return -1;
-}
-
 void World::clear_weapon_element() {
     destroy_particle_holders(weapon_element_particles);
     weapon_element_particles.clear();
@@ -587,110 +580,6 @@ void World::cast_prop_trap(const std::string& unit, const std::string& name, uin
         play_voice(tl::core::SoundSlot::VoiceTrapSprung, 1.0f);
         count_journal(tl::core::JournalStatistic::TrapsSprung);
     }
-}
-
-bool World::break_breakable(size_t index, bool by_player) {
-    if (index >= breakables.size() || breakables[index].node == nullptr) return false;
-    const ogre::Vector3 position = view_position(breakables[index].node);
-    const ogre::Quaternion facing = view_orientation(breakables[index].node);
-    const ogre::Vector3 up = facing * ogre::Vector3::UNIT_Y;
-    const bool have_breaker = by_player && subject_node != nullptr;
-    const ogre::Vector3 breaker_at = have_breaker ? view_position(subject_node) : position;
-    const tl::core::Vec3 breaker{breaker_at.x, breaker_at.y, breaker_at.z};
-
-    // `CBreakable::interact(CCharacter*)`.
-    BreakableWorld& b = breakables[index];
-    const tl::core::BreakableInteraction out = tl::core::breakable_interact(
-        b.state, /*in_level=*/true, {position.x, position.y, position.z}, {up.x, up.y, up.z},
-        have_breaker ? &breaker : nullptr, static_cast<uint32_t>(b.data.skills.size()),
-        tl::core::game_random());
-    if (!out.broke) return false;
-    // `+0x1f0` cleared, then `removeFromAvoidanceMap` (vtable +0x268).
-    breakable_avoidance(b, false);
-
-    // The skill, cast with the breakable's own collision out and put back.
-    const std::string unit = b.unit;
-    const int64_t id = b.id;
-    const bool has_collision = b.has_collision;
-    const tl::core::BreakableData data = b.data;
-    if (out.skill >= 0 && static_cast<size_t>(out.skill) < data.skills.size()) {
-        if (has_collision) collision.set_group_enabled(id, false);
-        const std::string& name = data.skills[static_cast<size_t>(out.skill)];
-        cast_prop_trap(unit, name, data.skill_levels[static_cast<size_t>(out.skill)],
-                       ogre::Vector3(out.skill_at.x, out.skill_at.y, out.skill_at.z), facing,
-                       have_breaker);
-        if (has_collision) collision.set_group_enabled(id, true);
-    }
-
-    // The particle, `+0.1` along the up vector, started.
-    if (!data.interact_particle.empty()) {
-        std::string particle = preloaded_particle_file(data.interact_particle);
-        if (particle.empty()) particle = data.interact_particle;
-        std::vector<Ogre::SceneNode*> holders = place_particle_layout(
-            particle, ogre::Vector3(out.particle_at.x, out.particle_at.y, out.particle_at.z),
-            ogre::Quaternion::IDENTITY, nullptr);
-        if (holders.empty()) {
-            TL_LOG_WARN("breakable: %s has no particle '%s'", unit.c_str(),
-                        data.interact_particle.c_str());
-        } else {
-            transient_particles.push_back(TransientParticles{std::move(holders), 0.0f});
-        }
-    }
-    // Sample 0 of its own bank, `INTERACT_SOUND`.
-    play_sound(data.interact_sound, position);
-
-    // `CLevel::rollTreasure(breaker, null, position)`.
-    if (!loot_tables_built) {
-        loot_tables_built = true;
-        build_spawn_context(loot_tables, /*items_by_type=*/true);
-    }
-    const tl::core::SpawnContext& spawn_context = loot_tables.context;
-    tl::core::LootCharacter breaker_loot;
-    const tl::core::LootCharacter* broken_by =
-        loot_character(have_breaker ? 0 : tl::core::LevelScript::kNoAttacker, breaker_loot);
-    const tl::core::LootPlacement place = loot_placement_at(position);
-    const tl::core::SpawnClass* barrel =
-        spawn_context.get_spawn_class ? spawn_context.get_spawn_class("BARREL_TREASURE") : nullptr;
-    const tl::core::LootDrop drop = tl::core::roll_treasure(
-        barrel, level_monster_level, broken_by, nullptr, tl::core::volatile_random(),
-        tl::core::game_random(), spawn_context, loot_unit_maker(), &place);
-    int gold = 0;
-    for (int pile : drop.gold) gold += pile;
-
-    // `setVisible(false, true)`, the collision model out, `+0x218`; found again, as the
-    // skill's layout may have grown `breakables`.
-    for (BreakableWorld& again : breakables) {
-        if (again.id != id) continue;
-        tl::core::ItemPresenceChange change;
-        again.presence.used = again.state.used;
-        tl::core::set_item_visible_now(again.presence, false, change);
-        draw_item_presence(again.node, again.presence, change);
-        if (again.has_collision) collision.set_group_enabled(id, again.state.collision_live);
-    }
-    TL_LOG_INFO("breakable: %s broken%s, %zu item(s) and %zu pile(s) of gold (%d)", unit.c_str(),
-                have_breaker ? " by the player" : "", drop.items.size(), drop.gold.size(), gold);
-
-    // `CItem::interact`: `questEventFire(2)` (the player
-    // only), then, for a character, unit state 2 to its spawner.
-    {
-        tl::core::QuestEventUnit broken =
-            quest_event_unit(unit, stats_for_unit(unit).unittype, position, {});
-        quest_event(quest_log.unit_interacted(broken, have_breaker));
-    }
-    if (have_breaker) spawned_item_state(id, 2);
-    return true;
-}
-
-void World::remove_breakable(BreakableWorld& b) {
-    // `CCharacter::notifyOfDeletion(CItem*)`: a character whose
-    // target item it was lets it go.
-    if (player_skill_item == b.id) player_skill_item = 0;
-    breakable_avoidance(b, false);
-    if (b.has_collision) collision.set_group_enabled(b.id, false);
-    if (b.node != nullptr) view_destroy_node(b.node);
-    if (b.entity != nullptr) view_destroy_entity(b.entity);
-    b.node = nullptr;
-    b.entity = nullptr;
 }
 
 /// Take life off the character.
@@ -999,6 +888,36 @@ ogre::Vector3 World::snap_item_to_ground(const ogre::Vector3& at) {
         },
         tl::core::volatile_random());
     return ogre::Vector3(rest.x, rest.y, rest.z);
+}
+
+ogre::Vector3 World::character_to_ground(const ogre::Vector3& at) {
+    // CCharacter::dropToGround, as CLevel::addCharacter calls
+    // it with 4.0.
+    const tl::core::Vec3 ground = tl::core::drop_character_to_ground(
+        {at.x, at.y, at.z}, 4.0f,
+        [&](const tl::core::Vec3& from, const tl::core::Vec3& to, tl::core::Vec3& point,
+            uint32_t& material) {
+            tl::core::CollisionHit hit;
+            const bool found = collision.ray_collision(from, to, false, hit);
+            TL_LOG_DEBUG("  drop ray (%a, %a) -> %d y %a material %u", static_cast<double>(from.x),
+                         static_cast<double>(from.z), found ? 1 : 0,
+                         found ? static_cast<double>(hit.point.y) : 0.0, found ? hit.material : 0u);
+            if (!found) return false;
+            point = hit.point;
+            material = hit.material;
+            return true;
+        },
+        [&](const tl::core::Vec3& p) {
+            return !passability.ready() ||
+                   (passability.map_passable(p) && passability.position_passable(p));
+        },
+        tl::core::volatile_random());
+    return ogre::Vector3(ground.x, ground.y, ground.z);
+}
+
+tl::core::GoldPileSounds World::gold_sounds() {
+    ensure_sound_index();
+    return tl::core::GoldPileSounds{&sound_info, &tl::core::game_random()};
 }
 
 void World::place_gold(const tl::core::GoldPile& pile, const ogre::Vector3& placed,

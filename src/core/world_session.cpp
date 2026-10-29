@@ -681,7 +681,7 @@ void World::restore_level_state() {
             // position, the saved orientation over the drawn turn, name,
             // amount.
             const tl::core::GoldPile pile =
-                tl::core::make_gold_pile(item.value, tl::core::volatile_random());
+                tl::core::make_gold_pile(item.value, tl::core::volatile_random(), gold_sounds());
             const size_t before = dropped_items.size();
             place_gold(pile, ogre::Vector3(item.position.x, item.position.y, item.position.z),
                        nullptr, /*drop_sound=*/false);

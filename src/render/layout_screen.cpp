@@ -424,9 +424,45 @@ bool LayoutScreen::prepare(const std::string& group, unsigned width, unsigned he
     return true;
 }
 
+// PORT: a PC window carried onto a console screen (the PC's `.layout` read as authored).
+tl::formats::GuiWindow pc_layout_window(const std::string& group, const std::string& layout,
+                                        const std::string& name) {
+    tl::formats::GuiWindow out;
+    std::vector<uint8_t> bytes;
+    if (!read_menu_resource(layout, group, bytes) || bytes.empty()) return out;
+    const tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
+    const tl::formats::GuiWindow* window = parsed.ok ? parsed.find(name) : nullptr;
+    tl::formats::UVector2 at, size;
+    if (window == nullptr ||
+        !tl::formats::parse_uvector2(window->property("UnifiedPosition", ""), at) ||
+        !tl::formats::parse_uvector2(window->property("UnifiedSize", ""), size)) {
+        return out;
+    }
+    out.type = "ceguiWidget/StaticText";
+    out.name = name;
+    // A property authored twice (`Text` "1", then the words) is its last.
+    for (const auto& [key, value] : window->properties) {
+        if (key != "UnifiedPosition" && key != "UnifiedSize")
+            out.properties.emplace_back(key, value);
+    }
+    std::reverse(out.properties.begin(), out.properties.end());
+    char area[160];
+    std::snprintf(area, sizeof area, "{{%g,%g},{%g,%g},{%g,%g},{%g,%g}}",
+                  static_cast<double>(at.x.scale), static_cast<double>(at.x.offset),
+                  static_cast<double>(at.y.scale), static_cast<double>(at.y.offset),
+                  static_cast<double>(at.x.scale + size.x.scale),
+                  static_cast<double>(at.x.offset + size.x.offset),
+                  static_cast<double>(at.y.scale + size.y.scale),
+                  static_cast<double>(at.y.offset + size.y.offset));
+    out.properties.emplace_back("UnifiedAreaRect", area);
+    out.properties.emplace_back("Visible", "False");
+    return out;
+}
+
 bool LayoutScreen::create_export(const std::string& group, unsigned width, unsigned height,
                                  const std::string& layout_path, const std::string& tag,
-                                 unsigned short z_order) {
+                                 unsigned short z_order,
+                                 const std::vector<std::string>& pc_windows) {
     if (!prepare(group, width, height, tag)) return false;
     std::vector<uint8_t> bytes;
     if (!read_menu_resource(layout_path, group, bytes) || bytes.empty()) {
@@ -437,11 +473,18 @@ bool LayoutScreen::create_export(const std::string& group, unsigned width, unsig
         destroy();
         return false;
     }
-    const tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
+    tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
     if (!parsed.ok) {
         TL_LOG_WARN("%s: %s: %s", tag_.c_str(), layout_path.c_str(), parsed.error.c_str());
         destroy();
         return false;
+    }
+    const size_t dot = layout_path.rfind(".uilayout");
+    for (const std::string& name : pc_windows) {
+        if (dot == std::string::npos) break;
+        tl::formats::GuiWindow window =
+            pc_layout_window(group, layout_path.substr(0, dot) + ".layout", name);
+        if (!window.type.empty()) parsed.root.children.push_back(std::move(window));
     }
     std::vector<tl::formats::UiObject> objects;
     objects.push_back(export_object(parsed.root));
@@ -583,6 +626,12 @@ void LayoutScreen::show() {
     visible_ = true;
     overlay_->show();
     text_overlay_->show();
+}
+
+void LayoutScreen::set_z_order(unsigned short z_order) {
+    if (overlay_ != nullptr) overlay_->setZOrder(z_order);
+    if (text_overlay_ != nullptr)
+        text_overlay_->setZOrder(static_cast<unsigned short>(z_order + 2));
 }
 
 void LayoutScreen::hide() {

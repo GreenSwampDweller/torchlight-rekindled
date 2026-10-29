@@ -96,7 +96,8 @@ void PassabilityMap::clear_passability_data() {
 }
 
 void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* sections,
-                          const std::vector<Box>* recalculate) {
+                          const std::vector<Box>* recalculate, const std::vector<Box>* held,
+                          const std::function<void()>& add_held) {
     // CLevel::bakeCollision, from
     // "Passability Calculation Time" back to the grid's allocation.
     clear();
@@ -137,6 +138,7 @@ void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* s
     if (sections == nullptr) {
         // No chunks (`CLevel+0x1e8` empty): the whole list at once.
         passes_.push_back(calculate(world, low, high));
+        if (after_pass) after_pass(*this, passes_.back());
     } else {
         // after each room's pass its four edges, 4 wide, join the
         // boxes cast again: west, south, east, north.
@@ -146,6 +148,7 @@ void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* s
             // A null box - a room layout with no collision-enabled piece - is skipped.
             if (!box.finite) continue;
             passes_.push_back(calculate(world, box.low, box.high, &box.cached));
+            if (after_pass) after_pass(*this, passes_.back());
             const Vec3& lo = box.low;
             const Vec3& hi = box.high;
             const float dx = hi.x - lo.x;
@@ -158,10 +161,17 @@ void PassabilityMap::bake(const CollisionWorld& world, const std::vector<Box>* s
             };
             for (const Box& strip : strips) again.push_back(strip);
         }
+        // the held pieces join the collision, their boxes after the
+        // strips.
+        if (held != nullptr) {
+            if (add_held) add_held();
+            for (const Box& box : *held) again.push_back(box);
+        }
         // each cast again from open, without a `.pth`.
         for (const Box& box : again) {
             if (!box.finite) continue;
             passes_.push_back(calculate(world, box.low, box.high, nullptr, true));
+            if (after_pass) after_pass(*this, passes_.back());
         }
     }
 
@@ -224,6 +234,8 @@ PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, cons
                                                bool zero_first) {
     // CLevel::calculatePassability
     Pass pass;
+    pass.low = low;
+    pass.high = high;
     if (!ready()) return pass;
 
     // times 2.5 as every cell index is.

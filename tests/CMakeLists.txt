@@ -7,6 +7,7 @@ add_executable(tl_tests
     test_main.cpp
     game_data.cpp
     byte_reader_test.cpp
+    ogre_skeleton_test.cpp
     asset_path_test.cpp
     cmp_test.cpp
     uilayout_test.cpp
@@ -23,6 +24,7 @@ add_executable(tl_tests
     quest_test.cpp
     markup_runs_test.cpp
     run_config_test.cpp
+    mods_test.cpp
     sound_data_test.cpp
     layout_text_test.cpp
     output_incrementor_test.cpp

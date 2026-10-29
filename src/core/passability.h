@@ -12,6 +12,7 @@
 #include "core/collision.h"
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace tl::core {
@@ -47,6 +48,9 @@ public:
         uint32_t ray_casts = 0;
         /// How many cells this call added to `+0x58`.
         uint32_t passable = 0;
+        /// The box it was given.
+        Vec3 low;
+        Vec3 high;
     };
 
     /// The passability half of `CLevel::bakeCollision`: one
@@ -54,8 +58,11 @@ public:
     /// finite box in order. Cells no pass reached end blocked.
     /// `recalculate`: the room pieces' boxes `bakeCollision` casts again after the rooms' passes
     /// (`CLevel +0xB0`), before each room's four edge strips.
+    /// `held`: with pieces held back, `add_held` puts their faces into `world` once the rooms'
+    /// passes are done, and their boxes are cast again after the strips.
     void bake(const CollisionWorld& world, const std::vector<Box>* sections,
-              const std::vector<Box>* recalculate = nullptr);
+              const std::vector<Box>* recalculate = nullptr, const std::vector<Box>* held = nullptr,
+              const std::function<void()>& add_held = {});
 
     /// `CLevel::calculatePassability` over
     /// the box `low`..`high`.
@@ -150,6 +157,8 @@ public:
 
     // PORT: a test copies a level's grids in.
     friend struct PassabilityMapProbe;
+    /// PORT: called after each pass of `bake`, for a check to read the grid between passes.
+    std::function<void(const PassabilityMap&, const Pass&)> after_pass;
 
 private:
     /// `increment`/`decrementMapPassability` and `...ObjectPassability`.

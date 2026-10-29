@@ -115,6 +115,27 @@ LevelScript::UnitRef LevelScript::resolve(int64_t node) {
     return {this, node};
 }
 
+const SkillDef* LevelScript::effect_skill(const Effect& effect) const {
+    if (!effect_teaches_skill(effect.type) || !unit_skills_.skill_files ||
+        !unit_skills_.skill_def || !unit_skills_.skill_files(effect.name)) {
+        return nullptr;
+    }
+    return unit_skills_.skill_def(upper(effect.name));
+}
+
+void LevelScript::roll_own_effects(std::vector<Effect>& effects, EffectRolls& rolls,
+                                   SkillConstruction& with) const {
+    const bool constructs = has_unit_effect_tables_ && unit_effect_tables_.types != nullptr;
+    for (Effect& effect : effects) {
+        rolls.roll(effect);
+        // `CEffectManager::createEffect` activates each as it is made: one that
+        // teaches a skill makes it there (`CBaseUnit::activateEffect` ->
+        // `addSkillByName` -> `CSkill::CSkill`), its effects rolled and event files loaded.
+        if (!constructs) continue;
+        if (const SkillDef* def = effect_skill(effect)) roll_skill_construction(*def, with);
+    }
+}
+
 // `CBaseUnit::unitInit`, the scale, then
 // `CCharacter::unitInit` and its
 // `setLevel(LEVEL, true)`.
@@ -138,23 +159,22 @@ LevelScript::UnitCreation LevelScript::roll_unit_creation(const std::string& uni
     rolls.rng = &volatile_random();
     rolls.owner.present = true;
     rolls.owner.level = static_cast<uint32_t>(fallback);
-    if (graphs_ != nullptr) {
-        for (Effect& effect : made.own_effects) rolls.roll(effect);
-    }
+    const bool constructs =
+        has_unit_effect_tables_ && graphs_ != nullptr && unit_effect_tables_.types != nullptr;
+    SkillConstruction with;
+    with.types = unit_effect_tables_.types;
+    with.unit_types = unit_types_;
+    with.affixes = affix_book_;
+    with.rolls.graphs = graphs_;
+    with.rolls.rng = &volatile_random();
+    with.game_rng = &game_random();
+    with.layout_adds_sample = unit_skills_.layout_adds_sample;
+    with.load_event_file = unit_skills_.load_event_file;
+    if (graphs_ != nullptr) roll_own_effects(made.own_effects, rolls, with);
     // `unitInit` then gives its `[SKILL]`s, one `CSkillManager::addSkill`
     // each, whose effects roll as made (`roll_skill_construction`); only
     // while the game runs (`* +0x1404`).
-    if (unit_skills_.load && has_unit_effect_tables_ && graphs_ != nullptr &&
-        unit_effect_tables_.types != nullptr) {
-        SkillConstruction with;
-        with.types = unit_effect_tables_.types;
-        with.unit_types = unit_types_;
-        with.affixes = affix_book_;
-        with.rolls.graphs = graphs_;
-        with.rolls.rng = &volatile_random();
-        with.game_rng = &game_random();
-        with.layout_adds_sample = unit_skills_.layout_adds_sample;
-        with.load_event_file = unit_skills_.load_event_file;
+    if (unit_skills_.load && constructs) {
         for (const UnitSkill& block : unit_skills_.load(unit)) {
             if (block.known.def != nullptr) roll_skill_construction(*block.known.def, with);
         }
@@ -2199,79 +2219,6 @@ void LevelScript::attack_hit(int64_t id, QuestState& quests, std::vector<ScriptE
 // ---------------------------------------------------------------------------
 // Damage (`CCharacter::applyDamage`, `modifyHP`, `CMonster::reactToDamage`)
 // ---------------------------------------------------------------------------
-
-// `CCharacter::die` for a level unit: its path
-// and its place on the avoidance grid let go, the swing ended, then the Kill
-// event the renderer plays and `unit_killed`.
-void LevelScript::kill_character(Object& o, Character& c, QuestState& quests,
-                                 std::vector<ScriptEvent>& out, const KillingBlow* blow, bool burst,
-                                 bool by_player) {
-    stop_pathing(c);
-    avoidance_remove(c);
-    c.swing_left = 0.0f;
-    ScriptEvent e;
-    e.action = ScriptAction::Kill;
-    e.node_id = o.id;
-    e.name = o.name;
-    e.unit = o.unit;
-    if (blow != nullptr && blow->has_direction) {
-        e.has_direction = true;
-        e.direction = blow->direction;
-        e.force = blow->force;
-    }
-    e.burst = burst;
-    e.on = by_player;
-    out.push_back(e);
-    unit_killed(o.id, quests, out);
-}
-
-// `CCharacter::modifyHP` by `-HP`, then
-// `CCharacter::die` with no attacker, direction or force.
-void LevelScript::die_now(Object& o, Character& c, QuestState& quests,
-                          std::vector<ScriptEvent>& out) {
-    // `modifyHP(-HP)`, with `modifyHP`'s HP-threshold broadcast under the same
-    // gates as in `damage_unit`, then `die` with no attacker, direction or force.
-    const float before = c.combat.hp;
-    const float delta = -before;
-    if (delta < 0.0f && !o.spawned) {
-        std::vector<uint32_t> fired;
-        broadcast_unit_hp_events(static_cast<float>(c.combat.base_max_hp), before, c.min_hp, delta,
-                                 o.fire_all_hp_events, fired);
-        for (uint32_t ev : fired) {
-            broadcast(o.id, ev, quests, out);
-        }
-        if (0.0f < c.min_hp) c.min_hp = 0.0f;
-    }
-    kill_character(o, c, quests, out);
-}
-
-// A layout's `KILL PETS` on a unit: each of its pets `CCharacter::modifyHP`
-// by the master's `maxHP()`, then `die`.
-void LevelScript::kill_pets(Object& o, QuestState& quests, std::vector<ScriptEvent>& out) {
-    const Character* master = character(o.id);
-    if (master == nullptr) return;
-    // The master's list (`+0x648`), oldest first.
-    std::vector<UnitRef> list;
-    for (LevelScript* machine : level_machines()) {
-        for (int64_t id : machine->pets_of(this, o.id)) list.push_back(UnitRef{machine, id});
-    }
-    // Each is `modifyHP(+maxHP())` - the master's maximum, not its own - then
-    // `die` (vtable +0x330, no attacker). Quirk kept: `die` takes the pet out
-    // of the very list being walked (`removePet` at its start) and the index
-    // still steps on, so every other pet is passed over and lives.
-    const float heal = static_cast<float>(max_hp(master->combat));
-    for (size_t i = 0; i < list.size(); ++i) {
-        LevelScript& runs = *list[i].machine;
-        Object* po = runs.find(list[i].node);
-        Character* pc = runs.character(list[i].node);
-        if (po != nullptr && pc != nullptr && runs.dead_.count(po->id) == 0) {
-            const float most = static_cast<float>(max_hp(pc->combat));
-            pc->combat.hp = std::min(pc->combat.hp + heal, most);
-            runs.die_now(*po, *pc, quests, sink_for(list[i].machine, out));
-        }
-        list.erase(list.begin() + static_cast<long>(i));
-    }
-}
 
 bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestState& quests,
                               std::vector<ScriptEvent>& out, LevelScript* attacker_machine,
