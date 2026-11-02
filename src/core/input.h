@@ -104,6 +104,25 @@ struct InputState {
     /// three a pad cannot point at.
     bool pet_stance = false;
 
+    /// DIVERGENCE (desktop keyboard): the PC's 'K' straight to the skills tab, which the
+    /// console reaches only by stepping the master menu's ring.
+    bool skills = false;
+
+    /// DIVERGENCE (desktop keyboard): '1'..'4', the hotbar's four skill slots as they sit on the
+    /// screen from left to right - Y, LT, RT, B.
+    bool hotbar_key[4] = {false, false, false, false};
+
+    /// DIVERGENCE (desktop mouse): the PC's pointer, which the console has not. `pointer` is
+    /// set while a mouse is over the game's window, at `pointer_x`, `pointer_y` (0 to 1 across
+    /// the window, from its top left). `click` is the left button held, `click_alt` the right.
+    /// The run loop turns them into the pad's own orders (render/renderer_mouse.cpp); the
+    /// wheel arrives as `zoom`, the right stick's.
+    bool pointer = false;
+    float pointer_x = 0.0f;
+    float pointer_y = 0.0f;
+    bool click = false;
+    bool click_alt = false;
+
     /// Magnitude of the stick, 0 to 1. Torchlight's units author both a
     /// WALKINGSPEED and a RUNNINGSPEED, so a partly-pushed stick has somewhere
     /// meaningful to sit.

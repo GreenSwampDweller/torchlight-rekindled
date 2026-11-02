@@ -46,78 +46,6 @@ static void copyBundledGameData(const std::string& documents, const std::string&
     }
 }
 
-static NSString* findModRootWithMedia(NSString* start) {
-    NSFileManager* files = [NSFileManager defaultManager];
-    NSMutableArray<NSDictionary<NSString*, id>*>* pending = [NSMutableArray arrayWithObject:@{
-        @"path": start, @"depth": @0
-    }];
-    while (pending.count > 0) {
-        NSDictionary<NSString*, id>* entry = pending.firstObject;
-        [pending removeObjectAtIndex:0];
-        NSString* directory = entry[@"path"];
-        NSUInteger depth = [entry[@"depth"] unsignedIntegerValue];
-        NSError* error = nil;
-        NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:directory error:&error];
-        if (names == nil) continue;
-
-        for (NSString* name in names) {
-            if ([name caseInsensitiveCompare:@"media"] != NSOrderedSame) continue;
-            NSString* media = [directory stringByAppendingPathComponent:name];
-            BOOL isDirectory = NO;
-            if ([files fileExistsAtPath:media isDirectory:&isDirectory] && isDirectory)
-                return directory;
-        }
-
-        // Mod archives are often wrapped in one or more named folders (for
-        // example, mods/Baklahs Unique gear/Baklah_Unique/media). Find the
-        // folder immediately above MEDIA instead of assuming the ZIP was
-        // extracted directly into mods/<name>/.
-        if (depth >= 6) continue;
-        for (NSString* name in names) {
-            if ([name hasPrefix:@"."] || [name caseInsensitiveCompare:@"__MACOSX"] == NSOrderedSame)
-                continue;
-            NSString* child = [directory stringByAppendingPathComponent:name];
-            BOOL isDirectory = NO;
-            if ([files fileExistsAtPath:child isDirectory:&isDirectory] && isDirectory) {
-                [pending addObject:@{@"path": child, @"depth": @(depth + 1)}];
-            }
-        }
-    }
-    return nil;
-}
-
-static std::vector<std::string> discoverModMediaFolders(const std::string& documents) {
-    @autoreleasepool {
-        NSFileManager* files = [NSFileManager defaultManager];
-        NSString* documentsRoot = [NSString stringWithUTF8String:documents.c_str()];
-        NSString* modsRoot = [documentsRoot stringByAppendingPathComponent:@"mods"];
-        NSError* error = nil;
-        [files createDirectoryAtPath:modsRoot withIntermediateDirectories:YES attributes:nil error:&error];
-        if (error != nil) {
-            NSLog(@"Torchlight: could not create mods folder: %@", error);
-            return {};
-        }
-
-        NSArray<NSString*>* names = [files contentsOfDirectoryAtPath:modsRoot error:&error];
-        if (names == nil) {
-            NSLog(@"Torchlight: could not list mods folder: %@", error);
-            return {};
-        }
-
-        std::vector<std::string> mediaFolders;
-        for (NSString* name in [names sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)]) {
-            NSString* modRoot = [modsRoot stringByAppendingPathComponent:name];
-            BOOL isDirectory = NO;
-            if (![files fileExistsAtPath:modRoot isDirectory:&isDirectory] || !isDirectory) continue;
-            NSString* mediaRoot = findModRootWithMedia(modRoot);
-            if (mediaRoot == nil) continue;
-            NSLog(@"Torchlight: found mod folder %@ at %@", name, mediaRoot);
-            mediaFolders.emplace_back(mediaRoot.fileSystemRepresentation);
-        }
-        if (mediaFolders.empty()) NSLog(@"Torchlight: no extracted mod folders found in %@", modsRoot);
-        return mediaFolders;
-    }
-}
 
 @interface TorchlightAppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow* window;
@@ -188,15 +116,11 @@ static std::vector<std::string> discoverModMediaFolders(const std::string& docum
             std::string(NSBundle.mainBundle.resourcePath.UTF8String) + "/GameData";
         std::thread([root, bundledGameData, width, height]() mutable {
             copyBundledGameData(root, bundledGameData);
-            const std::vector<std::string> modMediaFolders = discoverModMediaFolders(root);
             std::string media = std::string(NSBundle.mainBundle.resourcePath.UTF8String);
             std::vector<std::string> arguments = {
                 "torchlight", "--game-data", root, "--width", std::to_string(width),
                 "--height", std::to_string(height), "--ogre-media", media};
-            for (const std::string& modMedia : modMediaFolders) {
-                arguments.emplace_back("--mod-data");
-                arguments.emplace_back(modMedia);
-            }
+            // Mods are the Mods page's (core/mods.cpp), read from Documents/mods/.
             std::vector<char*> argv;
             argv.reserve(arguments.size());
             for (std::string& argument : arguments) argv.push_back(argument.data());

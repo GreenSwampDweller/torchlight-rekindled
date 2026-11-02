@@ -24,6 +24,10 @@ OUT = ROOT / "build-macos" / "package"
 APP_NAME = "Torchlight Rekindled.app"
 
 
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+              "LaunchServices.framework/Support/lsregister")
+
+
 def run(*args: str) -> None:
     subprocess.run(args, check=True)
 
@@ -94,6 +98,10 @@ def main() -> int:
     (macos / "torchlight").chmod(0o755)
     archive = out / "Torchlight-Rekindled-macOS-arm64.zip"
     archive.unlink(missing_ok=True)
+    # A bundle rebuilt in place keeps Finder's cached (missing) icon until Launch Services
+    # reads it again.
+    app.touch()
+    subprocess.run([LSREGISTER, "-f", str(app)], check=False)
     run("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive))
     print(f"App: {app}\nUploadable archive: {archive}")
     return 0

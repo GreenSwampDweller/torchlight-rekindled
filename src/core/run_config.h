@@ -32,12 +32,8 @@
 namespace tl::core {
 
 /// Whether this platform shows the mods page before the game (render/renderer_mods_menu.cpp):
-/// all but iOS, which takes `mods.dat` as it is.
-#if defined(TL_PLATFORM_SWITCH) || defined(TL_PLATFORM_ANDROID) || !defined(TL_PLATFORM_IOS)
+/// every one, iOS included (its touch pad walks the page as a pad does).
 inline constexpr bool kModsPage = true;
-#else
-inline constexpr bool kModsPage = false;
-#endif
 
 struct RunConfig {
     bool debug = false;

@@ -123,11 +123,12 @@ endif()
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE TL_CORE_SOURCES     CONFIGURE_DEPENDS src/core/*.cpp)
 file(GLOB_RECURSE TL_PLATFORM_SOURCES CONFIGURE_DEPENDS src/platform/${TL_PLATFORM}/*.cpp)
-if(APPLE AND NOT APPLE_IOS)
+if(TL_PLATFORM STREQUAL "macos")
     list(APPEND TL_PLATFORM_SOURCES
         src/platform/macos/platform_input.mm
         src/platform/desktop/platform_frame.cpp
-        src/platform/desktop/platform_log.cpp)
+        src/platform/desktop/platform_log.cpp
+        src/platform/desktop/platform_profiler.cpp)
 endif()
 
 add_library(tl_core STATIC ${TL_CORE_SOURCES} ${TL_PLATFORM_SOURCES})

@@ -647,6 +647,26 @@ void LayoutScreen::resize(unsigned width, unsigned height) {
     if (built_) layout();
 }
 
+bool LayoutScreen::pointed(const tl::core::InputState& in, const std::string& widget) const {
+    if (!visible_ || !in.pointer) return false;
+    const int index = find_widget(widget);
+    if (index < 0 || is_hidden(index)) return false;
+    const Node& node = nodes_[static_cast<size_t>(index)];
+    return in.pointer_x >= node.left && in.pointer_x < node.left + node.width &&
+           in.pointer_y >= node.top && in.pointer_y < node.top + node.height;
+}
+
+bool LayoutScreen::pointer_along(const tl::core::InputState& in, const std::string& widget,
+                                 float& along) const {
+    if (!visible_ || !in.pointer) return false;
+    const int index = find_widget(widget);
+    if (index < 0 || is_hidden(index)) return false;
+    const Node& node = nodes_[static_cast<size_t>(index)];
+    if (node.width <= 0.0f) return false;
+    along = std::clamp((in.pointer_x - node.left) / node.width, 0.0f, 1.0f);
+    return true;
+}
+
 int LayoutScreen::find_widget(const std::string& name) const {
     for (size_t i = 0; i < nodes_.size(); ++i) {
         if (nodes_[i].widget == name) return static_cast<int>(i);

@@ -134,6 +134,9 @@ public:
 
     void show();
     void hide();
+    /// DIVERGENCE (desktop mouse): the hotbar function slot (0..9) shown under the point
+    /// (0..1 of the screen), or -1.
+    int hotbar_slot_at(float x, float y) const;
     bool visible() const { return visible_; }
 
     void set_state(const HudState& state);
@@ -191,6 +194,8 @@ private:
         /// Which bank of skill slots this sits in: 0 under `SkillSet1`, 1 under
         /// `SkillSet2`, -1 elsewhere.
         int skill_set = -1;
+        /// DIVERGENCE (desktop keyboard): the number key a skill slot's button glyph is drawn as.
+        std::string key_label;
 
         /// Where it landed last layout, in viewport fractions.
         float left = 0.0f, top = 0.0f, width = 0.0f, height = 0.0f;

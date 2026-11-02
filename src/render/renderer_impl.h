@@ -842,9 +842,20 @@ struct Renderer::Impl : tl::core::World {
     /// `COptionsMenu` on the Xbox `options_Xenon.layout`: Start in the game.
     LayoutScreen pause_screen;
     bool pause_stick_held = false;
+    MenuPointer pause_pointer;  ///< DIVERGENCE (desktop mouse)
+    MenuPointer dialog_pointer;  ///< the quest offer and the modal message
+    /// DIVERGENCE (desktop mouse): the master menu's pointer, the row a drag started on, and the
+    /// time since the last click, for a double click.
+    MenuPointer inventory_pointer;
+    InventoryMenu::PointerHit inventory_drag;
+    float inventory_click_age = 10.0f;
+    InventoryMenu::PointerHit last_inventory_click;
     /// `CSettingsMenuXenon` on `settingsmenu_xenon.layout`.
     LayoutScreen settings_screen;
     bool settings_stick_held = false;
+    MenuPointer settings_pointer;  ///< DIVERGENCE (desktop mouse)
+    /// The slider the pointer is dragging, `None` for none.
+    tl::core::SettingsControl settings_drag = tl::core::SettingsControl::None;
     bool settings_dpad_held = false;
     bool settings_y_held = false;
     /// Y on Options: Help once the close has been carried out.
@@ -1039,10 +1050,15 @@ struct Renderer::Impl : tl::core::World {
         bool lt_up = false;
         bool rt_up = false;
         bool y_up = false;
+        /// DIVERGENCE (desktop mouse): the right button on a skill, A on it.
+        bool mouse_a = false;
     };
     /// The pad on the skills tab: `CSkillMenuXenon`'s handler and
     /// its map sheet's; `core/skills_tab.*` decides.
     void handle_skills_tab(const tl::core::InputState& in, const SkillsTabPad& pad);
+    /// DIVERGENCE (desktop mouse): the skill under the skills tab's cursor onto the hotbar slot
+    /// the pointer was let go on - the skills tab's set rows or the HUD's.
+    void drop_dragged_skill(const tl::core::InputState& in);
     bool skill_stick_held = false;
     /// The master menu closed as its housing's `setOpen(false)`: `InventoryClose` (0x42)
     /// except the skills tab (`core::housing_plays_close_sound`); Stats points placed.
@@ -1085,10 +1101,15 @@ struct Renderer::Impl : tl::core::World {
     /// `in.attack` (X) read as the inventory screen's own X while it is open.
     bool action_x_held = false;
     bool pet_stance_held = false;
+    bool skills_key_held = false;
     bool pet_town_held = false;
     /// Hotbar buttons already down when the hotbar got the pad back (e.g. the B that closed
     /// a menu), ignored until let go. `hotbar_had_pad`: the hotbar read the pad last frame.
     std::array<bool, 7> hotbar_wait_release{};
+    /// DIVERGENCE (desktop keyboard): the number keys' last frame, for their presses.
+    std::array<bool, 4> hotbar_key_held{};
+    /// DIVERGENCE (desktop mouse): a skill picked up off the skills tab, to be let go on a slot.
+    bool skill_drag = false;
     bool hotbar_had_pad = false;
 
     /// Whether the next main menu offers `ContinueLast`.
@@ -2534,6 +2555,22 @@ struct Renderer::Impl : tl::core::World {
     void create_interface();
     void step_player(float delta, const tl::core::InputState& in) override;
     void drive_player(float delta);
+    /// DIVERGENCE (desktop mouse): what a click asked for, carried out over the frames that
+    /// follow - a walk to a point, a walk to something and A on it, or the attack on a hostile
+    /// unit while the button is held (render/renderer_mouse.cpp).
+    struct MouseGoal {
+        enum class Kind { None, Walk, Interact, Attack };
+        Kind kind = Kind::None;
+        Ogre::Vector3 at = Ogre::Vector3::ZERO;
+        Ogre::Entity* entity = nullptr;
+        float repath = 0.0f;  ///< seconds until the route is found again
+    };
+    MouseGoal mouse_goal;
+    bool mouse_click_held = false;
+    /// Where the pointer meets the level: the floor's collision, else the player's height.
+    bool mouse_ground(const tl::core::InputState& in, Ogre::Ray& ray, Ogre::Vector3& ground) const;
+    /// Rewrite this frame's pad input from the mouse: the stick, A and X the goal asks for.
+    void steer_by_mouse(tl::core::InputState& in, float delta);
     Ogre::Entity* place_mesh(const MeshPlacement& placement);
     /// `CLevel::bake`'s room-piece batching, once the level and its
     /// remembered state are in place.

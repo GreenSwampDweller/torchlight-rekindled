@@ -1243,10 +1243,14 @@ Options with_run_config(Options o) {
 // so it does not overwrite the ordinary build's. With `debug` and `logs` both
 // off (config.txt) nothing is opened, and nothing is even formatted.
 void open_log() {
+#if !defined(TL_PLATFORM_MACOS)
+    // DIVERGENCE (platform): a Mac app has no working folder for config.txt, so it always logs,
+    // into Application Support.
     if (!tl::core::run_config().debug && !tl::core::run_config().logs) {
         tl::core::log_set_min_level(tl::core::LogLevel::Off);
         return;
     }
+#endif
 #if defined(TL_PLATFORM_SWITCH)
     tl::core::log_init(tl::core::platform_data_root() + (sizeof(TL_RUN_TAG) > 1
                                                              ? "torchlight-" TL_RUN_TAG ".log"

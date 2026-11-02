@@ -324,7 +324,37 @@ void GameHud::build(const tl::formats::UiObject& object, int parent, const std::
         }
         node.text = make("tl/hud/text" + name + "b", colour);
     } else {
-        const std::string image = object.string_or("IMAGE", object.string_or("NORMAL", ""));
+        std::string image = object.string_or("IMAGE", object.string_or("NORMAL", ""));
+#if defined(TL_PLATFORM_MACOS)
+        // DIVERGENCE (desktop keyboard): the skill slots' pad glyphs are the number keys that
+        // fire them, counted along the bar from the left: Y, LT, RT, B; the potions' bumper glyphs
+        // are their bracket keys.
+        {
+            const bool skill = node.skill_set >= 0;
+            const char* label = image == "left_bumper"              ? "["
+                                : skill && image == "y_button"      ? "1"
+                                : skill && image == "left_trigger"  ? "2"
+                                : skill && image == "right_trigger" ? "3"
+                                : skill && image == "b_button"      ? "4"
+                                : image == "right_bumper"           ? "]"
+                                                                    : nullptr;
+            if (label != nullptr) {
+                node.key_label = label;
+                node.points = font_points("Serif14");
+                node.h_text = 1;
+                node.v_text = 1;
+                auto* area = static_cast<Ogre::TextAreaOverlayElement*>(
+                    overlays.createOverlayElement("TextArea", "tl/hud/text" + name + "k"));
+                area->setMetricsMode(Ogre::GMM_RELATIVE);
+                area->setFontName(kFontName, Ogre::RGN_INTERNAL);
+                area->setColour(Ogre::ColourValue::White);
+                area->setAlignment(Ogre::TextAreaOverlayElement::Center);
+                text_root_->addChild(area);
+                node.text = area;
+                image.clear();
+            }
+        }
+#endif
         auto* panel = static_cast<Ogre::PanelOverlayElement*>(
             overlays.createOverlayElement("Panel", "tl/hud/panel" + name));
         panel->setMetricsMode(Ogre::GMM_RELATIVE);
@@ -586,6 +616,20 @@ void GameHud::layout() {
     apply_state();
 }
 
+int GameHud::hotbar_slot_at(float x, float y) const {
+    if (!built_ || !visible_) return -1;
+    for (const Node& node : nodes_) {
+        const int slot = hotbar_slot_of(node.widget, "SkillSlot");
+        if (slot < 2 || node.hidden || node.panel == nullptr) continue;
+        if (node.skill_set >= 0 && node.skill_set != state_.skill_set) continue;
+        if (x >= node.left && x < node.left + node.width && y >= node.top &&
+            y < node.top + node.height) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
 void GameHud::set_uv(Node& node, float u0, float v0, float u1, float v1) const {
     if (node.panel == nullptr) return;
     const Sprite* art = sprite(node.image);
@@ -706,7 +750,8 @@ void GameHud::apply_state() {
 
         if (node.text != nullptr) {
             std::string caption;
-            if (node.widget == "LevelName") caption = state_.level_name;
+            if (!node.key_label.empty()) caption = node.key_label;
+            else if (node.widget == "LevelName") caption = state_.level_name;
             else if (node.widget == "LargeMessageText") caption = state_.announce;
             else if (node.widget == "SmallMessageText") caption = state_.sub_announce;
             else if (node.widget == "POTIONCOUNT") caption = state_.slots[0].text;
