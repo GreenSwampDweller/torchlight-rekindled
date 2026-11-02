@@ -48,6 +48,23 @@ std::vector<std::string> list_entries(const std::string& dir, bool want_dirs) {
     return names;
 }
 
+// DIVERGENCE (platform): where a mod's files start. An extracted archive often wraps the mod in
+// a folder or two (mods/Baklahs Unique gear/Baklah_Unique/media/...); the PC's mods are
+// installed unwrapped. The first folder, depth first and in name order, that holds a `media/`
+// is the root; with none, the mod's own folder. `dir` ends in a separator; so does the result.
+std::string mod_media_root(const std::string& dir, int depth = 0) {
+    for (const std::string& name : list_entries(dir, true)) {
+        if (upper_ascii(name) == "MEDIA") return dir;
+    }
+    if (depth < 3) {
+        for (const std::string& name : list_entries(dir, true)) {
+            const std::string inner = mod_media_root(dir + name + "/", depth + 1);
+            if (!inner.empty()) return inner;
+        }
+    }
+    return depth == 0 ? dir : std::string();
+}
+
 // `CMod::reloadModFiles` lists `*.*` under the folder; a mod with none is
 // left off (`+0x70`). Only whether there is one matters here.
 bool has_any_file(const std::string& dir) {
@@ -341,7 +358,10 @@ std::vector<std::string> active_mod_roots(const ModList& list) {
     std::vector<std::string> roots;
     for (const ModInfo& mod : list.mods) {
         if (mod.active() && !port_mod(mod))
-            roots.push_back(mod.directory.substr(0, mod.directory.size() - 1));
+        {
+            const std::string root = mod_media_root(mod.directory);
+            roots.push_back(root.substr(0, root.size() - 1));
+        }
     }
     return roots;
 }

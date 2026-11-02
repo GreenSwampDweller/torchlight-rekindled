@@ -5,6 +5,7 @@
 // The layout ships in the Xbox archive only; without it there is no offer window.
 #pragma once
 
+#include "core/input.h"
 #include "core/quest_book.h"
 #include "formats/cegui.h"
 #include "formats/uilayout.h"
@@ -86,6 +87,9 @@ public:
     void set_state(const QuestOfferState& state);
     // PORT: the renderer's interface to the offer window.
     const QuestOfferState& state() const { return state_; }
+
+    /// DIVERGENCE (desktop mouse): whether the pointer lies on that window, shown.
+    bool pointed(const tl::core::InputState& in, const std::string& widget) const;
 
     /// Toggle the reward row, which is what the left stick does.
     void toggle_rewards();

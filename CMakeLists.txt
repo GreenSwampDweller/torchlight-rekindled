@@ -26,6 +26,9 @@ elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(TL_PLATFORM ios)
     # Apply the deployment floor to every static target as well as the app.
     set(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "15.0")
+elseif(APPLE)
+    enable_language(OBJCXX)
+    set(TL_PLATFORM macos)
 else()
     set(TL_PLATFORM desktop)
 endif()
@@ -120,6 +123,13 @@ endif()
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE TL_CORE_SOURCES     CONFIGURE_DEPENDS src/core/*.cpp)
 file(GLOB_RECURSE TL_PLATFORM_SOURCES CONFIGURE_DEPENDS src/platform/${TL_PLATFORM}/*.cpp)
+if(TL_PLATFORM STREQUAL "macos")
+    list(APPEND TL_PLATFORM_SOURCES
+        src/platform/macos/platform_input.mm
+        src/platform/desktop/platform_frame.cpp
+        src/platform/desktop/platform_log.cpp
+        src/platform/desktop/platform_profiler.cpp)
+endif()
 
 add_library(tl_core STATIC ${TL_CORE_SOURCES} ${TL_PLATFORM_SOURCES})
 target_include_directories(tl_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -135,6 +145,9 @@ elseif(ANDROID)
 elseif(APPLE_IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_definitions(tl_core PUBLIC TL_PLATFORM_IOS=1)
     target_sources(tl_core PRIVATE src/platform/ios/platform_audio.mm)
+elseif(APPLE)
+    target_compile_definitions(tl_core PUBLIC TL_PLATFORM_MACOS=1)
+    target_sources(tl_core PRIVATE src/platform/macos/platform_audio.mm)
 else()
     target_compile_definitions(tl_core PUBLIC TL_PLATFORM_DESKTOP=1)
     # The desktop reads an Xbox pad through XInput 9.1.0, the version every
@@ -144,6 +157,8 @@ else()
     # so anything that links the mixer - the tests do - needs winmm too.
     if(WIN32)
         target_link_libraries(tl_core PUBLIC xinput9_1_0 winmm)
+    elseif(APPLE)
+        target_link_libraries(tl_core PUBLIC "-framework Cocoa" "-framework GameController" "-framework AudioToolbox")
     else()
         # Linux: the keyboard through X11, the sound through ALSA (the pad is
         # evdev, the kernel's own, and needs no library).

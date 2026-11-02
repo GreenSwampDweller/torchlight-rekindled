@@ -422,7 +422,6 @@ namespace {
 
 // The mods page as `start_renderer` shows it; false when the run is to end.
 bool run_start_mods_menu(Renderer& renderer, RendererConfig& rc, int argc, char** argv) {
-    // iOS takes `mods.dat` as it is.
     if (!tl::core::kModsPage) return true;
     std::string dump_png;
     for (int i = 1; i + 1 < argc; ++i) {

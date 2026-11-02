@@ -199,6 +199,9 @@ struct SettingsMenu {
     /// `Contrast`).
     void set_slider(SettingsControl control, float value, GameSettings& settings);
 
+    /// DIVERGENCE (desktop mouse): a slider set to the point `along` (0 to 1) of its bar.
+    void set_slider_along(SettingsControl control, float along, GameSettings& settings);
+
     /// Reset Defaults.
     void reset_defaults(GameSettings& settings);
 

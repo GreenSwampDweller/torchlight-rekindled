@@ -170,6 +170,12 @@ IOS_ONLY = [
     "-DOGRE_BUILD_COMPONENT_PROPERTY=OFF", "-DOGRE_BUILD_COMPONENT_OVERLAY_IMGUI=OFF",
 ]
 
+MACOS_ONLY = [
+    *DESKTOP_ONLY,
+    "-DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF",
+    "-DCMAKE_OSX_ARCHITECTURES=arm64",
+]
+
 ANDROID_ONLY = [
     "-DOGRE_BUILD_DEPENDENCIES=ON",
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
@@ -214,7 +220,7 @@ def android_toolchain() -> tuple:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--platform", choices=("desktop", "switch", "android", "ios", "linux"), required=True)
+    ap.add_argument("--platform", choices=("desktop", "switch", "android", "ios", "linux", "macos"), required=True)
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--ios-simulator", action="store_true", help="build the iOS simulator arm64 variant")
     # Experiment: OGRE's GL3Plus render system on the console, on switch-mesa's
@@ -238,7 +244,7 @@ def main() -> int:
         return 1
 
     build = ROOT / f"build-ogre-{args.platform}"
-    generator = "Xcode" if args.platform == "ios" else "Ninja"
+    generator = "Xcode" if args.platform in ("ios", "macos") else "Ninja"
     if args.platform == "ios":
         if args.ios_simulator:
             build = ROOT / "build-ogre-ios-simulator-xcode"
@@ -247,8 +253,10 @@ def main() -> int:
     elif args.ios_simulator:
         print("--ios-simulator requires --platform ios")
         return 1
+    elif args.platform == "macos":
+        build = ROOT / "build-ogre-macos-xcode"
     extra = {"switch": SWITCH_ONLY, "desktop": DESKTOP_ONLY, "android": ANDROID_ONLY, "ios": IOS_ONLY,
-             "linux": DESKTOP_ONLY}[args.platform]
+             "linux": DESKTOP_ONLY, "macos": MACOS_ONLY}[args.platform]
     cmake = "cmake"
     if args.platform == "android":
         cmake, toolchain = android_toolchain()
@@ -310,7 +318,7 @@ def main() -> int:
         return 1
 
     build_cmd = [cmake, "--build", build_dir]
-    if args.platform == "ios":
+    if args.platform in ("ios", "macos"):
         build_cmd += ["--config", "Release"]
     if args.jobs:
         build_cmd += ["--parallel", str(args.jobs)]

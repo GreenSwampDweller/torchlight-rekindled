@@ -684,7 +684,7 @@ void Renderer::Impl::handle_skills_tab(const tl::core::InputState& in, const Ski
     std::vector<PadButton> presses;
     if (pad.dpad_up) presses.push_back(PadButton::DPadUp);
     if (pad.dpad_down) presses.push_back(PadButton::DPadDown);
-    if (a) presses.push_back(PadButton::A);
+    if (a || pad.mouse_a) presses.push_back(PadButton::A);
     if (b) presses.push_back(PadButton::B);
     if (pad.x) presses.push_back(PadButton::X);
     if (pad.y) presses.push_back(PadButton::Y);
@@ -806,6 +806,35 @@ void Renderer::Impl::handle_skills_tab(const tl::core::InputState& in, const Ski
         changed = true;
     }
     if (changed) update_menu();
+}
+
+void Renderer::Impl::drop_dragged_skill(const tl::core::InputState& in) {
+    int slot = inventory_menu.skill_slot_at(in);
+    if (slot < 0) slot = game_hud.hotbar_slot_at(in.pointer_x, in.pointer_y);
+    if (slot < 0) return;
+    // The inverse of `skill_button_slot`.
+    tl::core::SkillButton button = tl::core::SkillButton::Y;
+    int set = 0;
+    bool found = false;
+    for (int s = 0; s < 2 && !found; ++s) {
+        for (tl::core::SkillButton b : {tl::core::SkillButton::Y, tl::core::SkillButton::B,
+                                        tl::core::SkillButton::LT, tl::core::SkillButton::RT}) {
+            if (tl::core::skill_button_slot(b, s) != slot) continue;
+            button = b;
+            set = s;
+            found = true;
+            break;
+        }
+    }
+    tl::core::KnownSkill* skill = inventory_menu.selected_skill(player_skills);
+    if (!found || skill == nullptr || !player_skills.map(*skill, button, set)) {
+        TL_LOG_INFO("mouse: skill not mapped to slot %d", slot);
+        return;
+    }
+    play_ui(tl::core::InterfaceSound::SkillAssign);
+    TL_LOG_INFO("mouse: '%s' dragged to function slot %d", skill->entry.name.c_str(), slot);
+    refresh_game_hud();
+    update_menu();
 }
 
 /// Resolve a `Unit Trigger`'s `MODEL` to the mesh, collision and states its unit file

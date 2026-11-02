@@ -474,7 +474,7 @@ void Renderer::Impl::drive_player(float delta) {
     // `CGameClient::processIngameInput` takes
     // nothing while the interface is in the cinematic menu; the screen reads
     // the pad itself.
-    const tl::core::InputState in =
+    tl::core::InputState in =
         cinematic_open ? tl::core::InputState{} : tl::core::poll_input();
     // + / Start: the Pause Menu. It,
     // Options and the debug menu (a DIVERGENCE, debug_menu_open) have the pad.
@@ -597,8 +597,16 @@ void Renderer::Impl::drive_player(float delta) {
     // The quest offer window has the pad before the menu: A accepts, B declines, the left
     // stick toggles the reward row; a read-only line has one OK.
     if (quest_dialog.visible()) {
-        const bool confirm_edge = in.confirm && !confirm_held;
-        const bool skip_edge = in.skip && !skip_held;
+        // DIVERGENCE (desktop mouse): a click on Accept or OK is A, on Decline B.
+        dialog_pointer.step(in);
+        mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
+        const bool click_yes = dialog_pointer.pressed && (quest_dialog.pointed(in, "Accept") ||
+                                                          quest_dialog.pointed(in, "Ok"));
+        // The right button is B: Decline, or the close of a line with only OK.
+        const bool click_no = (dialog_pointer.pressed && quest_dialog.pointed(in, "Decline")) ||
+                              dialog_pointer.alt_pressed;
+        const bool confirm_edge = (in.confirm && !confirm_held) || click_yes;
+        const bool skip_edge = (in.skip && !skip_held) || click_no;
         confirm_held = in.confirm;
         skip_held = in.skip;
 
@@ -676,7 +684,12 @@ void Renderer::Impl::drive_player(float delta) {
     // The modal message has the pad while it is up (`CModalMenu`): A is its
     // `Ok`, the only button `openModalDialog` leaves shown.
     if (modal_screen.visible()) {
-        const bool confirm_edge = in.confirm && !confirm_held;
+        // DIVERGENCE (desktop mouse): a click on Ok is A.
+        dialog_pointer.step(in);
+        mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
+        const bool confirm_edge = (in.confirm && !confirm_held) ||
+                                  (dialog_pointer.pressed && modal_screen.pointed(in, "Ok")) ||
+                                  dialog_pointer.alt_pressed;
         confirm_held = in.confirm;
         skip_held = in.skip;
         if (confirm_edge) modal_screen.hide();
@@ -743,6 +756,24 @@ void Renderer::Impl::drive_player(float delta) {
         }
     }
     inventory_button_held = in.inventory;
+
+    // DIVERGENCE (desktop keyboard): 'K' opens the master menu on its skills tab, and closes
+    // it when that tab is already showing.
+    const bool skills_edge = in.skills && !skills_key_held;
+    skills_key_held = in.skills;
+    if (skills_edge && !inventory_menu.pet_commands_open() && !inventory_menu.spell_remove_open()) {
+        if (inventory_menu.visible() && inventory_menu.menu_mode() == MenuMode::Skills) {
+            close_master_menu();
+        } else {
+            if (!inventory_menu.visible()) {
+                inventory_menu.toggle();
+                play_ui(tl::core::InterfaceSound::MenuOpen);
+            }
+            inventory_menu.set_menu_mode(MenuMode::Skills);
+            update_menu();
+            update_character_preview(0.0f);
+        }
+    }
 
     // Automap controls: toggle with 'M' / Right Stick click (a turned free camera's reset), zoom
     const bool map_toggle_edge = in.map_toggle && !map_toggle_held && !game_camera.touch.took_r3;
@@ -856,6 +887,86 @@ void Renderer::Impl::drive_player(float delta) {
         const bool skills_tab = inventory_menu.menu_mode() == MenuMode::Skills &&
                                 inventory_menu.vendor() == VendorScreen::None;
 
+        // DIVERGENCE (desktop mouse): the PC's inventory under the pad's orders. A click on a row
+        // puts the focus there; a double click or the right button is A on it; a row dragged
+        // onto another tray, or the right button at a merchant's, is X (to the pet, the stash, the
+        // merchant and back); a tab clicked
+        // opens it; the ring's two trigger arrows step the pages; a quest row is selected.
+        inventory_pointer.step(in);
+        mouse_click_held = in.pointer && in.click;
+        inventory_click_age += delta;
+        bool mouse_a = false;
+        bool mouse_x = false;
+        if (inventory_pointer.pressed || inventory_pointer.alt_pressed ||
+            inventory_pointer.released) {
+            using Hit = InventoryMenu::PointerHit;
+            const Hit hit = inventory_menu.pointer_hit(in);
+            if (inventory_pointer.released && skill_drag) {
+                skill_drag = false;
+                drop_dragged_skill(in);
+            } else if (inventory_pointer.released) {
+                if (inventory_drag.kind == Hit::Kind::Row &&
+                    (hit.kind == Hit::Kind::Row || hit.kind == Hit::Kind::Tab) &&
+                    hit.tray != inventory_drag.tray) {
+                    mouse_x = true;
+                }
+                inventory_drag = Hit{};
+            } else if (inventory_pointer.alt_pressed && hit.kind == Hit::Kind::None &&
+                       !inventory_menu.pointer_on_menu(in)) {
+                // The right button off the menu's windows closes it, as B does.
+                close_master_menu();
+                confirm_held = in.confirm;
+                skip_held = in.skip;
+                tl::core::InputState zero_in;
+                step_player(delta, zero_in);
+                return;
+            } else if (skills_tab && !inventory_pointer.released &&
+                       inventory_menu.point_skill(in)) {
+                // A skill clicked takes the cursor; the right button on it spends a point there,
+                // as A does.
+                if (inventory_pointer.pressed) {
+                    play_ui(tl::core::InterfaceSound::Navigate);
+                    skill_drag = !inventory_menu.skill_cursor().in_spells;
+                }
+                mouse_a = inventory_pointer.alt_pressed && !inventory_menu.skill_cursor().in_spells;
+                update_menu();
+            } else if (hit.kind == Hit::Kind::Ring && !skills_tab &&
+                       inventory_menu.vendor() == VendorScreen::None) {
+                step_master_menu_tab(hit.tab);
+            } else if (hit.kind == Hit::Kind::Quest) {
+                inventory_menu.set_selected_quest(hit.row);
+                play_ui(tl::core::InterfaceSound::Navigate);
+                update_menu();
+            } else if (hit.kind == Hit::Kind::Tab) {
+                TL_LOG_INFO("mouse: tray %d tab %d", static_cast<int>(hit.tray), hit.tab);
+                inventory_menu.point_at(hit.tray, hit.tab, 0);
+                play_ui(tl::core::InterfaceSound::Navigate);
+                update_menu();
+            } else if (hit.kind == Hit::Kind::Row) {
+                const bool again = inventory_pointer.pressed && inventory_click_age < 0.35f &&
+                                   inventory_drag.kind == Hit::Kind::None &&
+                                   last_inventory_click.tray == hit.tray &&
+                                   last_inventory_click.row == hit.row;
+                inventory_menu.point_at(hit.tray, hit.tab, hit.row);
+                update_menu();
+                // The right button is X where X moves the item to the other window: a buy or a
+                // sale at a merchant's, into the stash or the Transmuter and back, and between
+                // the hero's bag and the pet's beside it. Elsewhere it is A.
+                const bool trade_screen =
+                    inventory_menu.vendor() == VendorScreen::Merchant ||
+                    housing_inventory_for(inventory_menu.vendor()) != nullptr ||
+                    (inventory_menu.vendor() == VendorScreen::None &&
+                     inventory_menu.pet_tray_available());
+                mouse_x = inventory_pointer.alt_pressed && trade_screen;
+                mouse_a = (inventory_pointer.alt_pressed && !trade_screen) || again;
+                if (inventory_pointer.pressed) {
+                    inventory_drag = hit;
+                    last_inventory_click = hit;
+                    inventory_click_age = 0.0f;
+                }
+            }
+        }
+
         // B button / Escape closes menu
         if (in.skip && !skip_held && !skills_tab) {
             close_master_menu();
@@ -884,6 +995,7 @@ void Renderer::Impl::drive_player(float delta) {
             pad.lt_up = menu_prev_release;
             pad.rt_up = menu_next_release;
             pad.y_up = action_y_release;
+            pad.mouse_a = mouse_a;
             handle_skills_tab(in, pad);
         }
 
@@ -941,9 +1053,9 @@ void Renderer::Impl::drive_player(float delta) {
             const bool combine_screen = inventory_menu.vendor() == VendorScreen::Combine;
             // On the pet's tray A with the pet as the owner
             // (`pet_tray_press`), outside a combiner's page.
-            if (in.confirm && !confirm_held && pet_tray && !combine_screen) pet_tray_press();
-            bool own_a =
-                in.confirm && !confirm_held && !vendor_tray && !combine_screen && !pet_tray;
+            const bool a_edge = (in.confirm && !confirm_held) || mouse_a;
+            if (a_edge && pet_tray && !combine_screen) pet_tray_press();
+            bool own_a = a_edge && !vendor_tray && !combine_screen && !pet_tray;
             if (own_a && (inventory_menu.vendor() == VendorScreen::Enchant ||
                           inventory_menu.vendor() == VendorScreen::EnchantShrine)) {
                 // on an enchanter's or a shrine's page:.
@@ -990,15 +1102,16 @@ void Renderer::Impl::drive_player(float delta) {
             }
 
             // X: the tray dispatch by the screen and the tray.
-            if (action_x_edge && housing_inventory_for(inventory_menu.vendor()) != nullptr) {
+            const bool x_edge = action_x_edge || mouse_x;
+            if (x_edge && housing_inventory_for(inventory_menu.vendor()) != nullptr) {
                 // into the Transmuter or the stash from the
                 // bag, back out from their own tray.
                 swap_selected();
-            } else if (action_x_edge && inventory_menu.vendor() == VendorScreen::Merchant) {
+            } else if (x_edge && inventory_menu.vendor() == VendorScreen::Merchant) {
                 // on the merchant's tray a buy,
                 // on the bag a sale.
                 trade_selected();
-            } else if (action_x_edge && !vendor_screen) {
+            } else if (x_edge && !vendor_screen) {
                 // on the bag's screen: from the pet's tray to
                 // the player's bag, from the bag to the pet's when
                 // allows.
@@ -1107,6 +1220,9 @@ void Renderer::Impl::drive_player(float delta) {
         return;
     }
 
+    // The mouse's orders, as the pad's own (DIVERGENCE: the console has no pointer).
+    steer_by_mouse(in, delta);
+
     // A through a line on the press, not the hold; the press is spent on the line, not
     // also on the item or trigger below.
     bool line_took_a = false;
@@ -1199,10 +1315,14 @@ void Renderer::Impl::drive_player(float delta) {
         const bool skipping = script.busy();
         set(HotbarButton::LB, in.tab_prev, tab_prev_edge);
         set(HotbarButton::RB, in.tab_next, tab_next_edge);
-        set(HotbarButton::Y, in.action_y, action_y_edge);
-        set(HotbarButton::B, in.skip && !skipping, in.skip && !skip_held && !skipping);
-        set(HotbarButton::LT, in.menu_prev, menu_prev_edge);
-        set(HotbarButton::RT, in.menu_next, menu_next_edge);
+        // DIVERGENCE (desktop keyboard): '1'..'4' beside the pad's buttons, left to right.
+        const auto key = [&](int i) { return in.hotbar_key[i]; };
+        const auto key_edge = [&](int i) { return in.hotbar_key[i] && !hotbar_key_held[static_cast<size_t>(i)]; };
+        set(HotbarButton::Y, in.action_y || key(0), action_y_edge || key_edge(0));
+        set(HotbarButton::B, (in.skip && !skipping) || key(3),
+            (in.skip && !skip_held && !skipping) || key_edge(3));
+        set(HotbarButton::LT, in.menu_prev || key(1), menu_prev_edge || key_edge(1));
+        set(HotbarButton::RT, in.menu_next || key(2), menu_next_edge || key_edge(2));
         release_held_skill(pressed, held, (in.confirm && !confirm_held) || action_x_edge);
         step_hotbar(pressed, held, in.move_x, in.move_y);
     }
@@ -1210,6 +1330,7 @@ void Renderer::Impl::drive_player(float delta) {
     // handler. attack_held is +0x55; a menu marks X in +0x57 instead,
     // so X still down when a menu goes is a fresh press.
     step_attack_button(delta, attack_down, attack_down && !attack_held, in.move_x, in.move_y);
+    for (size_t i = 0; i < hotbar_key_held.size(); ++i) hotbar_key_held[i] = in.hotbar_key[i];
     confirm_held = in.confirm;
     attack_held = attack_down;
 
