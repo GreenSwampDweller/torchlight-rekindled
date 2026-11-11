@@ -267,6 +267,27 @@ void UnitSpawner::unit_state_change(int64_t id, int state, UnitSpawnerHost& host
     }
 }
 
+namespace {
+
+// `spawnUnitByIndex`'s open point: a quarter unit round the point, then two, then five round the
+// spawner itself; a place nothing finds is no place (false) unless the unit must come out anyway.
+bool open_point(UnitSpawnerHost& host, const UnitSpawnerSpec& spec, const Vec3& center, Vec3& at) {
+    const bool avoid_no_spawn = !spec.must_spawn;
+    Vec3 open = host.random_open_position(at, 0.25f, avoid_no_spawn);
+    if (same_point(open, at)) {
+        open = host.random_open_position(at, 2.0f, avoid_no_spawn);
+        if (same_point(open, at)) {
+            at = center;
+            open = host.random_open_position(center, 5.0f, avoid_no_spawn);
+            if (same_point(open, at) && !spec.must_spawn) return false;
+        }
+    }
+    at = open;
+    return true;
+}
+
+}  // namespace
+
 // `CUnitSpawner::spawnUnitByIndex`. False
 // only when nothing may come out now; a unit that finds no room, no line of
 // sight or no data still counts.
@@ -308,21 +329,9 @@ bool UnitSpawner::spawn_unit_by_index(uint32_t index, UnitSpawnerHost& host) {
     SpawnAxes axes = placed.axes;
     const SpawnGroup group = spawn_group(spec_.group);
 
-    if (group != SpawnGroup::Particle && group != SpawnGroup::Missiles) {
-        // Somewhere open: a quarter unit round the point, then two, then five
-        // round the spawner itself; a place nothing finds is no place unless
-        // the unit must come out anyway.
-        const bool avoid_no_spawn = !spec_.must_spawn;
-        Vec3 open = host.random_open_position(at, 0.25f, avoid_no_spawn);
-        if (same_point(open, at)) {
-            open = host.random_open_position(at, 2.0f, avoid_no_spawn);
-            if (same_point(open, at)) {
-                at = frame_.center;
-                open = host.random_open_position(frame_.center, 5.0f, avoid_no_spawn);
-                if (same_point(open, at) && !spec_.must_spawn) return true;
-            }
-        }
-        at = open;
+    if (group != SpawnGroup::Particle && group != SpawnGroup::Missiles &&
+        !open_point(host, spec_, frame_.center, at)) {
+        return true;
     }
 
     if (!spec_.spawn_in_center && spec_.requires_los) {
@@ -378,7 +387,11 @@ bool UnitSpawner::spawn_unit_by_index(uint32_t index, UnitSpawnerHost& host) {
     release.position = at;
     release.axes = axes;
     release.spawner_position = frame_.center;
-    if (spec_.spawn_in_center || resource_names_spawner_) {
+    // `+0x1a7` (`setResourceSpawn`): never for a group among
+    // `gSPAWN_TYPE_NAMES[2..5]` (the others returned above); else the resource names a `SPAWNER`.
+    const bool resource_names_spawner =
+        group != SpawnGroup::SpawnClass && host.resource_names_spawner(spec_.resource);
+    if (spec_.spawn_in_center || resource_names_spawner) {
         release.settle = SpawnSettle::AtSpawner;
     } else {
         release.settle = spec_.snap_to_ground ? SpawnSettle::AsAdded : SpawnSettle::AtPosition;

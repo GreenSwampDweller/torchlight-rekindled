@@ -58,6 +58,7 @@ function(tl_add_ui_pack target out_dir)
     set(_stamp "${CMAKE_BINARY_DIR}/${target}_ui_pack.stamp")
     set(_scripts
         "${CMAKE_SOURCE_DIR}/scripts/build_ui_pack.py"
+        "${CMAKE_SOURCE_DIR}/scripts/ui_pack_art.py"
         "${CMAKE_SOURCE_DIR}/scripts/ui_pack_front.py"
         "${CMAKE_SOURCE_DIR}/scripts/ui_pack_menu.py")
     add_custom_command(OUTPUT "${_stamp}"

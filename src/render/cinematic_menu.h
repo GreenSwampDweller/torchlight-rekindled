@@ -74,7 +74,7 @@ private:
     // Overlays, each at a distinct z-order so pass pointers cannot invert their order.
     Ogre::Overlay* backdrop_overlay_ = nullptr;  // z 519: full-screen tiled background
     Ogre::Overlay* art_overlay_ = nullptr;       // z 520: the cinematic's artwork
-    Ogre::Overlay* text_bg_overlay_ = nullptr;   // z 521: dark transparent background behind text
+    Ogre::Overlay* text_bg_overlay_ = nullptr;   // z 521: the text window's frame
     Ogre::Overlay* text_overlay_ = nullptr;      // z 522: crawling dialogue text
     Ogre::Overlay* bars_overlay_ = nullptr;      // z 523: top and bottom ornate borders
     Ogre::Overlay* button_overlay_ = nullptr;    // z 524: continue button
@@ -84,18 +84,19 @@ private:
     tl::formats::Imageset loading_set_;
     tl::formats::Imageset logo_set_;
     tl::formats::Imageset hud_set_;
+    tl::formats::Imageset frame_set_;  ///< `widgets1`, the frame's nine slices
 
     Ogre::TexturePtr art_texture_;
     Ogre::TexturePtr loading_texture_;
     Ogre::TexturePtr logo_texture_;
     Ogre::TexturePtr hud_texture_;
-    Ogre::TexturePtr text_bg_texture_;
+    Ogre::TexturePtr frame_texture_;  ///< shared with the other screens: not removed
 
     Ogre::MaterialPtr art_material_;
     Ogre::MaterialPtr loading_material_;
     Ogre::MaterialPtr logo_material_;
     Ogre::MaterialPtr hud_material_;
-    Ogre::MaterialPtr text_bg_material_;
+    Ogre::MaterialPtr frame_material_;
 
     // Overlay elements
     std::vector<Ogre::OverlayElement*> panels_;

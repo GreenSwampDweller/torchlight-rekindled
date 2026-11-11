@@ -54,7 +54,7 @@ index f457107..27a2e5c 100644
  			*/
  			BillboardType mBillboardType;
 diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
-index 95acc0a..9b9da2f 100644
+index 95acc0a..5ca45f6 100644
 --- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBillboardRenderer.cpp
 @@ -29,9 +29,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -486,7 +486,7 @@ index 95acc0a..9b9da2f 100644
 +	}
 +	//-----------------------------------------------------------------------
 +	// Torchlight: `BillboardRenderer::setFlipbookWidthHeight` and
-+	// `_notifyFlipbookWidthHeight`, the same body: OGRE's stacks are the rows.
++	// `BillboardRenderer::_notifyFlipbookWidthHeight`, the same body: OGRE's stacks are the rows.
 +	void BillboardRenderer::setFlipbookWidthHeight(int width, int height)
 +	{
 +		mFlipbookWidth = width;

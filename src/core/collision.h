@@ -101,6 +101,9 @@ public:
     /// **a ray meets a unit's collision model only when the unit
     /// authors it**; a chest or a barrel stops a sphere and never a ray.
     void set_group_blocks(int64_t group, bool on);
+    /// Where the object ray meets a group through a floor's load: its faces less `shift`
+    /// (`Group::load_shift`); zero once the load is over.
+    void set_group_load_shift(int64_t group, const Vec3& shift);
     bool group_blocks(int64_t group) const;
 
     /// Whether that group has any faces at all.
@@ -189,6 +192,8 @@ public:
     /// its face is not material 100. The caller's starting height stands in for
     /// the original's fixed +100.
     bool ground_under(float x, float z, float from_y, float& surface_y) const;
+    /// `CLevel::snapToValidGround`: `at` onto the ground under it; false leaves it.
+    bool snap_to_valid_ground(Vec3& at) const;
 
     /// `CLevel::floorHeight`, which
     /// `CEquipment::drop` lands an item on: a ray from (x, 400, z) to (x, -100,
@@ -209,17 +214,27 @@ private:
         int64_t group = 0;
     };
 
+    /// A list the casts walk: its faces, the list's own faces by position, and its bounds.
+    struct FaceList {
+        // References, bound where the list is made.
+        // cppcheck-suppress uninitMemberVarNoCtor
+        const std::vector<uint32_t>& faces;
+        // cppcheck-suppress uninitMemberVarNoCtor
+        const std::vector<uint32_t>& by_position;
+        const Vec3& low;
+        const Vec3& high;
+    };
+
     /// `CCollisionList::sphereCollision` over
-    /// `faces`.
-    bool list_sphere(const std::vector<uint32_t>& faces, const Vec3& list_low,
-                     const Vec3& list_high, const Vec3& start, const Vec3& end, const Vec3& box_low,
+    /// `faces`; `by_position` is the list's own faces in its order, which the original
+    /// reads by the loop's position.
+    bool list_sphere(const FaceList& list, const Vec3& start, const Vec3& end, const Vec3& box_low,
                      const Vec3& box_high, float radius, CollisionHit& hit, float& best) const;
 
     /// `CCollisionList::rayCollision` over
-    /// `faces`.
-    bool list_ray(const std::vector<uint32_t>& faces, const Vec3& list_low, const Vec3& list_high,
-                  const Vec3& start, const Vec3& end, const Vec3& box_low, const Vec3& box_high,
-                  CollisionHit& hit, float& best) const;
+    /// `faces`; `by_position` as in list_sphere().
+    bool list_ray(const FaceList& list, const Vec3& start, const Vec3& end, const Vec3& box_low,
+                  const Vec3& box_high, CollisionHit& hit, float& best) const;
 
     /// `CCollisionList::pointIn`.
     static bool point_in(const Vec3& p, const Tri& t);
@@ -255,6 +270,11 @@ private:
         Vec3 low, high;               ///< the model's bounds, world-placed
         bool enabled = true;          ///< `COLLIDEABLE` and live
         bool blocks = false;          ///< `BLOCK`
+        /// A room's trigger through the load: `CBaseUnit::rayCollision` tests
+        /// the ray against its culling bounds where it stands, then casts its model at
+        /// `getPosition(true)`, which for a unit with no parent object (`+0x50`)
+        /// is its stored, room-relative position: the faces moved back by the room's origin.
+        Vec3 load_shift{};
     };
 
     /// `CLevel::objectSphereCollision` with

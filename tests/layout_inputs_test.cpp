@@ -318,3 +318,34 @@ TL_TEST(a_links_duration_modify_acts_by_the_timelines_own_type) {
     // so measured against itself).
     TL_CHECK_EQ(frames("Multiply", 2.0f, false), frames("Multiply", 0.0f, false));
 }
+
+// `CDungeonObjectDescriptor::InputLogicEvent`: only
+// `Clear History` does anything.
+TL_TEST(a_dungeon_object_clears_the_history_of_its_dungeon) {
+    CmpScene scene;
+    CmpNode& group = add_node(scene, tl::formats::cmp_type::kLogicGroup, 1, "Logic");
+    group.fields.push_back(uint_field(0));
+    CmpNode& node = add_node(scene, tl::formats::cmp_type::kDungeonObject, 2, "Dungeon");
+    for (int i = 0; i < 5; ++i) node.fields.push_back(CmpField{});  // VISIBLE..UP unset
+    node.fields.push_back(text_field("Mines"));                     // DUNGEON NAME
+    tl::formats::CmpLogicObject from{0, 1, 0.0f, 0.0f, {}};
+    from.links.push_back({1, "Level Activated", "Enable"});
+    from.links.push_back({1, "Level Activated", "Clear History"});
+    tl::formats::CmpLogicGroup wiring;
+    wiring.node_id = 1;
+    wiring.objects.push_back(from);
+    wiring.objects.push_back({1, 2, 0.0f, 0.0f, {}});
+    scene.logic_groups.push_back(std::move(wiring));
+
+    LevelScript script;
+    script.build(scene, {});
+    QuestState quests;
+    std::vector<ScriptEvent> events;
+    script.level_activated(quests, events);
+    std::vector<ScriptEvent> cleared;
+    for (const ScriptEvent& e : events) {
+        if (e.action == ScriptAction::ClearDungeonHistory) cleared.push_back(e);
+    }
+    TL_CHECK_EQ(cleared.size(), size_t{1});
+    TL_CHECK_EQ(cleared.front().name, std::string("Mines"));
+}

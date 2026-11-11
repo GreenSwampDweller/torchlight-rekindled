@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffectorFactory.h
+index 22b19dd..04be10a 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffectorFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			LineAffectorFactory(void) {};
++	        // Torchlight: `LineAffectorFactory::~LineAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~LineAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `LineAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Line";

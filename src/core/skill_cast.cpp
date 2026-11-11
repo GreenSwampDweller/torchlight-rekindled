@@ -3,6 +3,7 @@
 #include "core/skill_cast.h"
 
 #include "core/item_use.h"
+#include "core/ogre_math.h"
 #include "core/random.h"
 #include "core/skill_animation.h"
 #include "core/unit_themes.h"
@@ -39,6 +40,7 @@ constexpr bool kEventGroupCloneAllowed[kEventGroupCount] = {
 /// runs before each affix and effect group. With no caster or no target
 /// character every arm falls through and applies, as `Any` does here.
 bool passes_target_filter(SkillTargetFilter filter, const SkillCastContext& context) {
+    if (context.no_caster_character) return true;
     switch (filter) {
         case SkillTargetFilter::Self: return context.target_is_caster;
         case SkillTargetFilter::Pet: return context.target_is_casters_pet;
@@ -108,9 +110,18 @@ bool apply_affixes_and_effects(const SkillEffectAndAffixes& block, const SkillCa
         }
     }
 
-    for (const SkillEffectAndAffixes::EffectGroup& group : block.effect_groups) {
+    for (size_t g = 0; g < block.effect_groups.size(); ++g) {
+        const SkillEffectAndAffixes::EffectGroup& group = block.effect_groups[g];
         if (!ignore_target_filter && !passes_target_filter(group.target, context)) continue;
-        for (const Effect& authored : group.effects) {
+        for (size_t k = 0; k < group.effects.size(); ++k) {
+            const Effect& authored = group.effects[k];
+            // runs while the effect's owner (`+0x40`) is null.
+            if (context.ownerless_rolls != nullptr &&
+                (context.ownerless_owned == nullptr ||
+                 context.ownerless_owned->insert({g, k}).second)) {
+                Effect discarded = authored;
+                context.ownerless_rolls->roll(discarded);
+            }
             // `setOwner(effect, caster, true)` before it goes on.
             Effect effect = authored;
             set_owner_level(effect, context.owner_level);
@@ -653,13 +664,30 @@ bool is_in_range(const KnownSkill& skill, uint32_t level, const Vec3& from, cons
     return dist <= max_range;
 }
 
-bool requirements_met(const KnownSkill& skill, uint32_t level, const SkillCaster& caster) {
+namespace {
+
+// `CAN_BE_SILENCED` (X360 `CSkill +0x48`) and the caster holding `SILENCE`.
+bool silenced(const SkillDef& def, const SkillCaster& caster) {
+    return def.can_be_silenced && caster.effects != nullptr &&
+           caster.effects->has_effect(kEffectTypeSilence);
+}
+
+// The activation type asked against the skill's (X360 `CSkill +0x38`), either 0 passing.
+bool activation_asked(SkillActivation own, SkillActivation asked) {
+    return asked == SkillActivation::Any || own == SkillActivation::Any || own == asked;
+}
+
+}  // namespace
+
+bool requirements_met(const KnownSkill& skill, uint32_t level, const SkillCaster& caster,
+                      SkillActivation activation) {
     // `CSkill::requirementsMet`. `+0x6d`, enabled for use;
     // only `CAISkillManager` switches it, so a player's skill always passes.
     if (!skill.enabled) return false;
     if (skill.def == nullptr) return false;
     const SkillProperty* property = skill.property(level);
     if (property == nullptr) return false;
+    if (!activation_asked(skill.def->activation, activation)) return false;
     // `+0x124`, the charges left ('s first test,
     // with the two above): none, and the skill is refused. -1 is no limit.
     if (skill.charges == 0) return false;
@@ -694,9 +722,7 @@ bool requirements_met(const KnownSkill& skill, uint32_t level, const SkillCaster
         }
     }
 
-    // `CSkill +0x70` gates the `SILENCE` test; the flag is not identified, so the test runs
-    // whenever the caster holds silence.
-    if (caster.effects != nullptr && caster.effects->has_effect(kEffectTypeSilence)) return false;
+    if (silenced(*skill.def, caster)) return false;
 
     switch (static_cast<SkillTargetType>(property->target_type)) {
         case SkillTargetType::Position: {
@@ -772,6 +798,17 @@ SkillRunState* SkillRunner::find_copy(const std::string& skill_name, uint32_t co
     return nullptr;
 }
 
+size_t SkillRunner::index_of(const SkillRunState& state) const {
+    for (size_t k = 0; k < entries_.size(); ++k) {
+        if (&entries_[k].second == &state) return k;
+    }
+    return entries_.size();
+}
+
+bool SkillRunner::in_active(size_t index) const {
+    return std::find(active_.begin(), active_.end(), index) != active_.end();
+}
+
 SkillRunState& SkillRunner::idle_copy(const std::string& skill_name) {
     // `CSkillManager::executeSkill(wstring)`: the first copy
     // of the name not running; with every one running, `addSkill(last, true, false)`
@@ -806,16 +843,19 @@ bool SkillRunner::is_cooling(const std::string& skill_name) const {
 
 // PORT: a cooldown set from outside.
 void SkillRunner::set_cooldown_remaining(const std::string& skill_name, float seconds) {
+    // A cooling copy is on the active list, where `update` runs its cooldown down.
     bool found = false;
-    for (std::pair<std::string, SkillRunState>& e : entries_) {
-        if (e.first != skill_name) continue;
-        e.second.cooldown_remaining = seconds;
+    for (size_t k = 0; k < entries_.size(); ++k) {
+        if (entries_[k].first != skill_name) continue;
+        entries_[k].second.cooldown_remaining = seconds;
+        if (seconds > 0.0f && !in_active(k)) active_.push_back(k);
         found = true;
     }
     if (found || !(seconds > 0.0f)) return;
     SkillRunState fresh;
     fresh.cooldown_remaining = seconds;
     entries_.emplace_back(skill_name, fresh);
+    active_.push_back(entries_.size() - 1);
 }
 
 float SkillRunner::cooling_time(const std::string& skill_name) const {
@@ -848,10 +888,10 @@ bool SkillRunner::any_running() const {
 }
 
 bool SkillRunner::can_be_executed(const KnownSkill& skill, uint32_t level,
-                                  const SkillCaster& caster) const {
+                                  const SkillCaster& caster, SkillActivation activation) const {
     // `CSkillManager::getSkillCanBeExecuted`.
     if (is_cooling(skill.entry.name)) return false;
-    return requirements_met(skill, level, caster);
+    return requirements_met(skill, level, caster, activation);
 }
 
 bool SkillRunner::execute(const KnownSkill& skill, uint32_t level, const SkillCaster& caster,
@@ -862,13 +902,25 @@ bool SkillRunner::execute(const KnownSkill& skill, uint32_t level, const SkillCa
     const SkillProperty* property = skill.property(level);
     if (property == nullptr) return false;
 
-    // An exclusive skill stops its own running copies, so a second cast refreshes it.
-    if (property->exclusive && is_running(skill.entry.name)) stop(skill, context);
-
-    // Already running: the original reissues through its by-name overload,
-    // which takes the first copy that is not
-    // running or clones a new one.
-    SkillRunState& state = idle_copy(skill.entry.name);
+    // `EXCLUSIVE` (+0x87): every copy on the active list stopped (`stopSkill`), running or not;
+    // a stopped copy stays on the list until `update`.
+    if (property->exclusive) {
+        for (size_t k = 0; k < active_.size(); ++k) {
+            std::pair<std::string, SkillRunState>& e = entries_[active_[k]];
+            if (e.first == skill.entry.name) stop_copy(skill, e.second, context);
+        }
+    }
+    // The copy handed is the skill's own, the first; one the active list holds goes through the
+    // by-name overload, which takes the first copy not
+    // running or clones a new one, and refuses one the active list still holds.
+    SkillRunState* first = find_copy(skill.entry.name, 0);
+    if (first == nullptr) first = &idle_copy(skill.entry.name);
+    SkillRunState* chosen = first;
+    if (in_active(index_of(*first))) {
+        chosen = &idle_copy(skill.entry.name);
+        if (in_active(index_of(*chosen))) return false;
+    }
+    SkillRunState& state = *chosen;
 
     // `CSkill::startSkill`: the end flag
     // cleared and the animations assigned **before** the chance roll, so both
@@ -903,22 +955,19 @@ bool SkillRunner::execute(const KnownSkill& skill, uint32_t level, const SkillCa
     started.event_target.run = state.copy;
     started.started_events = &state.started_events;
     start_skill(skill, level, started);
+    active_.push_back(index_of(state));
     decrement_skill_charges(skill);
     return true;
 }
 
 namespace {
 
-// `Ogre::Vector3::normalise` as `CSkill`'s caller inlines it: the length taken to a
-// double for the test against 1e-08, the scale a single. PORT: the port's vector.
+// `Ogre::Vector3::normalise` on three floats.
 void normalise_in_place(float& x, float& y, float& z) {
-    const float length = std::sqrt(x * x + y * y + z * z);
-    if (static_cast<double>(length) > 1e-08) {
-        const float scale = 1.0f / length;
-        x *= scale;
-        y *= scale;
-        z *= scale;
-    }
+    const Vec3 n = ogre_normalised(Vec3{x, y, z});
+    x = n.x;
+    y = n.y;
+    z = n.z;
 }
 
 }  // namespace
@@ -964,16 +1013,16 @@ std::optional<Vec3> position_for_skill(const SkillProperty& property, const Vec3
             // round the unit handed in, at its feet; with neither,
             // the offset alone.
             if (target == nullptr) return Vec3{x, y, z};
-            x = (0.0f + target->centre.x) + x;
+            x = target->centre.x + x;
             y = (-target->radius + target->centre.y) + y;
-            z = (target->centre.z + 0.0f) + z;
+            z = target->centre.z + z;
             return Vec3{x, y, z};
         }
         if (target == nullptr) {
             // round the owner's feet.
-            x = (0.0f + owner->centre.x) + x;
+            x = owner->centre.x + x;
             y = (-owner->radius + owner->centre.y) + y;
-            z = (owner->centre.z + 0.0f) + z;
+            z = owner->centre.z + z;
             return Vec3{x, y, z};
         }
         // from the owner's feet towards the unit, level, as far as
@@ -981,18 +1030,13 @@ std::optional<Vec3> position_for_skill(const SkillProperty& property, const Vec3
         float dx = target->centre.x - owner->centre.x;
         float dy = 0.0f;
         float dz = target->centre.z - owner->centre.z;
-        const float length = std::sqrt(dx * dx + 0.0f + dz * dz);
+        const float length = std::sqrt(std::fma(dz, dz, dx * dx));
         float reach = length < property.range ? length : property.range;
         reach = reach > property.range_min ? reach : property.range_min;
-        if (static_cast<double>(length) > 1e-08) {
-            const float scale = 1.0f / length;
-            dx *= scale;
-            dy *= scale;
-            dz *= scale;
-        }
-        x = ((dx * reach + owner->centre.x) + 0.0f) + x;
+        normalise_in_place(dx, dy, dz);
+        x = (dx * reach + owner->centre.x) + x;
         y = ((dy * reach + owner->centre.y) + -owner->radius) + y;
-        z = ((dz * reach + owner->centre.z) + 0.0f) + z;
+        z = (dz * reach + owner->centre.z) + z;
         return Vec3{x, y, z};
     }
 
@@ -1002,8 +1046,8 @@ std::optional<Vec3> position_for_skill(const SkillProperty& property, const Vec3
     y *= 0.25f;
     z *= 0.25f;
     if (owner == nullptr) {
-        // With a unit and no owner the original reads through a null owner; with
-        // neither there is only the offset.
+        // DIVERGENCE: with a unit and no owner the console reads the radius through a null owner
+        // and faults; the offset alone, as with neither.
         return Vec3{x, y, z};
     }
     x += owner->centre.x;
@@ -1018,9 +1062,9 @@ std::optional<Vec3> position_for_skill(const SkillProperty& property, const Vec3
         bz = target->centre.z - owner->centre.z;
         normalise_in_place(bx, by, bz);
     }
-    x = (bx * -0.5f * property.range + 0.0f) + x;
+    x = bx * -0.5f * property.range + x;
     y = (by * -0.5f * property.range - owner->radius) + y;
-    z = (bz * -0.5f * property.range + 0.0f) + z;
+    z = bz * -0.5f * property.range + z;
     return Vec3{x, y, z};
 }
 
@@ -1053,7 +1097,10 @@ SkillCastResult SkillRunner::cast(const KnownSkill& skill, const SkillCaster& ca
     if (mana < cost || mana < cost_ot) return SkillCastResult::NotEnoughMana;
 
     if (is_cooling(skill.entry.name)) return SkillCastResult::Cooling;
-    if (!requirements_met(skill, level, caster)) return SkillCastResult::RequirementsNotMet;
+    // `castSkill` asks for `NORMAL` (3).
+    if (!requirements_met(skill, level, caster, SkillActivation::Normal)) {
+        return SkillCastResult::RequirementsNotMet;
+    }
 
     // A running skill is not refused here: `castSkill` holds back only while the character is
     // in the last cast (`still_casting`), and `executeSkill` starts another copy.
@@ -1107,15 +1154,28 @@ void SkillRunner::stop_by_name(const std::string& skill_name, const SkillCastCon
 
 void SkillRunner::stop_all(const SkillCastContext& context,
                            const std::function<const KnownSkill*(const std::string&)>& lookup,
-                           bool force, bool passives) {
-    // `CSkillManager::stopAllSkills(bool, bool, bool)`, the
-    // second flag false. By index: a stop's `EVENT_END` may start more.
-    for (size_t k = 0; k < entries_.size(); ++k) {
+                           bool force, bool passives, bool keep_on_death) {
+    // `CSkillManager::stopAllSkills(bool, bool, bool)` over
+    // the active list. By index: a stop's `EVENT_END` may start more.
+    for (size_t i = 0; i < active_.size(); ++i) {
+        const size_t k = active_[i];
         if (!entries_[k].second.running) continue;
         const std::string name = entries_[k].first;
         const KnownSkill* skill = lookup ? lookup(name) : nullptr;
         if (skill == nullptr) continue;
         if (!passives && skill->passive()) continue;
+        if (keep_on_death) {
+            const SkillProperty* property = skill->property(entries_[k].second.level);
+            if (property == nullptr || property->section == nullptr ||
+                (skill->def != nullptr && skill->def->dont_stop_on_death)) {
+                continue;
+            }
+            bool caster_die = false;
+            for (const tl::formats::AdmSection& child : property->event_section().children) {
+                if (upper(child.name) == kEventGroupNames[9]) caster_die = true;
+            }
+            if (caster_die) continue;
+        }
         if (force) {
             stop_copy(*skill, entries_[k].second, context);
             continue;
@@ -1133,10 +1193,11 @@ int SkillRunner::trigger_event(int group, const SkillCastContext& context,
                                const std::function<const KnownSkill*(const std::string&)>& lookup) {
     // `CSkillManager::triggerSkillEvent`: the stored target
     // position goes to `CSkill::triggerEvent` for target types 1, 5 and 6 (mask `0x62`) only;
-    // the unit is the caller's. Every copy is listed; a started block is passed over.
+    // the unit is the caller's. Over the active list; a started block is passed over.
     if (group < 0 || group >= kEventGroupCount) return 0;
     int applied = 0;
-    for (size_t k = 0; k < entries_.size(); ++k) {
+    for (size_t i = 0; i < active_.size(); ++i) {
+        const size_t k = active_[i];
         const std::string name = entries_[k].first;
         const KnownSkill* skill = lookup ? lookup(name) : nullptr;
         if (skill == nullptr) continue;
@@ -1185,16 +1246,13 @@ void SkillRunner::update(float dt, const SkillCastContext& context,
     // `CSkill::updateSkill(float)` over the active list
     // (`CSkillManager::update`). Takes the frame's delta.
     if (dt <= 0.0f) return;
-    for (size_t k = 0; k < entries_.size(); ++k) {
-        const std::string name = entries_[k].first;
-        SkillRunState& state = entries_[k].second;
+    const auto step = [&](size_t at) {
+        const std::string name = entries_[at].first;
+        SkillRunState& state = entries_[at].second;
         // The cooldown runs down **before** the running test, which is what lets
         // it outlive the run that charged it.
-        if (state.cooldown_remaining > 0.0f) {
-            state.cooldown_remaining -= dt;
-            if (state.cooldown_remaining < 0.0f) state.cooldown_remaining = 0.0f;
-        }
-        if (!state.running) continue;
+        state.cooldown_remaining -= dt;
+        if (!state.running) return;
 
         // Both clocks advance at the skill's own rate, not at the frame's.
         state.elapsed += dt * state.speed;
@@ -1211,14 +1269,14 @@ void SkillRunner::update(float dt, const SkillCastContext& context,
         const float duration = property != nullptr ? property->duration_override : 0.0f;
         if (context.events_alive && context.events_alive(name, state.copy) && duration <= 0.0f &&
             state.animations.loop_into == -1) {
-            continue;
+            return;
         }
 
         // `EVENT_END` fires when the countdown is spent, the skill is not a
         // passive, and the run has lasted at least `DURATIONOVERRIDEMS`.
-        if (state.minimum_time_remaining > 0.0f) continue;
-        if (skill != nullptr && skill->passive()) continue;
-        if (duration > state.elapsed) continue;
+        if (state.minimum_time_remaining > 0.0f) return;
+        if (skill != nullptr && skill->passive()) return;
+        if (duration > state.elapsed) return;
 
         // A group that applied something keeps the skill running one more
         // frame; the next frame finds `end_fired` set and stops it.
@@ -1228,7 +1286,7 @@ void SkillRunner::update(float dt, const SkillCastContext& context,
             fired_context.started_events = &state.started_events;
             const bool fired = stop_skill(*skill, state.level, fired_context);
             state.end_fired = true;
-            if (fired) continue;
+            if (fired) return;
         }
         // `CSkill::stopSkill`, with nothing
         // left to fire.
@@ -1237,6 +1295,19 @@ void SkillRunner::update(float dt, const SkillCastContext& context,
         state.speed = 1.0f;
         state.started_events.clear();
         if (context.reset_events) context.reset_events(name, state.copy);
+    };
+    for (size_t k = 0; k < active_.size();) {
+        const size_t at = active_[k];
+        step(at);
+        // `CSkillManager::update`: neither running nor cooling, the copy leaves the list, the
+        // last taking its place.
+        const SkillRunState& state = entries_[at].second;
+        if (!state.running && state.cooldown_remaining <= 0.0f) {
+            active_[k] = active_.back();
+            active_.pop_back();
+            continue;
+        }
+        ++k;
     }
 }
 

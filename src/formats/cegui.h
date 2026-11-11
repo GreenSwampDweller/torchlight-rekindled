@@ -41,6 +41,8 @@ struct ImagesetImage {
     std::string name;
     int x = 0;
     int y = 0;
+    /// Negative in the port's interface pack only: the rectangle drawn mirrored, `x` its right
+    /// edge.
     int width = 0;
     int height = 0;
 };
@@ -58,6 +60,9 @@ struct Imageset {
     int native_width = 640;
     int native_height = 480;
     bool auto_scaled = false;
+
+    /// `Tint="RRGGBB"`, the port's interface pack only: every image multiplied by this colour.
+    uint32_t tint = 0xFFFFFF;
 
     std::vector<ImagesetImage> images;
 

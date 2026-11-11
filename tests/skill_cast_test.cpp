@@ -993,8 +993,12 @@ TL_TEST(an_event_block_starts_once_per_run_unless_it_may_clone) {
     runner.trigger_skill_event(skill, 4, struck);
     TL_CHECK_EQ(hits, 2);
 
-    // A copy that stopped forgets what it started.
+    // A copy that stopped forgets what it started. Recast once a frame has passed: until then
+    // the active list holds the stopped copies, and a cast of one is refused.
     runner.stop(skill, context);
+    TL_CHECK_EQ(static_cast<int>(runner.cast(skill, caster, context)),
+                static_cast<int>(SkillCastResult::ChanceFailed));
+    runner.update(0.01f, context, lookup);
     TL_CHECK_EQ(static_cast<int>(runner.cast(skill, caster, context)),
                 static_cast<int>(SkillCastResult::Cast));
     runner.trigger_event(2, context, lookup);
@@ -1049,8 +1053,9 @@ TL_TEST(a_block_started_again_resets_and_a_clone_does_not) {
     TL_CHECK_EQ(resets.size(), size_t{2});
     TL_CHECK(resets.at(1) == "Bolt:0:EVENT_UNITHIT");
 
-    // Stopped and cast again: the same copy's block starts as itself again.
+    // Stopped and, a frame later, cast again: the same copy's block starts as itself again.
     runner.stop(skill, context);
+    runner.update(0.01f, context, lookup);
     TL_CHECK_EQ(static_cast<int>(runner.cast(skill, caster, context)),
                 static_cast<int>(SkillCastResult::Cast));
     runner.trigger_event(2, context, lookup);
@@ -1428,4 +1433,64 @@ TL_TEST(a_flee_position_is_half_the_range_behind_the_owner) {
     TL_CHECK_EQ(back->x, 0.0f);
     TL_CHECK_EQ(back->y, 0.0f);
     TL_CHECK_EQ(back->z, -4.0f);
+}
+
+// `castSkill` asks `requirementsMet` for a `NORMAL` skill; a skill of another
+// activation type is refused there, and passes when nothing is asked.
+TL_TEST(cast_asks_for_a_normal_skill_and_refuses_a_proc) {
+    AdmFile file = skill_file("Proc", {str("TARGET_TYPE", "SELF")}, {num("MANACOST", 1)});
+    file.root.records.at(1) = str("ACTIVATION_TYPE", "PROC");
+    const SkillDef def = tl::core::parse_skill_def(file);
+    const KnownSkill skill = learned(def);
+    SkillCaster caster;
+    caster.mana = 100.0f;
+    TL_CHECK(tl::core::requirements_met(skill, 1, caster));
+    TL_CHECK(!tl::core::requirements_met(skill, 1, caster, tl::core::SkillActivation::Normal));
+    SkillRunner runner;
+    const SkillCastContext context;
+    TL_CHECK_EQ(static_cast<int>(runner.cast(skill, caster, context)),
+                static_cast<int>(SkillCastResult::RequirementsNotMet));
+}
+
+// `CAN_BE_SILENCED` (`CSkill +0x48`, true unless authored) gates the `SILENCE` test.
+TL_TEST(a_silenced_caster_still_meets_a_skill_that_cannot_be_silenced) {
+    const AdmFile plain = skill_file("Bolt", {str("TARGET_TYPE", "SELF")}, {});
+    const AdmFile free_of =
+        skill_file("Shout", {str("TARGET_TYPE", "SELF"), boolean("CAN_BE_SILENCED", false)}, {});
+    const SkillDef plain_def = tl::core::parse_skill_def(plain);
+    const SkillDef free_def = tl::core::parse_skill_def(free_of);
+    TL_CHECK(plain_def.can_be_silenced);
+    TL_CHECK(!free_def.can_be_silenced);
+    tl::core::EffectManager silence;
+    silence.add_effect(tl::core::value_effect(tl::core::kEffectTypeSilence,
+                                              tl::core::kDurationAlways, 1.0f,
+                                              tl::core::EffectActivation::Passive));
+    SkillCaster caster;
+    caster.effects = &silence;
+    TL_CHECK(!tl::core::requirements_met(learned(plain_def), 1, caster));
+    TL_CHECK(tl::core::requirements_met(learned(free_def), 1, caster));
+}
+
+// `stopAllSkills(force, keep_on_death, passives)`: the middle flag, set by
+// `die`, spares a `DONT_STOP_ON_DEATH` skill.
+TL_TEST(a_death_stop_spares_a_skill_that_does_not_stop_on_death) {
+    const AdmFile file =
+        skill_file("Aura", {str("TARGET_TYPE", "SELF"), boolean("DONT_STOP_ON_DEATH", true)},
+                   {num("MANACOST", 1), num("MINIMUMTIMEMS", 5000)});
+    const SkillDef def = tl::core::parse_skill_def(file);
+    TL_CHECK(def.dont_stop_on_death);
+    const KnownSkill skill = learned(def);
+    const auto lookup = [&skill](const std::string& name) -> const KnownSkill* {
+        return name == skill.entry.name ? &skill : nullptr;
+    };
+    SkillCaster caster;
+    caster.mana = 100.0f;
+    const SkillCastContext context;
+    SkillRunner runner;
+    TL_CHECK_EQ(static_cast<int>(runner.cast(skill, caster, context)),
+                static_cast<int>(SkillCastResult::Cast));
+    runner.stop_all(context, lookup, /*force=*/true, /*passives=*/false, /*keep_on_death=*/true);
+    TL_CHECK(runner.is_running("Aura"));
+    runner.stop_all(context, lookup, /*force=*/true, /*passives=*/false);
+    TL_CHECK(!runner.is_running("Aura"));
 }

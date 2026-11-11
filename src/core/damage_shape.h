@@ -70,7 +70,9 @@ struct DamageShape {
 
     /// +0x82, `CSceneNodeObject`'s enabled flag.
     bool enabled = false;
-    bool ticked = false;      ///< +0x180, one update has run
+    bool ticked = false;  ///< +0x180, one update has run
+    /// X360 +0x178, the position the last enabled update ended at; zero until then.
+    Vec3 last_position{};
     float percent = 1.0f;     ///< +0x190, what the shape is tested at
     float time_left = 0.0f;   ///< +0x194
     float pause_left = 0.0f;  ///< +0x198

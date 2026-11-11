@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h b/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
-index 26a473b..6e26aef 100644
+index 26a473b..ad992a9 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseParticle.h
 @@ -31,6 +31,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -40,7 +40,17 @@ index 26a473b..6e26aef 100644
  			/** Perform some action if the particle expires.
  			@remarks
  				Note, that this function applies to all particle types (including Particle Techniques, Emitters and
-@@ -269,6 +286,11 @@ namespace ParticleUniverse
+@@ -206,6 +223,9 @@ namespace ParticleUniverse
+ 
+ 			/** Sets the event flags.
+ 			*/
++			// Torchlight: `Particle::setEventFlags`, `Particle::addEventFlags`,
++			// `Particle::removeEventFlags`, `Particle::getEventFlags` and
++			// `Particle::hasEventFlags` are the library's.
+ 			inline void setEventFlags(uint32 flags) {mEventFlags = flags;}
+ 
+ 			/** As setEventFlags, except the flags passed as parameters are appended to the
+@@ -269,6 +289,11 @@ namespace ParticleUniverse
  			*/
  			bool mMarkedForEmission;
  
@@ -53,10 +63,18 @@ index 26a473b..6e26aef 100644
  			@remarks
  				This attribute is particularly used for child classes that must have a capability to be
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
-index 8838c8f..ca7dacf 100644
+index 8838c8f..a8bb322 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseParticle.cpp
-@@ -43,19 +43,19 @@ namespace ParticleUniverse
+@@ -33,6 +33,7 @@ namespace ParticleUniverse
+ 	Real Particle::DEFAULT_MASS = 1.0f;
+ 	
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::~Particle` is the library's.
+ 	Particle::~Particle(void)
+ 	{
+ 		ParticleBehaviourIterator it;
+@@ -43,19 +44,19 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -79,7 +97,7 @@ index 8838c8f..ca7dacf 100644
  		// Iterate through all Behaviour objects that are registered at the particle.
  		if (mBehaviours.empty())
  			return;
-@@ -68,6 +68,18 @@ namespace ParticleUniverse
+@@ -68,6 +69,20 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -95,10 +113,20 @@ index 8838c8f..ca7dacf 100644
 +		mDynamicPropertyValues[dynamicAttribute] = value;
 +	}
 +	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::isEnabled`, `Particle::setEnabled`,
++	// `Particle::isFreezed` and `Particle::setFreezed` are the library's.
  	bool Particle::isEnabled(void) const
  	{
  		return mEnabled;
-@@ -123,6 +135,7 @@ namespace ParticleUniverse
+@@ -105,6 +120,7 @@ namespace ParticleUniverse
+ 		mFreezed = freezed;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::getBehaviour` is the library's.
+ 	ParticleBehaviour* Particle::getBehaviour(const String& behaviourType)
+ 	{
+ 		if (behaviourType == BLANK_STRING)
+@@ -123,6 +139,7 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -106,7 +134,7 @@ index 8838c8f..ca7dacf 100644
  	void Particle::copyBehaviours(ParticleBehaviourList& behaviours)
  	{
  		ParticleBehaviourIterator it;
-@@ -133,6 +146,8 @@ namespace ParticleUniverse
+@@ -133,6 +150,8 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -115,8 +143,39 @@ index 8838c8f..ca7dacf 100644
  	Real Particle::calculateVelocity(void) const
  	{
  		if (originalScaledDirectionLength != 0)
-@@ -172,6 +187,8 @@ namespace ParticleUniverse
- 		particle->copyBehaviours(mBehaviours);
+@@ -146,32 +165,28 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `Particle::copyAttributesTo`. The console's
++	// Particle has none of the original position and direction, the direction's length, the mass,
++	// the derived position, the marked and frozen flags or the behaviours, so none is copied (the
++	// Linux build copies them all); the copy's +0x28 vector is zeroed.
+ 	void Particle::copyAttributesTo (Particle* particle)
+ 	{
+-		// Copy attributes
+ 		particle->position = position;
+-		particle->originalPosition = originalPosition;
+-		particle->mDerivedPosition = mDerivedPosition;
++		particle->torchlightVector28 = Vector3::ZERO;
+ 		particle->direction = direction;
+-		particle->originalDirection = originalDirection;
+-		particle->originalDirectionLength = originalDirectionLength;
+ 		particle->originalScaledDirectionLength = originalScaledDirectionLength;
+ 		particle->originalVelocity = originalVelocity;
+-		particle->mass = mass;
+ 		particle->timeToLive = timeToLive;
+ 		particle->totalTimeToLive = totalTimeToLive;
+ 		particle->mEventFlags = mEventFlags;
+-		particle->mMarkedForEmission = mMarkedForEmission;
+ 		particle->mEnabled = mEnabled;
+ 		particle->mOriginalEnabled = mOriginalEnabled;
+ 		particle->mOriginalEnabledSet = mOriginalEnabledSet;
+-		particle->mFreezed = mFreezed;
+ 		particle->timeFraction = timeFraction;
+-
+-		// Copy Behaviour
+-		particle->copyBehaviours(mBehaviours);
  	}
  	//-----------------------------------------------------------------------
 +	// Torchlight: `Particle::_process` is the library's: the time fraction, then each
@@ -124,7 +183,7 @@ index 8838c8f..ca7dacf 100644
  	void Particle::_process(ParticleTechnique* technique, Real timeElapsed)
  	{
  		// Calculate the time fraction, because it is used in different other components
-@@ -189,6 +206,7 @@ namespace ParticleUniverse
+@@ -189,6 +204,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------

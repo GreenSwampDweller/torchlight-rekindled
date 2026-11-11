@@ -91,6 +91,11 @@ struct SkillProperty {
     uint32_t chance = 100;
     /// `TARGET_TYPE` (+0x70), default 0. `SkillTargetType` names the values.
     int32_t target_type = 0;
+    /// `TARGET_UNITTYPE` (+0x74, X360 +0x48), the authored name: the original keeps
+    /// `getUnitTypeByName`'s id. Empty (0) for none.
+    std::string target_unit_type;
+    bool single_target = false;       ///< `SINGLETARGET` (+0xb4, X360 +0x88)
+    float slowdown = 0.0f;            ///< `SLOWDOWNMS` / 1000 (+0xa8, X360 +0x7c)
     bool interruptable = false;       ///< `INTERRUPTABLE` (+0xb1)
     bool continuous_looping = false;  ///< `CONTINUOUSLOOPING` (+0xb2)
     bool exclusive = false;           ///< `EXCLUSIVE` (+0xb3)
@@ -152,6 +157,10 @@ struct SkillDef {
     /// not towards its target, while the cast has 0.1 s or more to run.
     bool allows_turning = true;
     bool requires_passable_los = false;  ///< `REQUIRES_PASSABLE_LOS` (`CSkill +0x69`)
+    /// `DONT_STOP_ON_DEATH` (X360 `CSkill +0x3f`): `stopAllSkills`' second flag spares the skill.
+    bool dont_stop_on_death = false;
+    /// `CAN_BE_SILENCED` (X360 `CSkill +0x48`), true unless authored.
+    bool can_be_silenced = true;
     /// `REQUIRES_PATHABLE` (`+0x6a`), read by `getRequiresPathable` only while the
     /// skill has a level.
     bool requires_pathable = false;

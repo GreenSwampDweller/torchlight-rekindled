@@ -1,0 +1,12 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleUniverseRendererFactory.h
+index b0651a2..16156ec 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseRendererFactory.h
+@@ -50,6 +50,7 @@ namespace ParticleUniverse
+ 
+ 	public:
+ 			ParticleRendererFactory(void){};
++			// Torchlight: `ParticleRendererFactory::~ParticleRendererFactory` is the library's (the script members apart).
+ 			virtual ~ParticleRendererFactory(void){};
+ 
+ 		    /** Returns the type of the factory, which identifies the particle Renderer type this factory creates. */

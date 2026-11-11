@@ -1,5 +1,8 @@
 #include "core/model_animation.h"
 
+#include "formats/ogre_mesh.h"
+#include "formats/ogre_skeleton.h"
+
 #include <cctype>
 #include <cmath>
 
@@ -580,15 +583,31 @@ const std::vector<FiredModelKey>& ModelAnimator::update(float dt, bool force, bo
     return fired_;
 }
 
+namespace {
+
+// The entity's own animations as `CGenericModel::loadModel` files them, one
+// named `*` left out.
+std::vector<std::string> own_animation_names(const std::vector<std::string>& entity_has) {
+    std::vector<std::string> names;
+    for (const std::string& own : entity_has) {
+        if (own != "*") names.push_back(own);
+    }
+    return names;
+}
+
+}  // namespace
+
 std::vector<LoadedAnimation> load_animation_list(const std::vector<AnimationFileEntry>& entries,
                                                  const std::string& model_stem,
                                                  const std::vector<std::string>& entity_has) {
     // `CGenericModel::loadAnimations`.
     std::vector<LoadedAnimation> out(entries.size());
-    std::vector<std::string> names;  // `CAnimationSet +0x2c`
-    unsigned count = 0;              // `CAnimationSet +0x28`
-    std::vector<std::string> seen;   // the names met so far
-    bool linking = true;             // cleared for good by a name the entity has
+    // `CAnimationSet +0x2c` and `+0x28` as `CGenericModel::loadModel` made
+    // them: the entity's own animations, one named `*` left out.
+    std::vector<std::string> names = own_animation_names(entity_has);
+    unsigned count = static_cast<unsigned>(names.size());
+    std::vector<std::string> seen;  // the names met so far
+    bool linking = true;            // cleared for good by a name the entity has
 
     const auto has = [&entity_has](const std::string& name) {
         for (const std::string& n : entity_has) {
@@ -655,6 +674,51 @@ std::vector<LoadedAnimation> load_animation_list(const std::vector<AnimationFile
         if (linking && !bind) ++count;
     }
     return out;
+}
+
+AnimationSet load_animation_set(
+    const std::string& mesh_file, const std::vector<std::string>& block_stems,
+    const std::function<std::vector<uint8_t>(const std::string&)>& read_beside) {
+    // `CGenericModel::loadAnimations`: each block's skeleton merged into the
+    // model's and its animation's name pushed unless the set holds it.
+    AnimationSet set;
+    const auto add = [&set](const tl::formats::OgreSkeletonAnimation& a, const std::string& file) {
+        for (const AnimationSetEntry& e : set) {
+            if (e.name == a.name) return;
+        }
+        set.push_back({a.name, file, a.length});
+    };
+    const auto skeleton = [&read_beside](const std::string& file) {
+        const std::vector<uint8_t> bytes = read_beside(file);
+        return tl::formats::parse_ogre_skeleton(bytes.data(), bytes.size());
+    };
+    std::string base = mesh_file;
+    if (const size_t slash = base.find_last_of("/\\"); slash != std::string::npos)
+        base = base.substr(slash + 1);
+    std::string stem = base;
+    if (const size_t dot = stem.find_last_of('.'); dot != std::string::npos) stem.resize(dot);
+    const std::vector<uint8_t> mesh_bytes = read_beside(base);
+    const tl::formats::OgreMesh mesh =
+        tl::formats::parse_ogre_mesh(mesh_bytes.data(), mesh_bytes.size());
+    if (!mesh.skeleton.empty()) {
+        std::string own = mesh.skeleton;
+        if (const size_t slash = own.find_last_of("/\\"); slash != std::string::npos)
+            own = own.substr(slash + 1);
+        for (const tl::formats::OgreSkeletonAnimation& a : skeleton(own).animations) add(a, own);
+    }
+    for (const std::string& block : block_stems) {
+        const std::string file = block + ".skeleton";
+        const tl::formats::OgreSkeleton read = skeleton(file);
+        if (!read.ok || read.animations.empty()) continue;
+        size_t chosen = 0;
+        if (upper(block) == upper(stem)) {
+            for (size_t i = 0; i < read.animations.size(); ++i) {
+                if (upper(read.animations[i].name) == "BIND") chosen = i;
+            }
+        }
+        add(read.animations[chosen], file);
+    }
+    return set;
 }
 
 }  // namespace tl::core

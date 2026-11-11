@@ -74,12 +74,15 @@ struct ItemSaveState {
     std::array<uint8_t, 64> orientation{};  ///< +0x9c
     int32_t value = 0;  ///< +0x68: trigger state (`+0x248`), gold amount (`+0x22c`)
     int32_t i70 = 0;    ///< +0x70
-    std::vector<ItemSaveState> sockets;            ///< +0x128
-    int32_t i78 = -1;                              ///< +0x78
-    int32_t i7c = -1;                              ///< +0x7c
-    int32_t room = -1;                             ///< +0x80
-    int64_t i170 = 0;                              ///< +0x170
-    int32_t i178 = 0;                              ///< +0x178
+    std::vector<ItemSaveState> sockets;  ///< +0x128
+    int32_t i78 = -1;                    ///< +0x78
+    int32_t i7c = -1;                    ///< +0x7c
+    int32_t room = -1;                   ///< +0x80
+    int64_t i170 = 0;                    ///< +0x170
+    int32_t i178 = 0;                    ///< +0x178
+    /// +0x17c, the version: `CItemSaveState::load` sets the file's; a record that never left memory
+    /// keeps what its heap held (the constructor leaves it).
+    uint8_t version = 0;
     std::vector<std::pair<float, int32_t>> pairs;  ///< (+0x158 as float, +0x140)
     EffectLists effects;                           ///< +0xe0, +0xf8, +0x110
 };

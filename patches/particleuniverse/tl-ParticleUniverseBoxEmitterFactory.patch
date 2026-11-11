@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitterFactory.h
+index b0aa071..885b04e 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseBoxEmitterFactory.h
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			BoxEmitterFactory(void) {};
++	        // Torchlight: `BoxEmitterFactory::~BoxEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~BoxEmitterFactory(void) {};
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `BoxEmitterFactory::getEmitterType` is the library's (the same name).
+ 			String getEmitterType(void) const
+ 			{
+ 				return "Box";
+ 			}
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `BoxEmitterFactory::createEmitter` is the library's: made, then given its type.
+ 			ParticleEmitter* createEmitter(void)
+ 			{
+ 				return _createEmitter<BoxEmitter>();

@@ -1,8 +1,19 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
-index aa80b53..754bd04 100644
+index aa80b53..a35ae6f 100644
 --- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
 +++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseGeometryRotatorFactory.h
-@@ -47,6 +47,7 @@ namespace ParticleUniverse
+@@ -38,15 +38,18 @@ namespace ParticleUniverse
+ 		public:
+ 
+ 			GeometryRotatorFactory(void){};
++	        // Torchlight: `GeometryRotatorFactory::~GeometryRotatorFactory` is the library's (the script members apart).
+ 	        virtual ~GeometryRotatorFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `GeometryRotatorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "GeometryRotator";
  			}
  
  			/** See ParticleAffectorFactory  */

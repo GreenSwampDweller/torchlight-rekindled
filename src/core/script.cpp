@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <tuple>
 
 namespace tl::core {
 namespace {
@@ -101,14 +102,6 @@ bool is_affector(uint32_t node_type) {
 float yaw_of(const Vec3& forward) {
     if (forward.x * forward.x + forward.z * forward.z < 1e-8f) return 0.0f;
     return std::atan2(forward.x, forward.z);
-}
-
-// INVENTED: the ground distance the port's walk measures to say the player's
-// destination is reached (a stand-in for `setDestination`'s search, below).
-float distance_xz(const Vec3& a, const Vec3& b) {
-    const float dx = a.x - b.x;
-    const float dz = a.z - b.z;
-    return std::sqrt(dx * dx + dz * dz);
 }
 
 float distance_squared(const Vec3& a, const Vec3& b) {
@@ -190,12 +183,15 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
     inactive_.clear();
     near_list_built_ = false;
     player_joined_ = static_cast<size_t>(-1);
+    player_stamp_ = std::numeric_limits<uint64_t>::max();
+    character_stamps_.clear();
     // No reseed here: a nested layout's machine (a room, a skill's or a death's
     // layout) is built mid-play, and the generators run on. The level load
     // seeds them itself, before its own `build` (`reseed_level_generators`).
     dialogs_.clear();
     level_updates_.clear();
     character_listeners_.clear();
+    character_listener_stamps_.clear();
     character_listener_removals_.clear();
     outbox_.clear();
     floaty_ = FloatyLine{};
@@ -207,7 +203,9 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
     player_path_ = 0;
 
     for (const tl::formats::CmpNode& node : scene.nodes) {
-        if (gated.count(node.id) != 0) continue;
+        // `CEditorScene::loadCompressedLayout` makes every Group
+        // before `rollRandomGroups` and deletes none it rolls out: only what is under one is not made.
+        if (gated.count(node.id) != 0 && node.type != type::kGroup) continue;
 
         // The node's descriptor makes its object with the class's constructor
         // (`CDescriptor::loadObject` -> `CreateObject`), then sets it from the node. Nothing more
@@ -598,6 +596,9 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
                 // is what `CRandomGroup::setVisible` compares
                 // against.
                 o.visible = bool_at(node, tl::formats::cmp_field::group::kVisible, true);
+                // `m_bEnabled` (+0x6e), false from `CSceneNodeObject::CSceneNodeObject`:
+                // nothing sets it for a group.
+                o.enabled = false;
                 break;
             case type::kParticle:
                 // `CParticleTechWrapperDescriptor::CreateObject`:
@@ -700,6 +701,9 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
                 o.path_name = text_at(node, f::kPath);
                 o.visible = bool_at(node, f::kVisible, true);
                 o.cannot_wander = bool_at(node, f::kCannotWander, false);
+                // Their setters write `+0x63b` and `+0x63c`.
+                o.no_gold = bool_at(node, f::kNoGold, false);
+                o.no_treasure = bool_at(node, f::kNoTreasure, false);
                 break;
             }
             case type::kCinematic:
@@ -1439,12 +1443,12 @@ void LevelScript::input(int64_t to, uint32_t in, QuestState& quests,
                 case kStartParticle:
                     // `CLayout::start`, then `Particle Started`.
                     emit_visible(true);
-                    broadcast(o.id, kParticleStarted, quests, out);
+                    link_output(o, kParticleStarted, quests, out);
                     return;
                 case kStopParticle:
                 case kForceStopParticle:
                     emit_visible(false);
-                    broadcast(o.id, kParticleStopped, quests, out);
+                    link_output(o, kParticleStopped, quests, out);
                     return;
                 case kShow: emit_visible(true); return;
                 case kHide: emit_visible(false); return;
@@ -2049,12 +2053,14 @@ void LevelScript::input(int64_t to, uint32_t in, QuestState& quests,
                     }
                     if (!set_unit_hidden(o.id, in == kHide, false, out)) emit_visible(in == kShow);
                     broadcast(o.id, in == kShow ? kOnVisible : kOnInvisible, quests, out);
+                    monster_npc_icon(o);
                     return;
                 case kEnable:
                 case kDisable:
                     // `CSceneNodeObject::setEnabled`.
                     emit_enabled(in == kEnable);
                     broadcast(o.id, in == kEnable ? kEnabled : kDisabled, quests, out);
+                    monster_npc_icon(o);
                     return;
                 case kMakeInvulnerable:
                 case kMakeVulnerable:
@@ -2068,7 +2074,7 @@ void LevelScript::input(int64_t to, uint32_t in, QuestState& quests,
                     // `setTarget(player)`.
                     o.no_target = false;
                     if (Character* c = character(o.id)) {
-                        c->hunt_affix = true;
+                        add_hunt_affix(o.id);
                         c->ai_flags.add(AIFlag::NoLineOfSight, 20.0f);
                         set_target(o, *c, true, UnitRef{}, out);
                     }
@@ -2077,7 +2083,7 @@ void LevelScript::input(int64_t to, uint32_t in, QuestState& quests,
                 case kDisableTargeting:
                     if (Character* c = character(o.id)) {
                         set_target(o, *c, false, UnitRef{}, out);
-                        c->hunt_affix = false;
+                        delete_hunt_affix(o.id);
                     }
                     o.no_target = true;
                     return;
@@ -2631,20 +2637,6 @@ void LevelScript::track_update(Object& o, Track& track, float percent, bool back
     track.last = percent;
 }
 
-void LevelScript::play_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out,
-                                        bool backwards) {
-    std::vector<int64_t> driven;
-    for (const Object& o : objects_) {
-        if (o.timeline != nullptr && o.tl_layout_control) driven.push_back(o.id);
-    }
-    for (int64_t id : driven) {
-        Object* o = find(id);
-        if (o == nullptr) continue;
-        if (backwards) timeline_play_backwards(*o, quests, out);
-        else timeline_play(*o, quests, out);
-    }
-}
-
 // `CLayout::processInputs(unsigned int, CEditorBaseObject*)`,
 // layout kind 2: of its kept objects (`editorObjectCreated`)
 // the `LAYOUT CONTROL` timelines take the input through their descriptor.
@@ -3043,7 +3035,10 @@ void LevelScript::add_character_update_listener(int64_t id) {
         character_listeners_.end()) {
         return;
     }
+    // The level's one list takes it at the front; the stamp keeps that order across machines.
+    static uint64_t stamp = 0;
     character_listeners_.insert(character_listeners_.begin(), id);
+    character_listener_stamps_.insert(character_listener_stamps_.begin(), ++stamp);
 }
 
 // `CLevel::removeCharacterUpdateListener`: a
@@ -3061,29 +3056,46 @@ void LevelScript::remove_character_update_listener(int64_t id) {
 // `CLevel::flushCharacterUpdateListeners`.
 void LevelScript::flush_character_update_listeners() {
     for (int64_t id : character_listener_removals_) {
-        character_listeners_.erase(
-            std::remove(character_listeners_.begin(), character_listeners_.end(), id),
-            character_listeners_.end());
+        for (size_t i = character_listeners_.size(); i-- > 0;) {
+            if (character_listeners_[i] != id) continue;
+            character_listeners_.erase(character_listeners_.begin() + static_cast<ptrdiff_t>(i));
+            character_listener_stamps_.erase(character_listener_stamps_.begin() +
+                                             static_cast<ptrdiff_t>(i));
+        }
     }
     character_listener_removals_.clear();
 }
 
-// `CLevel::updateCharacters`, after a character's
-// update: removals flushed, then every listener called, the list walked as it stood.
-// INVENTED: the order across machines (the port walks them in `set_level_machines` order).
-void LevelScript::character_updated_in_level(const UpdatedCharacter& who, float delta,
-                                             QuestState& quests, std::vector<ScriptEvent>& out) {
+// PORT: the level's one `CLevel` listener list (`+0xd0`), gathered from its machines: every
+// machine flushed first, then the listeners newest first by the stamp each was added with.
+std::vector<std::pair<LevelScript*, int64_t>> LevelScript::level_character_listeners() {
+    std::vector<std::tuple<uint64_t, LevelScript*, int64_t>> all;
     for (LevelScript* machine : level_machines()) {
         machine->flush_character_update_listeners();
-        const std::vector<int64_t> listeners = machine->character_listeners_;
-        for (int64_t id : listeners) {
-            const Object* area = machine->find(id);
-            if (area != nullptr && area->jump_down_area) {
-                machine->jump_down_area_character_updated(*area, who, quests, out);
-                continue;
-            }
-            machine->damage_shape_character_updated(id, who, delta, quests, out);
+        for (size_t i = 0; i < machine->character_listeners_.size(); ++i) {
+            all.emplace_back(machine->character_listener_stamps_[i], machine,
+                             machine->character_listeners_[i]);
         }
+    }
+    std::stable_sort(all.begin(), all.end(),
+                     [](const auto& a, const auto& b) { return std::get<0>(a) > std::get<0>(b); });
+    std::vector<std::pair<LevelScript*, int64_t>> out;
+    out.reserve(all.size());
+    for (const auto& entry : all) out.emplace_back(std::get<1>(entry), std::get<2>(entry));
+    return out;
+}
+
+// `CLevel::updateCharacters`, after a character's
+// update: removals flushed, then every listener called, the list walked as it stood.
+void LevelScript::character_updated_in_level(const UpdatedCharacter& who, float delta,
+                                             QuestState& quests, std::vector<ScriptEvent>& out) {
+    for (const auto& [machine, id] : level_character_listeners()) {
+        const Object* area = machine->find(id);
+        if (area != nullptr && area->jump_down_area) {
+            machine->jump_down_area_character_updated(*area, who, quests, out);
+            continue;
+        }
+        machine->damage_shape_character_updated(id, who, delta, quests, out);
     }
 }
 
@@ -3186,10 +3198,9 @@ LevelScript::UpdatedCharacter LevelScript::updated_character(int64_t id) {
     const UnitStats& stats = stats_for(o->unit);
     who.at = feet_of(*c);
     who.radius = c->motion.radius;
-    // INVENTED: `+0x70d`, the mesh hidden, is the node's `visible`, which the
-    // `Show`/`Hide` inputs (`setMeshVisible`) set; the gibbing death that also
-    // sets it (`die`) is not modelled.
-    who.hidden = !o->visible;
+    // `+0x70d`, the mesh hidden: the `Hide` input and a burst death set it; the near
+    // list's range culling (`setVisible` alone) does not.
+    who.hidden = c->mesh_hidden;
     who.targetable = o->targetable_flag;
     who.alive = dead_.count(id) == 0;
     const UnitStats::Alignment side = alignment_of(*o);
@@ -3249,12 +3260,26 @@ void LevelScript::damage_shape_set_enabled(Object& o, bool on, QuestState& quest
 }
 
 // `CDamageShapeDescriptor::update` ->
-// `CDamageShape::updateLevelObject`.
-// INVENTED: `CLevel::snapToValidGround` is not
-// transcribed; a shape stays at the height it was placed or moved to.
+// `CDamageShape::updateLevelObject`. A shape
+// away from where its last enabled update left it is first snapped to the ground.
 void LevelScript::damage_shape_update(Object& o, float delta, QuestState& quests,
                                       std::vector<ScriptEvent>& out) {
     if (!o.damage_shape) return;
+    const Vec3 last = o.damage_shape->last_position;
+    if (o.position.x != last.x || o.position.y != last.y || o.position.z != last.z) {
+        Vec3 snapped = o.position;
+        if (collision_ != nullptr && !collision_->empty() &&
+            collision_->snap_to_valid_ground(snapped)) {
+            const Vec3 moved = snapped - o.position;
+            o.local_position = o.local_position + moved;
+            o.position = o.position + moved;
+            ScriptEvent e;
+            e.action = ScriptAction::MoveNode;
+            e.node_id = o.id;
+            e.position = o.position;
+            out.push_back(e);
+        }
+    }
     if (damage_shape_finished(*o.damage_shape)) {
         damage_shape_set_enabled(o, false, quests, out);  // `Stop`: raises nothing
         o.damage_shape->done = false;
@@ -3263,42 +3288,45 @@ void LevelScript::damage_shape_update(Object& o, float delta, QuestState& quests
     s.ticked = true;
     if (!s.enabled) return;
     damage_shape_step(s, delta);
+    s.last_position = o.position;
 }
 
-// `CDamageShape::doInstantDamage`: one pass with no time over every character
-// (the player, then each machine's in creation order), then every item
-// (`itemUpdatedInLevel`).
+// `CDamageShape::doInstantDamage` (X360 in `setEnabled`): one pass with no
+// time over the level's character list (`+0x5C`, newest first, the player at its join), then
+// every item (`itemUpdatedInLevel`).
 void LevelScript::damage_shape_instant(Object& o, QuestState& quests,
                                        std::vector<ScriptEvent>& out) {
     const int64_t id = o.id;
-    damage_shape_character_updated(id, updated_player(), 0.0f, quests, out);
-    for (LevelScript* machine : level_machines()) {
-        std::vector<ScriptEvent>& sink = machine == this ? out : machine->outbox_;
-        const std::vector<int64_t> order = machine->character_order_;
-        for (int64_t cid : order) {
-            damage_shape_character_updated(id, machine->updated_character(cid), 0.0f, quests, sink);
+    for (const UnitRef& who : near_list_order()) {
+        if (who.player()) {
+            damage_shape_character_updated(id, updated_player(), 0.0f, quests, out);
+            continue;
         }
+        LevelScript* machine = who.machine;
+        if (machine->character(who.node) == nullptr) continue;
+        std::vector<ScriptEvent>& sink = machine == this ? out : machine->outbox_;
+        damage_shape_character_updated(id, machine->updated_character(who.node), 0.0f, quests,
+                                       sink);
     }
-    if (level_items_ != nullptr && level_items_->list) {
-        for (const DamageShapeItem& item : level_items_->list())
-            damage_shape_item_updated(id, item);
+    if (level_items_ != nullptr && (level_items_->all || level_items_->list)) {
+        const std::vector<DamageShapeItem> items =
+            level_items_->all ? level_items_->all() : level_items_->list();
+        for (const DamageShapeItem& item : items) damage_shape_item_updated(id, item, true);
     }
 }
 
 // `CLevel::updateItems`: the listeners of
 // every machine, as `character_updated_in_level` walks them.
 void LevelScript::item_updated_in_level(const DamageShapeItem& item) {
-    for (LevelScript* machine : level_machines()) {
-        machine->flush_character_update_listeners();
-        const std::vector<int64_t> listeners = machine->character_listeners_;
-        for (int64_t id : listeners) machine->damage_shape_item_updated(id, item);
+    for (const auto& [machine, id] : level_character_listeners()) {
+        machine->damage_shape_item_updated(id, item);
     }
 }
 
 // `CDamageShape::itemUpdatedInLevel` -> `doDamageToItem`
 // (vtable `+0x200`), then the item's
-// `interact(nullptr)` (vtable +0x280).
-void LevelScript::damage_shape_item_updated(int64_t id, const DamageShapeItem& item) {
+// `interact(nullptr)` (vtable +0x280): at once in an instant pass (`now`).
+void LevelScript::damage_shape_item_updated(int64_t id, const DamageShapeItem& item, bool now) {
     Object* o = find(id);
     if (o == nullptr || !o->damage_shape) return;
     const ShapeFrame frame{o->position, o->forward, o->right, o->up};
@@ -3309,7 +3337,12 @@ void LevelScript::damage_shape_item_updated(int64_t id, const DamageShapeItem& i
     if (!damage_shape_do_damage_to_item(*o->damage_shape, frame, item, isa)) return;
     TL_LOG_INFO("script: damage shape %s reaches item %lld", o->name.c_str(),
                 static_cast<long long>(item.id));
-    if (level_items_ != nullptr && level_items_->interact) level_items_->interact(item.id);
+    if (level_items_ == nullptr) return;
+    if (now && level_items_->interact_now) {
+        level_items_->interact_now(item.id);
+    } else if (level_items_->interact) {
+        level_items_->interact(item.id);
+    }
 }
 
 // `CDamageShape::characterUpdatedInLevel` -> `doDamageToCharacter`
@@ -3361,8 +3394,7 @@ void LevelScript::damage_shape_character_updated(int64_t id, const UpdatedCharac
 // A DOT shape calls `CCharacter::applyDamage` with no
 // attacker; any other hands an instant 0x34 effect (`applyEffectOnUnit`
 // -> `applyInstantEffect`), passing the struck
-// flag. INVENTED: that effect's block roll, resistances and knock-back are not
-// transcribed.
+// flag.
 void LevelScript::damage_shape_land(int64_t id, const std::string& name,
                                     const UpdatedCharacter& who, float amount, bool dot,
                                     QuestState& quests, std::vector<ScriptEvent>& out) {
@@ -3389,8 +3421,17 @@ void LevelScript::damage_shape_land(int64_t id, const std::string& name,
     KillingBlow blow;
     blow.has_direction = true;
     blow.force = 1.0f;
-    if (const Object* shape = find(id))
-        blow.direction = blow_direction(shape->position, who.at, 0.0f);
+    const Object* shape = find(id);
+    if (shape != nullptr) blow.direction = blow_direction(shape->position, who.at, 0.0f);
+    // Not over time: `CEffect(DAMAGE, 0, DYNAMIC, INSTANT, amount)`, the
+    // shape's damage type (`+0x140`) and that direction (`+0xac`), through the character's
+    // `applyEffectOnUnit` (vtable +0x114).
+    if (!dot && unit_skills_.shape_hit) {
+        const int32_t type =
+            shape != nullptr && shape->damage_shape ? shape->damage_shape->damage_type : 1;
+        unit_skills_.shape_hit(*machine, who.unit.node, amount, type, blow.direction);
+        return;
+    }
     machine->damage_unit(who.unit.node, amount, kNoAttacker, quests, out, nullptr, &blow, !dot);
 }
 
@@ -3776,9 +3817,10 @@ void LevelScript::skill_learn(Object& o, QuestState& quests, std::vector<ScriptE
     }
 }
 
-// INVENTED: a `Skill` node's unlearn, read from the node's inputs and outputs
-// and not from its code: the player's skill unlearned, then `SKILL UNLEARNED`
-// broadcast.
+// `CSkillController::unlearnSkill`: with a unit and a skill
+// name, `CSkillManager::deleteSkill` when the unit has a manager, then
+// `Skill Unlearned` whether or not it knew the skill.
+// INVENTED: a monster's skill is not deleted (its skill manager is not reachable from here).
 void LevelScript::skill_unlearn(Object& o, QuestState& quests, std::vector<ScriptEvent>& out) {
     if (!skill_configure(o) || o.sk_skill.empty() || !o.sk_has_unit) return;
     if (o.sk_player && player_skills_.unlearn) player_skills_.unlearn(o.sk_skill);
@@ -4058,240 +4100,6 @@ void LevelScript::set_ai_state(Object& unit, int32_t state, QuestState& quests,
 }
 
 // ---------------------------------------------------------------------------
-// Pathing (`CPathController`, `CCharacter::updatePathFollowing`)
-// ---------------------------------------------------------------------------
-
-// `CPathController::setEnabled`.
-void LevelScript::path_set_enabled(Object& o, bool on, QuestState& quests,
-                                   std::vector<ScriptEvent>& out) {
-    if (o.enabled == on) return;
-    o.enabled = on;
-    broadcast(o.id, on ? kEnabled : kDisabled, quests, out);
-
-    const bool player = o.path_group == "PLAYER" || o.unit == "PLAYER";
-    if (!o.path_collected) {
-        o.path_units = player ? std::vector<UnitRef>{UnitRef{}} : units_named(o.unit);
-        o.path_collected = !o.path_units.empty();
-    }
-    for (const UnitRef& ref : o.path_units) {
-        if (ref.player()) {
-            // The player: `setPathToFollow`, `setAIState(2)`.
-            if (on) {
-                o.path_ended = false;
-                if (o.path_to_player) o.position = frame_.point(player_at_);
-                player_path_ = o.id;
-                player_path_pct_ = -1.0f;
-                player_path_forward_ = true;
-                player_has_destination_ = false;
-            } else if (player_path_ == o.id) {
-                player_path_ = 0;
-            }
-            continue;
-        }
-        // The unit's own machine runs it, and its events are that machine's.
-        LevelScript& runs = *ref.machine;
-        std::vector<ScriptEvent>& sink = sink_for(ref.machine, out);
-        Object* unit = runs.find(ref.node);
-        if (unit == nullptr) continue;
-        if (on) {
-            o.path_ended = false;
-            // A walk-to-player path moves itself onto the unit
-            // (`setPosition(unit->getPosition(true))`), so it stands at the room's frame applied to
-            // the unit's position.
-            if (o.path_to_player) o.position = frame_.point(runs.position_of(*unit));
-            // `setTarget` (none, or the player on a walk-to-player path),
-            // `stopPathing`, `setTargetItem(0)` (a port monster holds no target
-            // item), `setPathToFollow(this)`, `setAIState(2)`.
-            if (Character* c = runs.character(ref.node)) {
-                runs.set_target(*unit, *c, o.path_to_player, UnitRef{}, sink);
-                runs.stop_pathing(*c);
-            }
-            runs.set_path_to_follow(*unit, o.id, this);
-            runs.set_ai_state(*unit, ai_state::kIdle, quests, sink);
-        } else if (unit->path == o.id && unit->path_machine == this) {
-            runs.set_path_to_follow(*unit, 0, nullptr);
-        }
-        // `ENABLE ON START`: `CSceneNodeObject::setEnabled(true)` on the unit,
-        // which only stores the flag (+0x82). It runs when the path is switched
-        // off as well as on: the original's quirk, kept.
-        if (o.path_enable_units && !unit->enabled) {
-            unit->enabled = true;
-            ScriptEvent e;
-            e.action = ScriptAction::SetEnabled;
-            e.node_id = unit->id;
-            e.name = unit->name;
-            e.on = true;
-            sink.push_back(e);
-        }
-    }
-}
-
-// `CCharacter::setPathToFollowByName`: the first
-// `Pathing` object in creation order whose `PATH NAME` equals it exactly; none clears.
-void LevelScript::set_path_to_follow_by_name(Object& unit) {
-    for (const Object& o : objects_) {
-        if (o.type != type::kPathing || o.path_name != unit.path_name) continue;
-        unit.path = o.id;
-        unit.path_machine = this;
-        return;
-    }
-    unit.path = 0;
-    unit.path_machine = nullptr;
-}
-
-// `CMonster::setPathToFollow`, the same body as
-// `CCharacter::setPathToFollow`: the cap restored, a
-// path raising it to 800; route clock 10, percent -1.
-void LevelScript::set_path_to_follow(Object& unit, int64_t path, LevelScript* machine) {
-    Character* c = character(unit.id);
-    if (c != nullptr) c->search_cap = c->saved_search_cap;
-    unit.path = machine != nullptr ? path : 0;
-    unit.path_machine = machine != nullptr && path != 0 ? machine : nullptr;
-    if (unit.path_machine != nullptr && c != nullptr) {
-        c->saved_search_cap = c->search_cap;
-        c->search_cap = 800;
-    }
-    if (c != nullptr) c->since_route = 10.0f;
-    unit.path_pct = -1.0f;
-}
-
-int32_t LevelScript::unit_search_cap(int64_t node) const {
-    const Character* c = character(node);
-    return c != nullptr ? c->search_cap : -1;
-}
-
-// `CPathController::getNextPointAtPercent`.
-Vec3 LevelScript::path_point_at(const Object& path, float pct, bool forward,
-                                float unit_radius) const {
-    // `PATH TO PLAYER`: `CPathController::caculatePointInFrontOfPlayer`:
-    // from the player towards the controller, twice the two radii out, at y 0.
-    if (path.path_to_player) {
-        float dx = path.position.x - player_at_.x;
-        float dz = path.position.z - player_at_.z;
-        const float length = std::sqrt(dx * dx + 0.0f + dz * dz);
-        if (1e-08 < static_cast<double>(length)) {
-            const float inv = 1.0f / length;
-            dx = dx * inv;
-            dz = dz * inv;
-        }
-        const float reach = player_radius_ + unit_radius;
-        const float step = reach + reach;
-        return Vec3{dx * step + player_at_.x, 0.0f, dz * step + player_at_.z};
-    }
-    if (path.points.empty()) return path.position;
-    pct = pct <= 0.0f ? 0.0f : std::min(pct, 1.0f);
-    auto fraction = [&](size_t i) {
-        return path.path_total == 0.0f ? path.cumulative[i] : path.cumulative[i] / path.path_total;
-    };
-    if (!forward) {
-        size_t i = path.points.size();
-        do {
-            --i;
-        } while (i > 0 && pct < fraction(i));
-        return path.points[i];
-    }
-    for (size_t i = 0; i < path.points.size(); ++i) {
-        if (pct <= fraction(i)) return path.points[i];
-    }
-    return path.points.front();
-}
-
-// `CPathController::getClosestPctOfPath`. It
-// measures the distance to every waypoint and then returns the first waypoint's
-// fraction regardless, which is 0: the original's quirk, kept.
-float LevelScript::path_closest_pct(const Object& path) const {
-    if (path.path_to_player || path.points.size() == 1 || path.path_total == 0.0f) return 1.0f;
-    return path.cumulative.front() / path.path_total;
-}
-
-// `CCharacter::updatePathFollowing(bool)`.
-void LevelScript::path_follow(Object& unit, bool force, const Vec3& at, QuestState& quests,
-                              std::vector<ScriptEvent>& out) {
-    Character* c = character(unit.id);
-    if (!force && !unit.enabled) {
-        if (c != nullptr) stop_pathing(*c);
-        unit.has_destination = false;
-        return;
-    }
-    // The player's stand-in carries no machine: its path is this machine's.
-    Object* path = path_of(unit);
-    if (path == nullptr) return;
-
-    bool set = false;
-    if (unit.path_pct <= 0.0f) {
-        unit.path_pct = unit.path_forward ? path_closest_pct(*path) : 0.95f;
-        set = true;
-    }
-    // On the ground plane: both heights are zeroed before the test
-    // (`movss %xmm2,0x54(%rsp)` with xmm2 = 0, and again).
-    const float radius = c != nullptr ? c->motion.radius : player_radius_;
-    const Vec3 point = path_point_at(*path, unit.path_pct, unit.path_forward, radius);
-    const float dx = point.x - at.x;
-    const float dz = point.z - at.z;
-    if (!(2.0f < dx * dx + dz * dz)) {
-        const float closest = path_closest_pct(*path);
-        if (!unit.path_forward) {
-            const float pct = std::min(closest, unit.path_pct);
-            unit.path_pct = pct;
-            if (0.0f <= pct) {
-                unit.path_pct = pct - 0.05f;
-                if (pct - 0.05f <= 0.05f) {
-                    unit.path_pct = 0.0f;
-                    if (unit.path_loops) unit.path_forward = true;
-                }
-                set = true;
-            }
-        } else {
-            const float pct = std::max(closest, unit.path_pct);
-            unit.path_pct = pct;
-            if (!(1.0f < pct) || set) {
-                unit.path_pct = pct + 0.05f;
-                if (pct + 0.05f < 0.95f) {
-                    set = true;
-                } else {
-                    unit.path_pct = 1.0f;
-                    if (!unit.path_loops) {
-                        set = true;
-                        if (!path->path_ended) {
-                            set = false;
-                            path_reached(unit.path_machine, *path, quests, out);
-                        }
-                    } else {
-                        unit.path_forward = false;
-                        set = true;
-                    }
-                }
-            }
-        }
-    }
-
-    // on: a unit not moving takes a destination while its path runs;
-    // otherwise only a step along the path gives it a new one.
-    if (c != nullptr) {
-        c->run = path->path_runs;
-        if (!(!c->pathing && !path->path_ended) && !set) return;
-        const Vec3 to = path_point_at(*path, unit.path_pct, unit.path_forward, radius);
-        set_destination(*c, stats_for(unit.unit), to.x, to.z);
-        if (!c->pathing && !path->path_ended) path_reached(unit.path_machine, *path, quests, out);
-        return;
-    }
-
-    // The player (`CPlayer::update` runs this every frame): the port's walk
-    // stands in for the player's `setDestination`.
-    unit.running = path->path_runs;
-    if (!(!unit.has_destination && !path->path_ended) && !set) return;
-
-    // `setDestination` to the waypoint the percent names;
-    // already in the goal's cell, the unit is not moving.
-    unit.destination = path_point_at(*path, unit.path_pct, unit.path_forward, radius);
-    unit.has_destination = distance_xz(unit.destination, at) > kNavCell * 0.5f;
-    if (!unit.has_destination && !path->path_ended) {
-        path->path_ended = true;
-        broadcast(path->id, kEndOfPathReached, quests, out);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Level activation and the frame
 // ---------------------------------------------------------------------------
 
@@ -4532,7 +4340,10 @@ void LevelScript::update_near_unit_list(const Vec3& view, std::vector<ScriptEven
     // PORT: the player is added to the level's list when it enters, after the
     // load made what it made (`CLevel::addCharacter`, at the
     // head): taken as the machine's character count at its first rebuild.
-    if (player_joined_ == static_cast<size_t>(-1)) player_joined_ = character_order_.size();
+    if (player_joined_ == static_cast<size_t>(-1)) {
+        player_joined_ = character_order_.size();
+        player_stamp_ = next_level_stamp();
+    }
     size_t listed = 0;
     size_t active = 0;
     for (int64_t id : character_order_) {
@@ -4839,7 +4650,12 @@ void LevelScript::update(float frame_delta, const Vec3& player, QuestState& ques
     }
 
     update_dialog_ui(frame_delta, quests, out);
+    update_layouts(delta, player, quests, out);
+}
 
+void LevelScript::update_layouts(float delta, const Vec3& player, QuestState& quests,
+                                 std::vector<ScriptEvent>& out) {
+    player_at_ = player;
     // `CLevel::updateLayouts`: the
     // descriptors in order. Every type this switch acts on is in `updates_each_frame`.
     for (size_t i = 0; i < frame_order_.size(); ++i) {
@@ -5159,7 +4975,8 @@ void LevelScript::answer_dialog(bool accept, QuestState& quests, std::vector<Scr
 // ---------------------------------------------------------------------------
 
 void LevelScript::add_spawned_unit(int64_t id, const std::string& unit, const Vec3& at, bool hunts,
-                                   float facing, const UnitCreation* creation) {
+                                   float facing, const UnitCreation* creation,
+                                   bool activate_effects) {
     if (id == 0 || unit.empty()) return;
     if (find(id) != nullptr) return;
 
@@ -5172,26 +4989,35 @@ void LevelScript::add_spawned_unit(int64_t id, const std::string& unit, const Ve
     o.position = at;
     index_.emplace(id, objects_.size());
     objects_.push_back(std::move(o));
-    Character& c = make_character(objects_.back(), at, facing, creation);
-    if (hunts) {
-        // `TARGET PLAYER`: CUnitSpawner::spawnUnitByIndex
-        // adds MONSTER_HUNT,
-        // AI flag 4 (NO LINE OF SIGHT, 20.0s) and setTarget(player).
-        c.hunt_affix = true;
-        c.ai_flags.add(AIFlag::NoLineOfSight, 20.0f);
-        std::vector<ScriptEvent> ignored;
-        set_target(objects_.back(), c, true, UnitRef{}, ignored);
-    }
+    make_character(objects_.back(), at, facing, creation, nullptr, activate_effects);
+    if (hunts) hunt_player(id);
 }
 
-bool LevelScript::make_unit_champion(int64_t id) {
+void LevelScript::hunt_player(int64_t id) {
+    // `TARGET PLAYER`: CUnitSpawner::spawnUnitByIndex
+    // sets the target to the player, adds MONSTER_HUNT, then AI flag 4 (NO LINE OF
+    // SIGHT, 20.0s), - after `addCharacter` has grounded it; the
+    // affix's effects roll on `g_RandVolatile`.
+    Object* o = find(id);
+    Character* c = character(id);
+    if (o == nullptr || c == nullptr) return;
+    std::vector<ScriptEvent> ignored;
+    set_target(*o, *c, true, UnitRef{}, ignored);
+    add_hunt_affix(id);
+    if (Character* hunter = character(id)) hunter->ai_flags.add(AIFlag::NoLineOfSight, 20.0f);
+}
+
+bool LevelScript::make_unit_champion(int64_t id, const std::string& name) {
     Character* c = character(id);
     if (c == nullptr) return false;
     static const StatBook kNoGraphs;
-    if (!make_champion(c->combat, stats_for(c->unit), difficulty_,
-                       graphs_ != nullptr ? *graphs_ : kNoGraphs, volatile_random())) {
+    const UnitStats& stats = stats_for(c->unit);
+    // An existing champion keeps its name and everything else.
+    if (!make_champion(c->combat, stats, difficulty_, graphs_ != nullptr ? *graphs_ : kNoGraphs,
+                       volatile_random())) {
         return false;
     }
+    if (!stats.unique_name) c->champion_name = name;
     // vtable +0x48 with `+0x84 + 0.2`.
     c->scale = c->scale + 0.2f;
     return true;
@@ -5221,6 +5047,12 @@ void LevelScript::move_unit(int64_t id, const Vec3& at) {
     c->motion.position = {at.x, at.y + c->motion.radius, at.z};
     if (was) avoidance_add(*c);
     if (Object* o = find(id)) o->position = at;
+}
+
+// PORT: the level machine's own bookkeeping: a character turned and put down.
+void LevelScript::place_unit(int64_t id, const Vec3& at, float facing) {
+    move_unit(id, at);
+    if (Character* c = character(id)) c->facing = facing;
 }
 
 // PORT: the level machine's own bookkeeping: an accessor.
@@ -5299,8 +5131,15 @@ bool LevelScript::send_damage_shape_input(int64_t id, uint32_t in, QuestState& q
 // (`CMonster::updateAI`: every monster is a character with an AI.)
 void LevelScript::drop_characters_to_ground(std::vector<ScriptEvent>& out) {
     for (Object& o : objects_) {
-        if (o.type == type::kMonster) drop_character_to_ground(o, out);
+        if (o.type != type::kMonster) continue;
+        if (const Character* c = character(o.id); c != nullptr && c->dropped) continue;
+        drop_character_to_ground(o, out);
     }
+}
+
+// PORT: the level machine's own bookkeeping.
+void LevelScript::mark_dropped(int64_t id) {
+    if (Character* c = character(id)) c->dropped = true;
 }
 
 void LevelScript::drop_character_to_ground(Object& o, std::vector<ScriptEvent>& out) {
@@ -5318,6 +5157,7 @@ void LevelScript::drop_character_to_ground(Object& o, std::vector<ScriptEvent>& 
             },
             volatile_random());
     });
+    c->dropped = true;
     if (was) avoidance_add(*c);
     const Vec3 at = feet_of(*c);
     o.position = at;
@@ -5350,18 +5190,28 @@ void LevelScript::unit_killed(int64_t id, QuestState& quests, std::vector<Script
     if (dead_.count(id) != 0) return;
     dead_.insert(id);
     if (Object* o = find(id)) {
-        // `CCharacter::die`: state 5, then 6 after the fall.
+        // `CCharacter::die`: state 5, 6 from `dyingAI` once
+        // the fall or the death animation is over (`body_update`).
         // `setAIState(5)` ends a walk-to-player or non-looping path; a looping one stays.
         set_ai_state(*o, ai_state::kDying, quests, out);
-        o->ai = ai_state::kDead;
         o->targetable = false;
     }
     if (Character* c = character(id)) {
+        c->dying_left = 0.0f;
         stop_pathing(*c);
         avoidance_remove(*c);
         c->has_target = false;
     }
+    if (defer_death_broadcast_) {
+        owed_death_broadcasts_.insert(id);
+        return;
+    }
     broadcast(id, kMonsterKilled, quests, out);
+}
+
+void LevelScript::broadcast_owed_death(int64_t id, QuestState& quests,
+                                       std::vector<ScriptEvent>& out) {
+    if (owed_death_broadcasts_.erase(id) != 0) broadcast(id, kMonsterKilled, quests, out);
 }
 
 // PORT: the level machine's own bookkeeping: an accessor.

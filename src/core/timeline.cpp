@@ -27,6 +27,16 @@ uint32_t float_as_word(float value) {
     return word;
 }
 
+// `Ogre::Vector4 * Ogre::Matrix4`: each column's sum fused,
+// the first column in another order than the rest.
+std::array<float, 4> row_times_matrix(const std::array<float, 4>& v, const float (&m)[4][4]) {
+    return {
+        std::fma(v[0], m[0][0], std::fma(m[3][0], v[3], std::fma(m[1][0], v[1], m[2][0] * v[2]))),
+        std::fma(m[3][1], v[3], std::fma(m[2][1], v[2], std::fma(m[0][1], v[0], m[1][1] * v[1]))),
+        std::fma(m[3][2], v[3], std::fma(m[2][2], v[2], std::fma(m[0][2], v[0], m[1][2] * v[1]))),
+        std::fma(m[3][3], v[3], std::fma(m[2][3], v[2], std::fma(m[0][3], v[0], m[1][3] * v[1])))};
+}
+
 }  // namespace
 
 // PORT: an accessor of a timeline value.
@@ -456,25 +466,29 @@ std::optional<TimelineValue> timeline_spline(const std::vector<tl::formats::CmpT
         case TimelineValueType::Vector3: width = 3; break;
         default: return std::nullopt;  // `fillSplineWithData` resets the type to Linear
     }
-    // INVENTED: an empty spline. The original would index an empty point list.
-    if (keys.empty()) return std::nullopt;
-
-    // `addPoint` reads a vector from the key's words, raw: an integer's bits
-    // are taken as a float's.
-    // INVENTED: components past a key's own width are 0; the original reads
-    // whatever follows the value in memory (it matters only to the closed test).
+    // a one-wide key's word is an integer, converted; a wider
+    // key's words are a vector's, raw.
+    // INVENTED: components past a key's own width are 0; the original keeps
+    // whatever its stack holds, the same for every point, so only a NaN there
+    // would change the closed test.
     std::vector<std::array<float, 3>> points;
     for (const tl::formats::CmpTimelineKey& key : keys) {
-        // A key of the wrong width ends the fill before `recalcTangents`.
-        // INVENTED: nothing is set then; the original samples a spline whose
-        // tangents were never computed.
-        if (key.words.size() != width) return std::nullopt;
+        // A key of the wrong width ends the fill: the points before it stay,
+        // their tangents made as each was added (`mAutoCalc`).
+        if (key.words.size() != width) break;
         std::array<float, 3> p{0.0f, 0.0f, 0.0f};
-        for (size_t c = 0; c < width; ++c) p[c] = word_as_float(key.words[c]);
+        if (width == 1) {
+            p[0] = static_cast<float>(static_cast<int32_t>(key.words[0]));
+        } else {
+            for (size_t c = 0; c < width; ++c) p[c] = word_as_float(key.words[c]);
+        }
         points.push_back(p);
     }
+    // INVENTED: an empty spline. The original would index an empty point list.
+    if (points.empty()) return std::nullopt;
 
-    // `Ogre::SimpleSpline::interpolate(Real)` and `interpolate(unsigned, Real)`.
+    // `Ogre::SimpleSpline::interpolate(Real)` and
+    // `interpolate(unsigned, Real)`.
     const size_t n = points.size();
     const float segment = percent * static_cast<float>(n - 1);
     const auto index = static_cast<unsigned>(segment);
@@ -500,15 +514,24 @@ std::optional<TimelineValue> timeline_spline(const std::vector<tl::formats::CmpT
         };
         const float s2 = s * s;
         const float s3 = s2 * s;
-        // powers (s^3, s^2, s, 1) times the Hermite matrix, then times the points.
-        const float w0 = s3 * 2.0f + s2 * -3.0f + s * 0.0f + 1.0f;
-        const float w1 = s3 * -2.0f + s2 * 3.0f + s * 0.0f + 0.0f;
-        const float w2 = s3 * 1.0f + s2 * -2.0f + s * 1.0f + 0.0f;
-        const float w3 = s3 * 1.0f + s2 * -1.0f + s * 0.0f + 0.0f;
+        // powers (s^3, s^2, s, 1) times the Hermite matrix, then times the
+        // rows (point, next point, their tangents, each with a 1).
+        const std::array<float, 4> powers{s3, s2, s, 1.0f};
+        const float hermite[4][4] = {{2.0f, -2.0f, 1.0f, 1.0f},
+                                     {-3.0f, 3.0f, -2.0f, -1.0f},
+                                     {0.0f, 0.0f, 1.0f, 0.0f},
+                                     {1.0f, 0.0f, 0.0f, 0.0f}};
+        const std::array<float, 4> weights = row_times_matrix(powers, hermite);
+        float rows[4][4];
         for (size_t c = 0; c < 3; ++c) {
-            result[c] = w0 * points[index][c] + w1 * points[index + 1][c] + w2 * tangent(index, c) +
-                        w3 * tangent(index + 1, c);
+            rows[0][c] = points[index][c];
+            rows[1][c] = points[index + 1][c];
+            rows[2][c] = tangent(index, c);
+            rows[3][c] = tangent(index + 1, c);
         }
+        for (float(&row)[4] : rows) row[3] = 1.0f;
+        const std::array<float, 4> mixed = row_times_matrix(weights, rows);
+        result = {mixed[0], mixed[1], mixed[2]};
     }
 
     // The first `width` components, as raw words.

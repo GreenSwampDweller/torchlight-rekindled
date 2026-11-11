@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxColliderFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxColliderFactory.h
+index a2340dc..2227f04 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxColliderFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxColliderFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			BoxColliderFactory(void){};
++	        // Torchlight: `BoxColliderFactory::~BoxColliderFactory` is the library's (the script members apart).
+ 	        virtual ~BoxColliderFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `BoxColliderFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "BoxCollider";

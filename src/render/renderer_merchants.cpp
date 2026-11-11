@@ -6,9 +6,43 @@
 
 namespace tl::render {
 
+/// The merchant `unit` as the one traded with, its stock on the vendor's tray. True when
+/// the PC's merchant pane took it (the mouse controls), so the console's menu stays shut.
+bool Renderer::Impl::open_merchant_stock(const std::string& unit) {
+    MerchantState* merchant = merchant_named(unit);
+    if (merchant == nullptr) {
+        TL_LOG_WARN("npc: '%s' has no stock", unit.c_str());
+        return false;
+    }
+    for (const auto& entry : merchants) {
+        if (&entry.second == merchant) trading_with = entry.first;
+    }
+    if (mouse_opens_storage(VendorScreen::Merchant)) return true;
+    inventory_menu.set_vendor_stock(&merchant->inventory, merchant->gambler);
+    return false;
+}
+
+/// `CLevel::addItem` at the merchant, for what a trade could not hold.
+void Renderer::Impl::drop_at_merchant(const tl::core::TradeOutcome& out) {
+    if (!out.dropped) return;
+    for (const auto& entry : scene_units) {
+        if (entry.second.node != trading_with || entry.second.entity == nullptr) continue;
+        const Ogre::SceneNode* at = entry.second.entity->getParentSceneNode();
+        if (at != nullptr) drop_item(out.dropped_item, out.count, at->_getDerivedPosition());
+        break;
+    }
+}
+
 void Renderer::Impl::trade_selected() {
+    const bool buying = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
+    trade_item(buying, buying ? inventory_menu.selected_vendor_slot()
+                              : inventory_menu.selected_slot_index());
+}
+
+/// One item bought from the merchant's slot or sold from the player's.
+void Renderer::Impl::trade_item(bool buying, int slot) {
     const auto found = merchants.find(trading_with);
-    if (found == merchants.end()) return;
+    if (found == merchants.end() || slot < 0) return;
     MerchantState& merchant = found->second;
     load_unit_types();
     load_stat_graphs();
@@ -25,18 +59,15 @@ void Renderer::Impl::trade_selected() {
         return create_item(data != nullptr ? *data : held, false, true, false);
     };
 
-    const bool buying = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
     tl::core::TradeOutcome out;
     std::string name;
     if (buying) {
-        const int slot = inventory_menu.selected_vendor_slot();
-        if (slot < 0) return;
+        if (!merchant.inventory.occupied(static_cast<size_t>(slot))) return;
         name = merchant.inventory.slots()[static_cast<size_t>(slot)].item.name;
         out = tl::core::buy_from_merchant(merchant.inventory, merchant.gambler,
                                           static_cast<size_t>(slot), player_inventory, context);
     } else {
-        const int slot = inventory_menu.selected_slot_index();
-        if (slot < 0) return;
+        if (!player_inventory.occupied(static_cast<size_t>(slot))) return;
         name = player_inventory.slots()[static_cast<size_t>(slot)].item.name;
         out = tl::core::sell_to_merchant(player_inventory, static_cast<size_t>(slot),
                                          merchant.inventory, merchant.gambler, player_inventory,
@@ -64,15 +95,7 @@ void Renderer::Impl::trade_selected() {
         // CCharacter::giveGold: incrementJournalStatistic(1, amount)
         count_journal(tl::core::JournalStatistic::GoldGathered, out.price);
     }
-    if (out.dropped) {
-        // `CLevel::addItem` at the merchant.
-        for (const auto& entry : scene_units) {
-            if (entry.second.node != trading_with || entry.second.entity == nullptr) continue;
-            const Ogre::SceneNode* at = entry.second.entity->getParentSceneNode();
-            if (at != nullptr) drop_item(out.dropped_item, out.count, at->_getDerivedPosition());
-            break;
-        }
-    }
+    drop_at_merchant(out);
     TL_LOG_INFO("merchant: %s %d x '%s' for %d gold%s%s%s; %d left", buying ? "bought" : "sold",
                 out.count, name.c_str(), out.price, out.copied ? " (a fresh copy)" : "",
                 out.gambled ? " (a gamble)" : "", out.dropped ? " (dropped at the merchant)" : "",

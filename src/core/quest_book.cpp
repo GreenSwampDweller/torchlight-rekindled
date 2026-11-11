@@ -116,10 +116,6 @@ std::vector<std::string> QuestDefinition::speakers() const {
     collect(ret);
     collect(complete);
     collect(passive);
-    if (has_details && !details.unit.empty()) {
-        const std::string name = upper(details.unit);
-        if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
-    }
     return out;
 }
 
@@ -140,6 +136,7 @@ void QuestBook::add(QuestDefinition quest) {
     order_.push_back(key);
 }
 
+// `CQuestManager::getQuestForNPC`'s `RANDOMPEOPLE` lookup.
 const QuestDefinition* QuestBook::random_people() const { return find("RANDOMPEOPLE"); }
 
 // PORT: a quest definition by name, from the port's book.
@@ -379,7 +376,8 @@ std::string QuestEntry::details() const {
     if (definition == nullptr || !definition->has_details || definition->details.texts.empty()) {
         return std::string();
     }
-    return get_dialog(definition->details, this, game_random());
+    // `getDialog` replaces the tags, and `getQuestDetails` replaces them again.
+    return replace_quest_tags(get_dialog(definition->details, this, game_random()), *this);
 }
 
 // `CQuest::replaceStringTags`.
@@ -572,6 +570,7 @@ void QuestLog::unhold(const std::string& name) {
     }
 }
 
+// PORT: an accessor of the held list (`CQuestManager +0x0c`).
 std::vector<const QuestEntry*> QuestLog::held_entries() const {
     std::vector<const QuestEntry*> out;
     for (const std::string& name : held_)
@@ -579,6 +578,7 @@ std::vector<const QuestEntry*> QuestLog::held_entries() const {
     return out;
 }
 
+// PORT: an accessor of the held list (`CQuestManager +0x0c`).
 std::vector<QuestEntry*> QuestLog::held_entries_mutable() {
     std::vector<QuestEntry*> out;
     for (const std::string& name : held_)
@@ -705,6 +705,7 @@ bool QuestLog::is_complete(const QuestDefinition& quest) const {
     return quest.intro.empty();
 }
 
+// PORT: the port's record of who gave a quest.
 std::string QuestLog::giver_of(const QuestDefinition& quest) const {
     const auto it = givers_.find(upper(quest.name));
     return it == givers_.end() ? std::string() : it->second;
@@ -819,12 +820,28 @@ void QuestLog::reinitialize_offer(const QuestDefinition& quest, Offered& rolled)
     rolled.defeat_groups = static_cast<int32_t>(take_defeat_groups(quest, g_rand));
 }
 
+// `CQuest::initializeQuestWithNPC` (`CLEAR_DUNGEON_HISTORY`),
+// as `completeQuest` and `removeQuest` do too.
+void QuestLog::rank_offer(const QuestDefinition& quest, Offered& rolled) {
+    if (!dungeon_source_ || quest.dungeon.empty()) return;
+    const QuestDungeon dungeon = dungeon_source_(upper(quest.dungeon));
+    if (!dungeon.found || !dungeon.rank_on_floor) return;
+    if (quest.clear_dungeon_history && dungeon.clear_history) dungeon.clear_history();
+    const size_t taken =
+        std::min(quest.defeat.size(), static_cast<size_t>(std::max(0, rolled.defeat_groups)));
+    const std::vector<QuestObjective> defeat(quest.defeat.begin(), quest.defeat.begin() + taken);
+    const int deepest = dungeon_max_floor(quest.acquire, defeat, rolled.depth);
+    rolled.level = dungeon.rank_on_floor(std::max(deepest, 1));
+}
+
 // `CQuest::initializeQuestWithNPC(unit)`
 // (`CLEAR_DUNGEON_HISTORY`, `CPlayer::clearDungeonHistory`). The reward level
 // is the monsters' rank on the deepest floor of the roll before this one. A quest no reset
 // has rolled (a log put back by `reset`) is given that roll here.
 void QuestLog::initialize_with_npc(const QuestDefinition& quest, const std::string& unit,
                                    RunicRandom& roll) {
+    TL_LOG_DEBUG("quests: %s initialised with %s (its giver '%s', held %d)", quest.name.c_str(),
+                 unit.c_str(), giver_of(quest).c_str(), player_has_quest(quest) ? 1 : 0);
     if (same_name(giver_of(quest), unit)) return;
     if (player_has_quest(quest)) return;
     const std::string key = upper(quest.name);
@@ -834,18 +851,7 @@ void QuestLog::initialize_with_npc(const QuestDefinition& quest, const std::stri
         reinitialize_offer(quest, it->second);
     }
     Offered& rolled = it->second;
-    if (dungeon_source_ && !quest.dungeon.empty()) {
-        const QuestDungeon dungeon = dungeon_source_(upper(quest.dungeon));
-        if (dungeon.found && dungeon.rank_on_floor) {
-            if (quest.clear_dungeon_history && dungeon.clear_history) dungeon.clear_history();
-            const size_t taken = std::min(quest.defeat.size(),
-                                          static_cast<size_t>(std::max(0, rolled.defeat_groups)));
-            const std::vector<QuestObjective> defeat(quest.defeat.begin(),
-                                                     quest.defeat.begin() + taken);
-            const int deepest = dungeon_max_floor(quest.acquire, defeat, rolled.depth);
-            rolled.level = dungeon.rank_on_floor(std::max(deepest, 1));
-        }
-    }
+    rank_offer(quest, rolled);
     rolled.seed = roll.integer_between(0, 0x7fffffff);
     reinitialize_offer(quest, rolled);
     givers_[key] = upper(unit);
@@ -935,6 +941,7 @@ bool QuestLog::player_has_quest(const QuestDefinition& quest) const {
     return entry != nullptr && entry->status == QuestStatus::Active;
 }
 
+// PORT: an accessor of the offer's rank.
 int QuestLog::offer_level(const QuestDefinition& quest, int fallback) const {
     const Offered* rolled = offered(quest);
     return rolled != nullptr ? rolled->level : fallback;
@@ -948,26 +955,50 @@ const DialogLine* QuestLog::dialog_for_npc(const std::string& unit,
                                            QuestSection* section) {
     if (quest != nullptr) *quest = nullptr;
     if (unit.empty()) return nullptr;
+    // The list's first entry: every held quest's dialog in held order, then the offer's; a
+    // second offer's dialog replaces the whole list. The second `getQuestForNPC` runs only
+    // when the first found a quest.
+    const DialogLine* first = nullptr;
+    const QuestDefinition* first_quest = nullptr;
+    QuestSection first_section = QuestSection::Intro;
+    const auto append = [&](const QuestDefinition& from, bool replace) {
+        QuestSection at = QuestSection::Intro;
+        const DialogLine* line = dialog_for(from, unit, &at);
+        if (line == nullptr || (first != nullptr && !replace)) return;
+        first = line;
+        first_quest = &from;
+        first_section = at;
+    };
     for (const QuestEntry* held : held_entries()) {
-        const QuestEntry& entry = *held;
-        if (entry.definition == nullptr || entry.status != QuestStatus::Active) continue;
-        if (const DialogLine* line = dialog_for(*entry.definition, unit, section)) {
-            if (quest != nullptr) *quest = entry.definition;
-            return line;
+        if (held->definition != nullptr) append(*held->definition, false);
+    }
+    if (const QuestDefinition* offer = quest_for_npc(unit, unit_quests, roll)) {
+        append(*offer, false);
+        if (const QuestDefinition* again = quest_for_npc(unit, unit_quests, roll)) {
+            append(*again, true);
         }
     }
-    const QuestDefinition* found = quest_for_npc(unit, unit_quests, roll);
-    if (found == nullptr) return nullptr;
-    const DialogLine* line = dialog_for(*found, unit, section);
-    if (line == nullptr) {
-        found = quest_for_npc(unit, unit_quests, roll);
-        line = found != nullptr ? dialog_for(*found, unit, section) : nullptr;
+    if (first != nullptr) {
+        if (quest != nullptr) *quest = first_quest;
+        if (section != nullptr) *section = first_section;
     }
-    if (line != nullptr && quest != nullptr) *quest = found;
-    return line;
+    return first;
 }
 
 // `CQuestManager::getQuestForNPC`.
+namespace {
+
+// PORT: the quests a draw is made among.
+void log_candidates(const std::string& unit,
+                    const std::vector<const QuestDefinition*>& candidates) {
+    if (candidates.size() < 2) return;
+    std::string names;
+    for (const QuestDefinition* c : candidates) names += " " + c->name;
+    TL_LOG_DEBUG("quests: %s offers one of%s", unit.c_str(), names.c_str());
+}
+
+}  // namespace
+
 const QuestDefinition* QuestLog::quest_for_npc(const std::string& unit,
                                                const std::vector<std::string>& unit_quests,
                                                RunicRandom& roll) {
@@ -1029,6 +1060,7 @@ const QuestDefinition* QuestLog::quest_for_npc(const std::string& unit,
 
     // One draw among two or more; one alone is taken.
     const int32_t last = static_cast<int32_t>(candidates.size()) - 1;
+    log_candidates(unit, candidates);
     const int32_t pick = last < 1 ? 0 : roll.integer_between(0, last);
     const QuestDefinition* quest = candidates[pick < 0 || pick > last ? 0 : pick];
     initialize_with_npc(*quest, unit, roll);
@@ -1121,12 +1153,13 @@ void reinitialize_objectives(std::vector<QuestObjective>& list, const QuestEntry
         g_rand.set_seed(seed);
         if (!resolve) objective.resolved.clear();
         const bool named = resolve && resolve_objective_unit(objective, entry, world);
-        // The champion's name off the quest's seed, the generator restored:
-        // a generator of its own here.
+        // `getBaseUnitDataGroup`: `g_Rand`'s low word kept, the
+        // champion's name off the quest's seed, then `g_Rand` seeded from the low word.
         if (objective.make_champion && named && names != nullptr && !names->empty()) {
-            RunicRandom name_rng(0u);
-            name_rng.set_seed(seed);
-            objective.champion_name = names->generate_name(true, name_rng);
+            const int32_t saved = static_cast<int32_t>(static_cast<uint32_t>(g_rand.state()));
+            g_rand.set_seed(seed);
+            objective.champion_name = names->generate_name(true, g_rand);
+            g_rand.set_seed(saved);
         }
         objective.wanted = g_rand.integer_between(objective.min_count, objective.max_count);
         objective.have = 0;
@@ -1236,6 +1269,9 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     QuestEntry* existing = find(quest.name);
     QuestEntry fresh;
     QuestEntry& entry = existing != nullptr ? *existing : fresh;
+    // `giveQuest(quest, npc, false)` draws nothing on `g_Rand`: what the port makes
+    // again here (the groups, the units on the quest's seed, the counts) was rolled at the offer.
+    const uint64_t g_rand_kept = game_random().state();
 
     entry.definition = &quest;
     entry.dungeon_display_name = dungeon_display_name(quest);
@@ -1273,10 +1309,14 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     entry.complete_announced = false;  // `reinitializeQuest`
 
     // `CQuest::reinitializeQuest` calls each
-    // unit's `reinitialize(true)`, which resolves its unit.
-    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_, resolve_units);
-    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_, resolve_units);
-    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_, resolve_units);
+    // unit's `reinitialize(true)`, which resolves its unit. Without `resolve_units` the counts
+    // are the reset's, drawn long before: on a generator of their own, as `giveQuest` leaves
+    // `g_Rand` alone.
+    RunicRandom counts(0u);
+    RunicRandom* rng = resolve_units ? nullptr : &counts;
+    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_, resolve_units, rng);
+    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_, resolve_units, rng);
+    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_, resolve_units, rng);
     // The printed name is the resolved unit's (`getUnitName`).
     //
     if (unit_namer_) {
@@ -1290,10 +1330,19 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     if (const auto it = offers_.find(upper(quest.name)); it != offers_.end()) {
         entry.reward_units = it->second.reward_units;
     }
+    // The quest's own seed (`CQuest +0x10`), floor (`+0x14`) and rank (`+0x1ec`), which
+    // `giveQuest` leaves as they are: what the offer keeps, for the next `reinitializeQuest`.
+    if (seed != static_cast<uint32_t>(-1)) {
+        Offered& kept = offers_[upper(quest.name)];
+        kept.seed = static_cast<int32_t>(seed);
+        kept.level = level;
+        if (depth >= 0) kept.depth = depth;
+    }
     // `CQuestRewards::reInitializeRewards` (inlined
     // - the made items deleted, `calculateRewards` again) makes the
     // items again.
     entry.reward_items_given = false;
+    game_random().set_state(g_rand_kept);
 
     state_.activate(quest.name);
     if (existing == nullptr) entries_.push_back(entry);
@@ -1313,11 +1362,36 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     return true;
 }
 
+// `CQuest::reinitializeQuest(quest, units, false)`: the giver
+// cleared (`+0x1d4`), the floor and the `[DEFEAT]` groups rolled again on the quest's seed; with
+// `units`, `CQuestUnitData::reinitialize(true)` on the populate units, the
+// acquire units and the groups taken, in that order, each off the quest's seed.
+void QuestLog::reinitialize_released(const QuestDefinition& quest, bool units) {
+    const std::string key = upper(quest.name);
+    givers_.erase(key);
+    Offered& rolled = offers_[key];
+    reinitialize_offer(quest, rolled);
+    if (!units) return;
+    QuestEntry scratch;
+    scratch.definition = &quest;
+    scratch.seed = static_cast<uint32_t>(rolled.seed);
+    scratch.level = rolled.level;
+    scratch.depth = rolled.depth;
+    scratch.populate = quest.populate;
+    scratch.acquire = quest.acquire;
+    const size_t taken =
+        std::min(quest.defeat.size(), static_cast<size_t>(std::max(0, rolled.defeat_groups)));
+    scratch.defeat.assign(quest.defeat.begin(), quest.defeat.begin() + taken);
+    reinitialize_objectives(scratch.populate, scratch, unit_world_, random_names_);
+    reinitialize_objectives(scratch.acquire, scratch, unit_world_, random_names_);
+    reinitialize_objectives(scratch.defeat, scratch, unit_world_, random_names_);
+}
+
 // `CQuestMenu::abandonQuest`: only a quest that authors `CANABANDON`; then
-// `CQuestManager::removeQuest(quest, true)` and
-// `CQuest::cleanUp(false)`.
-// INVENTED: `cleanUp`'s `reinitializeQuest`, and `removeQuest`'s walk of the
-// quest's placed units, are not modelled.
+// `CQuestManager::removeQuest(quest, true)`: the rank,
+// `reinitializeQuest`, `cleanUp(false)` with its own, and
+// `reinitializeQuest(quest, true, false)`. INVENTED: its walk of the quest's placed units is not
+// modelled.
 bool QuestLog::abandon(const std::string& name) {
     QuestEntry* entry = find(name);
     if (entry == nullptr || entry->definition == nullptr) return false;
@@ -1325,10 +1399,12 @@ bool QuestLog::abandon(const std::string& name) {
     if (entry->status != QuestStatus::Active) return false;
 
     const QuestDefinition& quest = *entry->definition;
-    queue_item_removals(quest, entry, /*completed=*/false);
-    givers_.erase(upper(quest.name));
-    offers_.erase(upper(quest.name));
     unhold(quest.name);
+    rank_offer(quest, offers_[upper(quest.name)]);
+    reinitialize_released(quest, false);
+    queue_item_removals(quest, entry, /*completed=*/false);
+    reinitialize_released(quest, false);
+    reinitialize_released(quest, true);
     entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(entry - entries_.data()));
     state_.set(quest.name, QuestStatus::Unknown);
     // `removeQuest(quest, true)`: not accepted, then abandoned, per controller.
@@ -1347,7 +1423,7 @@ void QuestLog::drop(const std::string& name) {
     state_.set(name, QuestStatus::Unknown);
 }
 
-bool QuestLog::complete(const std::string& name, QuestReward* paid) {
+bool QuestLog::complete(const std::string& name, QuestReward* paid, bool player) {
     QuestEntry* entry = find(name);
     if (entry == nullptr) return false;
     // The callers of this (an objective done, `COMPLETESONACCEPT`, the
@@ -1371,11 +1447,15 @@ bool QuestLog::complete(const std::string& name, QuestReward* paid) {
     // cleaned up in its own turn, and can reallocate `entries_`.
     if (entry->definition != nullptr) {
         const QuestDefinition& quest = *entry->definition;
-        queue_completion(quest, entry);
-        entry->reward_items_given = true;
-        rewards_paid(quest);
-        queue_item_removals(quest, entry);
-        completion_consequences(quest);
+        if (player) {
+            queue_completion(quest, entry);
+            entry->reward_items_given = true;
+            rewards_paid(quest);
+            queue_item_removals(quest, entry);
+            pay_queued();
+            reinitialize_released(quest, false);  // `cleanUp`'s last call,
+        }
+        completion_consequences(quest, player);
     }
     // `completeQuest` takes it off the held quests
     // after `giveRewardForQuest` gave the quests that follow it,
@@ -1410,20 +1490,26 @@ bool QuestLog::complete_by_dialog(const QuestDefinition& quest) {
     if (entry != nullptr) entry->reward_items_given = true;
     rewards_paid(quest);
     queue_item_removals(quest, entry);
+    pay_queued();
+    reinitialize_released(quest, false);  // `cleanUp`'s last call,
     completion_consequences(quest);
     return true;
 }
 
-bool QuestLog::complete_quest(const QuestDefinition& quest) {
+bool QuestLog::complete_quest(const QuestDefinition& quest, bool player) {
     if (state_.status(quest.name) == QuestStatus::Complete) return false;
-    if (find(quest.name) != nullptr) return complete(quest.name);
+    if (find(quest.name) != nullptr) return complete(quest.name, nullptr, player);
     state_.complete(quest.name);
     notify(quest.name, {logic::kQuestComplete});
-    queue_completion(quest, nullptr);
-    // INVENTED: a quest the player never held has no objectives here, so only
-    // `cleanUp`'s last, quest-wide removal is made for it.
-    queue_item_removals(quest, nullptr);
-    completion_consequences(quest);
+    if (player) {
+        queue_completion(quest, nullptr);
+        // INVENTED: a quest the player never held has no objectives here, so only
+        // `cleanUp`'s last, quest-wide removal is made for it.
+        queue_item_removals(quest, nullptr);
+        pay_queued();
+        reinitialize_released(quest, false);  // `cleanUp`'s last call,
+    }
+    completion_consequences(quest, player);
     return true;
 }
 
@@ -1453,8 +1539,9 @@ void QuestLog::queue_item_removals(const QuestDefinition& quest, const QuestEntr
                                    bool completed) {
     // `CQuest::cleanUp(bool)`: the acquire
     // groups, the defeat groups, every copy of the quest's own `QuestItem`s, then
-    // `CLevel::makeQuestUnitsUncool` on the player's level. INVENTED: the rest
-    // of `cleanUp` (the dungeon history, `reinitializeQuest`) is not modelled here.
+    // `CLevel::makeQuestUnitsUncool` on the player's level. Its last call,
+    // `reinitializeQuest(quest, false, false)`, is the caller's, after the payout. INVENTED: the
+    // dungeon history is not modelled here.
     if (entry != nullptr) {
         const uint32_t isa = completed ? unit_type::kAny : unit_type::kQuestItem;
         queue_objective_removals(entry->acquire, quest.guid, isa, item_removals_);
@@ -1484,6 +1571,20 @@ void QuestLog::queue_completion(const QuestDefinition& quest, const QuestEntry* 
     completions_.push_back(done);
 }
 
+// `CQuest::giveRewardForQuest`: the payout comes before the
+// quests it gives and `cleanUp(true)`. By index: a payout can complete or give quests and grow
+// the queue.
+void QuestLog::pay_queued() {
+    if (!payout_) return;
+    // NOLINTNEXTLINE(modernize-loop-convert): the payout can grow the queue as it runs.
+    for (size_t i = 0; i < completions_.size(); ++i) {
+        if (completions_[i].paid) continue;
+        completions_[i].paid = true;
+        const QuestCompletion done = completions_[i];
+        payout_(done);
+    }
+}
+
 // PORT: what the log has queued for the renderer, taken.
 std::vector<QuestCompletion> QuestLog::take_completions() {
     std::vector<QuestCompletion> taken;
@@ -1492,7 +1593,8 @@ std::vector<QuestCompletion> QuestLog::take_completions() {
 }
 
 TreasureRoll quest_treasure_roll(int quest_level, int32_t quest_seed, RunicRandom& rng) {
-    // `calculateRewards`' treasure roll.
+    // `CQuestRewards::calculateRewards`' treasure roll.
+    //
     rng.set_seed(quest_seed);
     TreasureRoll roll;
     roll.level = rng.integer_between(-1, 2) + quest_level;
@@ -1520,7 +1622,7 @@ std::vector<QuestItemRemoval> QuestLog::take_item_removals() {
     return taken;
 }
 
-void QuestLog::completion_consequences(const QuestDefinition& quest) {
+void QuestLog::completion_consequences(const QuestDefinition& quest, bool player) {
     // Copied before recursing: completing another quest can reallocate
     // `entries_`, and with it the definition's owner is untouched but the
     // caller's entry is not.
@@ -1531,7 +1633,7 @@ void QuestLog::completion_consequences(const QuestDefinition& quest) {
     // upper-cased name, `giveQuest` (onto the end of the held quests, nothing for
     // one held or accepted already) and `setQuestAccepted(true)`, an event 3.
     // With the seed and floor its last offer left; none, the constructor's.
-    for (const std::string& next : give) {
+    for (const std::string& next : player ? give : std::vector<std::string>{}) {
         const QuestDefinition* def = book_ != nullptr ? book_->find(next) : nullptr;
         if (def == nullptr) continue;
         if (state_.status(def->name) == QuestStatus::Active) continue;
@@ -1542,6 +1644,11 @@ void QuestLog::completion_consequences(const QuestDefinition& quest) {
                reward_world_.graphs != nullptr ? *reward_world_.graphs : kNoGraphs,
                rolled != nullptr ? rolled->depth : -1);
     }
+    // `cleanUp(true)`'s `reinitializeQuest`, then `completeQuest`'s rank and
+    // its own.
+    if (player) reinitialize_released(quest, false);
+    rank_offer(quest, offers_[upper(quest.name)]);
+    reinitialize_released(quest, false);
     // Then `completeQuest`'s own: the complete flag is `!REPEATABLE`,
     // its event 4 only when that newly sets it - sent
     // before the quest is written into the completed map. A repeatable quest
@@ -1578,6 +1685,7 @@ void QuestLog::tag_unit_of_type(uint32_t type, const QuestUnitTag& tag) {
     if (!unit_world_.units_of_type) return;
     std::vector<QuestUnitWorld::LevelUnit> units = unit_world_.units_of_type(type);
     uint32_t count = static_cast<uint32_t>(units.size());
+    TL_LOG_DEBUG("quests: '%s' adopts a unit of type %u among %u", tag.quest.c_str(), type, count);
     while (count != 0) {
         const int pick = game_random().integer_between(0, static_cast<int>(count) - 1);
         const QuestUnitWorld::LevelUnit unit = units[static_cast<size_t>(pick)];
@@ -1630,6 +1738,36 @@ QuestEntry& QuestLog::dormant_entry(const QuestDefinition& quest) {
     reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_, false, &counts);
     reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_, false, &counts);
     reinitialize_objectives(entry.populate, entry, unit_world_, random_names_, false, &counts);
+    // Units handed in for it (`seed_dormant_units`), objective by objective, each before its
+    // children.
+    if (const auto given = dormant_units_.find(key); given != dormant_units_.end()) {
+        // Only when every objective has its unit handed in: a count apart is not mapped.
+        size_t count = 0;
+        const std::function<void(const QuestObjective&)> tally = [&](const QuestObjective& o) {
+            ++count;
+            for (const QuestObjective& child : o.children) tally(child);
+        };
+        for (const std::vector<QuestObjective>* list :
+             {&entry.acquire, &entry.defeat, &entry.populate})
+            for (const QuestObjective& objective : *list) tally(objective);
+        if (count != given->second.size()) {
+            TL_LOG_DEBUG("quest '%s': %zu unit(s) handed in for %zu objective(s); not taken",
+                         quest.name.c_str(), given->second.size(), count);
+            return entry;
+        }
+        size_t at = 0;
+        const std::function<void(QuestObjective&)> take = [&](QuestObjective& objective) {
+            if (at < given->second.size()) {
+                const auto& [unit, champion] = given->second[at];
+                if (!unit.empty()) objective.resolved = unit;
+                if (!champion.empty()) objective.champion_name = champion;
+            }
+            ++at;
+            for (QuestObjective& child : objective.children) take(child);
+        };
+        for (std::vector<QuestObjective>* list : {&entry.acquire, &entry.defeat, &entry.populate})
+            for (QuestObjective& objective : *list) take(objective);
+    }
     return entry;
 }
 
@@ -1637,6 +1775,14 @@ QuestEntry& QuestLog::dormant_entry(const QuestDefinition& quest) {
 void QuestLog::seed_dormant(const QuestDefinition& quest, uint32_t seed, int depth, int level) {
     const std::string key = upper(quest.name);
     dormant_seeds_[key] = DormantSeed{seed, depth, level};
+    dormant_.erase(key);
+}
+
+// PORT: a dormant quest's resolved units set from outside (the oracle hands the console's).
+void QuestLog::seed_dormant_units(const QuestDefinition& quest,
+                                  std::vector<std::pair<std::string, std::string>> units) {
+    const std::string key = upper(quest.name);
+    dormant_units_[key] = std::move(units);
     dormant_.erase(key);
 }
 

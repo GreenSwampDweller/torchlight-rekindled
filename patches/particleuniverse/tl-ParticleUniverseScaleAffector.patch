@@ -24,7 +24,7 @@ index e8d7cfd..4bc0ae8 100644
  			DynamicAttributeHelper mDynamicAttributeHelper;
  			bool mSinceStartSystem;
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
-index eeabaae..f7f52b5 100644
+index eeabaae..c591248 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseScaleAffector.cpp
 @@ -31,6 +31,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

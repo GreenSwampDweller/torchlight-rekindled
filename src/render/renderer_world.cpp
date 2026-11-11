@@ -31,6 +31,7 @@ float Renderer::Impl::scene_animation_length(const std::string& unit,
 
     const std::string dir = dir_of_asset(placed.mesh);
     std::string path = archive_path_in_dir(animation + ".SKELETON", dir);
+    if (path.empty()) path = animation_set_path(placed.mesh, animation);
     if (path.empty()) path = archive_animation_in_dir(dir, animation, placed.armed, 0);
     if (path.empty()) return -1.0f;
     try {
@@ -59,28 +60,9 @@ std::vector<std::pair<std::string, float>> Renderer::Impl::animation_catalog(
         }
     }
     if (mesh.empty()) return {};
-    const auto cached = animation_catalogs.find(mesh);
-    if (cached != animation_catalogs.end()) return cached->second;
     std::vector<std::pair<std::string, float>> catalog;
-    const std::string dir = dir_of_asset(mesh);
-    for (const std::string& stem : manifest_for(mesh).order()) {
-        float length = 0.0f;
-        const std::string path = archive_path_in_dir(stem + ".SKELETON", dir);
-        if (!path.empty()) {
-            try {
-                const Ogre::SkeletonPtr source = Ogre::static_pointer_cast<Ogre::Skeleton>(
-                    Ogre::SkeletonManager::getSingleton().load(path, kGameGroup));
-                if (source && source->getNumAnimations() > 0) {
-                    length = source->getAnimation(0)->getLength();
-                }
-            } catch (const Ogre::Exception& e) {
-                // Listed at length 0, as before; said once rather than silently.
-                TL_LOG_WARN("animation catalog: %s: %s", path.c_str(), e.getDescription().c_str());
-            }
-        }
-        catalog.emplace_back(stem, length);
-    }
-    animation_catalogs.emplace(mesh, catalog);
+    for (const tl::core::AnimationSetEntry& e : animation_set_for(mesh))
+        catalog.emplace_back(e.name, e.length);
     return catalog;
 }
 
@@ -447,21 +429,38 @@ void Renderer::Impl::follow_player_animation() {
     player_animation = wanted;
 }
 
+namespace {
+// CGenericModel::findRandomAnimation: the first candidate, each
+// later one taking its place on `randomBetweenVolatile(0, 1000) < 500`.
+size_t find_random_animation(const std::vector<std::string>& candidates) {
+    size_t chosen = 0;
+    for (size_t i = 1; i < candidates.size(); ++i) {
+        if (tl::core::volatile_random().between(0.0f, 1000.0f) < 500.0f) chosen = i;
+    }
+    return chosen;
+}
+// A particle layout's path as the triggers compare it: forward slashes, upper case.
+std::string cleaned_layout(std::string text) {
+    for (char& c : text) {
+        if (c == '\\') c = '/';
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    }
+    return text;
+}
+}  // namespace
+
 bool Renderer::Impl::begin_spawn_animation(Ogre::Entity* entity, const std::string& mesh,
                                            const tl::core::UnitStats& stats) {
     if (entity == nullptr || !entity->hasSkeleton() || stats.spawn_anim.empty()) return false;
 
-    // animationExistsSubstring() then findRandomAnimation(), as CCharacter::spawn() does:
-    // the spawn class matches as a substring, a roll when several match.
+    // CCharacter::spawn: animationExistsSubstring, then
+    // findRandomAnimation on the upper-cased spawn class.
     const std::string dir = dir_of_asset(mesh);
     if (dir.empty()) return false;
     const std::vector<std::string> stems = archive_animation_stems_matching(dir, stats.spawn_anim);
     if (stems.empty()) return false;
 
-    const size_t which = std::min<size_t>(
-        stems.size() - 1, static_cast<size_t>(tl::core::volatile_random().between(0.0f, 1.0f) *
-                                              static_cast<float>(stems.size())));
-    const std::string& stem = stems[which];
+    const std::string& stem = stems[find_random_animation(stems)];
 
     Ogre::AnimationState* started = nullptr;
     if (!play_scene_animation(entity, mesh, stem, /*loops=*/false, 1.0f, /*optional=*/true,
@@ -494,11 +493,7 @@ bool Renderer::Impl::begin_fidget(Fidget& fidget, Ogre::Entity* entity, const st
     }
     if (fidget.available.empty()) return false;
 
-    // `findRandomAnimation("FIDGET")` in the original.
-    const size_t which =
-        std::min<size_t>(fidget.available.size() - 1,
-                         static_cast<size_t>(tl::core::volatile_random().between(0.0f, 1.0f) *
-                                             static_cast<float>(fidget.available.size())));
+    const size_t which = find_random_animation(fidget.available);  // "FIDGET"
     const std::string stem = fidget.available[which];
 
     if (is_subject) {
@@ -822,8 +817,8 @@ void Renderer::Impl::pet_converted(const std::string& unit) {
     refresh_pet_effects();
     sync_pet_mirror();
     pet_last_health = pet.health();
-    // In town (0x2a) `CCharacter::update` keeps it out of sight
-    // whatever `transformCharacter`'s two `setVisible` calls did.
+    // In town (AI state 0x2a) CCharacter::update keeps it out
+    // of sight whatever `transformCharacter`'s `setVisible` calls did.
     if (pet_node != nullptr && pet.state() == tl::core::PetState::InTown) {
         pet_node->setVisible(false);
     }
@@ -919,26 +914,116 @@ void Renderer::Impl::forget_unit_entity(Ogre::Entity* entity) {
     }
 }
 
-// INVENTED: the pet put 1.6 units (`kPetSpawnOffset`) to the player's side
-// and onto the ground; the console's own placement of a pet brought along is
-// not transcribed.
+// CPlayer::levelResetting for the animal:
+// `teleportToMaster(count * 0.25)`, `count` every pet in the player's list.
 void Renderer::Impl::place_pet_beside_player() {
     if (!pet.alive() || !pet.in_world() || subject_node == nullptr || pet_node_id == 0) return;
-
-    Ogre::Vector3 at = subject_node->getPosition();
-    const float facing = subject_node->getOrientation().getYaw().valueRadians();
-    at.x += std::cos(facing) * kPetSpawnOffset;
-    at.z -= std::sin(facing) * kPetSpawnOffset;
-    float surface = 0.0f;
-    if (!collision.empty() && collision.ground_under(at.x, at.z, at.y + 8.0f, surface)) {
-        at.y = surface;
-    }
-    script.move_unit(pet_node_id, tl::core::Vec3{at.x, at.y, at.z});
+    size_t count = 0;
+    for (const MachineView& view : machines()) count += view.script->player_pets().size();
+    const Ogre::Vector3 master = subject_node->getPosition();
+    script.put_pet_by_master(pet_node_id, tl::core::Vec3{master.x, master.y, master.z},
+                             static_cast<float>(count) * 0.25f);
+    tl::core::Vec3 placed;
+    if (!script.unit_position(pet_node_id, placed)) return;
+    const Ogre::Vector3 at(placed.x, placed.y, placed.z);
     if (pet_node != nullptr) pet_node->setPosition(at);
     sync_pet_mirror();
     if (automap_initialized) automap.set_pet_position(at);
     TL_LOG_INFO("pet: brought along to (%.2f, %.2f, %.2f)", static_cast<double>(at.x),
                 static_cast<double>(at.y), static_cast<double>(at.z));
+}
+
+namespace {
+// CGameClient::performWarp, each pet: randomOpenPosition(player,
+// 0, 5, false), addCharacter's dropToGround(4.0); not setToward(player) (no way to turn one).
+Ogre::Vector3 pet_arrival_spot(tl::core::World& world, const Ogre::Vector3& player,
+                               float collision_radius) {
+    const tl::core::Vec3 open = tl::core::random_open_position(
+        tl::core::Vec3{player.x, player.y, player.z}, 0.0f, 5.0f,
+        [&world](const tl::core::Vec3& p) {
+            return !world.passability.ready() ||
+                   (world.passability.map_passable(p) && world.passability.position_passable(p));
+        },
+        tl::core::volatile_random());
+    return to_ogre(
+        world.character_to_ground(ogre::Vector3(open.x, open.y, open.z), collision_radius));
+}
+}  // namespace
+
+// CCharacter::dropToGround, (level, 4.0, false) as
+// CGameClient::performWarp calls it: 100 to -100, then the search.
+bool Renderer::place_player_at(float x, float z, const float* feet_if_no_ground) {
+    Impl& m = *impl_;
+    if (!m.player_control) {
+        TL_LOG_ERROR("place_player_at needs player control enabled");
+        return false;
+    }
+    Ogre::Vector3 at(x, 0.0f, z);
+    float surface = 0.0f;
+    const bool grounded = m.collision.empty() || m.collision.ground_under(x, z, 100.0f, surface);
+    if (grounded) {
+        at.y = surface;
+    } else if (feet_if_no_ground != nullptr) {
+        at.y = *feet_if_no_ground;  // PORT: a headless driver's own height
+    } else {
+        at = to_ogre(
+            m.character_to_ground(from_ogre(at), m.player_stats.radius));  // thirty misses: 100
+    }
+    m.player.place({at.x, at.y, at.z}, m.player.facing());
+    m.step_player(0.0f, tl::core::InputState{});
+
+    // The pets in the player's list (`+0x5ac`), the animal first.
+    if (m.pet.alive() && m.pet.in_world() && m.pet_node_id != 0) {
+        const Ogre::Vector3 spot =
+            pet_arrival_spot(m, at, m.stats_for_unit(m.script.unit_of(m.pet_node_id)).radius);
+        m.script.move_unit(m.pet_node_id, tl::core::Vec3{spot.x, spot.y, spot.z});
+        if (m.pet_node != nullptr) m.pet_node->setPosition(spot);
+        m.sync_pet_mirror();
+        if (m.automap_initialized) m.automap.set_pet_position(spot);
+    }
+    for (const Impl::MachineView& view : m.machines()) {
+        for (const int64_t id : view.script->player_pets()) {
+            if (view.script == &m.script && id == m.pet_node_id) continue;  // the animal, above
+            const Ogre::Vector3 spot =
+                pet_arrival_spot(m, at, m.stats_for_unit(view.script->unit_of(id)).radius);
+            view.script->move_unit(id, tl::core::Vec3{spot.x, spot.y, spot.z});
+        }
+    }
+    TL_LOG_INFO("character moved to (%.2f, %.2f, %.2f)%s", static_cast<double>(at.x),
+                static_cast<double>(at.y), static_cast<double>(at.z),
+                grounded ? "" : " (no ground)");
+    return grounded;
+}
+
+void Renderer::bring_player_pets(const CarriedPlayer& carried) {
+    Impl& m = *impl_;
+    if (m.subject_node == nullptr) return;
+    // The pets after the animal in the player's list, each where CGameClient::performWarp
+    // adds it (`pet_arrival_spot`).
+    const Ogre::Vector3 master = m.subject_node->getPosition();
+    const float facing = m.subject_node->getOrientation().getYaw().valueRadians();
+    for (const CarriedPlayer::CarriedCompanion& companion : carried.companions) {
+        Ogre::Vector3 at = master;
+        if (m.spawn_unit(companion.unit, at, /*owner=*/0, companion.level, false, false,
+                         m.subject_node->getOrientation()) == nullptr) {
+            TL_LOG_WARN("pet: %s could not be brought along", companion.unit.c_str());
+            continue;
+        }
+        const int64_t node = m.spawned[0].back().id;
+        m.script.add_spawned_unit(node, companion.unit, tl::core::Vec3{at.x, at.y, at.z},
+                                  /*hunts=*/false, facing);
+        if (companion.level > 0) m.script.set_unit_level(node, companion.level);
+        m.script.set_unit_experience(node, companion.experience);
+        if (companion.hp > 0.0f) m.script.set_unit_hp(node, companion.hp);
+        std::vector<tl::core::ScriptEvent> events;
+        m.script.make_player_pet(node, m.quest_log.state(), events);
+        if (!events.empty()) m.apply_script_events(events, m.scripted_nodes);
+        at = pet_arrival_spot(m, master, m.stats_for_unit(companion.unit).radius);
+        m.script.move_unit(node, tl::core::Vec3{at.x, at.y, at.z});
+        TL_LOG_INFO("pet: %s brought along to (%.1f, %.1f, %.1f)", companion.unit.c_str(),
+                    static_cast<double>(at.x), static_cast<double>(at.y),
+                    static_cast<double>(at.z));
+    }
 }
 
 namespace {
@@ -974,9 +1059,9 @@ void Renderer::Impl::fire_animation_sounds(const std::string& mesh, const std::s
 
     for (const tl::core::AnimationTag& tag : tags) {
         std::string sound;
-        // CCharacter::loadModel files a PLAYSOUND key's sound into the key bank (+0x2a0)
-        // (CGenericModel::addValueIndex, CGenericModel::findKey,
-        // CGenericModel::getValueIndexes); the port plays it by name.
+        // CCharacter::updateAnimation, key 3: the sound
+        // loadModel filed in the key bank (X360 +0x228, Linux +0x2a0), by `getValueIndexes`,
+        // then `playSample`; the port plays it by name.
         if (tag.name == "PLAYSOUND") {
             sound = tag.sound;
         } else if (tag.name == "ATTACKSOUND") {
@@ -1022,6 +1107,7 @@ void Renderer::Impl::step_unit_sounds() {
 }
 
 void Renderer::Impl::step_unit_particle_keys() {
+    load_unit_themes();
     // A trigger whose unit has left the scene goes with it.
     for (size_t i = 0; i < unit_particle_triggers.size();) {
         UnitParticleTrigger& held = unit_particle_triggers[i];
@@ -1047,13 +1133,6 @@ void Renderer::Impl::step_unit_particle_keys() {
         held.trigger.holders.clear();
         held.trigger.inside.clear();
     };
-    const auto clean = [](std::string text) {
-        for (char& c : text) {
-            if (c == '\\') c = '/';
-            if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-        }
-        return text;
-    };
 
     // The mesh keys crossed this frame, applied once the walk is over.
     struct MeshKey {
@@ -1065,7 +1144,11 @@ void Renderer::Impl::step_unit_particle_keys() {
     std::vector<MeshKey> mesh_keys;
     for (auto& entry : scene_units) {
         SceneUnit& unit = entry.second;
-        if (unit.entity == nullptr || unit.playing_state == nullptr) continue;
+        if (unit.entity == nullptr) continue;
+        if (unit.playing_state == nullptr) {
+            pose_collision_keys(entry.first, unit);
+            continue;
+        }
         if (!unit.playing_state->getEnabled()) continue;
         Ogre::SceneNode* model = unit.entity->getParentSceneNode();
         if (model == nullptr) continue;
@@ -1080,6 +1163,11 @@ void Renderer::Impl::step_unit_particle_keys() {
             manifest_for(unit.mesh).tags_for(unit.playing);
         for (size_t index = 0; index < tags.size(); ++index) {
             const tl::core::AnimationTag& tag = tags[index];
+            // CCharacter::updateAnimation: a themed
+            // key (`CKeyframe +0x70`) runs while the unit has it; one the book has not got, always.
+            const tl::core::UnitTheme* key_theme =
+                tag.unit_theme.empty() ? nullptr : unit_themes.get_unit_theme(tag.unit_theme);
+            if (key_theme != nullptr && !unit.themes.themes.has_unit_theme(key_theme)) continue;
             // CCharacter::updateAnimation, keys
             // 0x16..0x19: HIDEMESH/FADEOUTMESH set +0x70d and hide, SHOWMESH/FADEINMESH show;
             // the FADE pair through updateOpacity.
@@ -1117,25 +1205,7 @@ void Renderer::Impl::step_unit_particle_keys() {
             if (tag.name == "ENABLECOLLISION" || tag.name == "DISABLECOLLISION") {
                 const float at = tag.seconds();
                 if (now < was ? (was < at || now >= at) : (was < at && now >= at)) {
-                    // The machine whose node map holds this copy's scene node
-                    // (a prop is no character, so `script_owning` misses it).
-                    NodeMap* nodes = nullptr;
-                    for (const MachineView& view : machines()) {
-                        if (view.nodes == nullptr) continue;
-                        const auto held = view.nodes->equal_range(unit.node);
-                        for (auto n = held.first; n != held.second && nodes == nullptr; ++n) {
-                            if (n->second == model) nodes = view.nodes;
-                        }
-                        if (nodes != nullptr) break;
-                    }
-                    TriggerProp prop;
-                    if (nodes != nullptr && trigger_prop(entry.first, prop)) {
-                        set_trigger_collidable(instance_key(unit.node, *nodes),
-                                               tag.name == "ENABLECOLLISION");
-                        TL_LOG_INFO(
-                            "unit trigger '%s': %s at its key", entry.first.c_str(),
-                            tag.name == "ENABLECOLLISION" ? "collidable" : "not collidable");
-                    }
+                    trigger_collision_key(entry.first, unit, tag.name == "ENABLECOLLISION");
                 }
                 continue;
             }
@@ -1162,7 +1232,7 @@ void Renderer::Impl::step_unit_particle_keys() {
             if (!passed) continue;
 
             if (removes || removes_own) {
-                const std::string layout = clean(tag.layout);
+                const std::string layout = cleaned_layout(tag.layout);
                 for (UnitParticleTrigger& held : unit_particle_triggers) {
                     if (held.entity != unit.entity) continue;
                     if (removes_own ? held.trigger.animation != unit.playing
@@ -1173,11 +1243,7 @@ void Renderer::Impl::step_unit_particle_keys() {
                 }
                 continue;
             }
-            // INVENTED: a key with a `UNITTHEME` runs only while the unit has
-            // the theme (`unitThemeUpdated`); a
-            // placed unit's themes are not asked here, so such a key is left
-            // alone.
-            if (tag.layout.empty() || !tag.unit_theme.empty()) continue;
+            if (tag.layout.empty()) continue;
 
             const Ogre::Bone* bone = nullptr;
             if (unit.entity->hasSkeleton() && !tag.bone.empty() &&
@@ -1194,7 +1260,7 @@ void Renderer::Impl::step_unit_particle_keys() {
             if (held == nullptr) {
                 UnitParticleTrigger made;
                 made.entity = unit.entity;
-                made.layout = clean(tag.layout);
+                made.layout = cleaned_layout(tag.layout);
                 made.trigger.animation = unit.playing;
                 made.trigger.tag = index;
                 made.trigger.bone = tag.bone;
@@ -1450,8 +1516,8 @@ void Renderer::Impl::step_automap_icons() {
 
 Ogre::Entity* Renderer::Impl::conversation_speaker() const {
     if (!quest_dialog.visible()) return nullptr;
-    // `CGameUI::getQuestDialogNPC`: who a script's window was opened for, or
-    // the unit A was pressed on.
+    // CGameUI::getQuestDialogNPC: who a script's window was opened for, or the unit
+    // A was pressed on.
     const std::string& unit = script_dialog_window ? offered_by : talk_unit;
     if (unit.empty()) return nullptr;
     std::string found;
@@ -1536,9 +1602,9 @@ void Renderer::Impl::step_near_poses(float level_delta, float rate) {
     }
 }
 
-// CCharacter::updateAnimation: every `FOOTSTEP` event the animation fires counts
-// statistic 3, before and regardless of the step sound (bank `+0x298`). The crossing
-// test is fire_animation_sounds()'s.
+// CCharacter::updateAnimation: every `FOOTSTEP` the
+// animation fires counts statistic 3, before and regardless of the step sound (bank X360
+// `+0x224`, Linux `+0x298`). The crossing test is fire_animation_sounds()'s.
 void Renderer::Impl::count_player_footsteps(float was, float now) {
     for (const tl::core::AnimationTag& tag :
          manifest_for(subject->getMesh()->getName()).tags_for(player_animation)) {
@@ -2111,6 +2177,7 @@ void Renderer::shutdown() {
     m.tip_screen.destroy();
     m.inventory_menu.destroy();
     m.menu.destroy();
+    m.mouse.reset();
     m.game_hud.destroy();
     m.hud.destroy();
     m.automap.shutdown();
@@ -2169,11 +2236,5 @@ void Renderer::shutdown() {
     m.log_manager = nullptr;
     m.log_bridge.reset();
 }
-
-void Renderer::toggle_automap() { impl_->automap.cycle_mode(); }
-
-void Renderer::automap_zoom_in() { impl_->automap.zoom_in(); }
-
-void Renderer::automap_zoom_out() { impl_->automap.zoom_out(); }
 
 }  // namespace tl::render

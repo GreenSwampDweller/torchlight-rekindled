@@ -20,6 +20,8 @@ Ogre::uint8 trail_render_queue() {
 
 }  // namespace
 
+// Makes a material: not const, whatever its members say.
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void Renderer::Impl::ensure_trail_material(const std::string& name) {
     auto& materials = Ogre::MaterialManager::getSingleton();
     if (name.empty() || materials.resourceExists(name, kGameGroup)) return;

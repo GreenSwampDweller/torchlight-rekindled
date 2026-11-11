@@ -1,8 +1,19 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseJetAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseJetAffectorFactory.h
-index 9a72d9a..246c0ae 100644
+index 9a72d9a..74eabaf 100644
 --- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseJetAffectorFactory.h
 +++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseJetAffectorFactory.h
-@@ -46,6 +46,7 @@ namespace ParticleUniverse
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			JetAffectorFactory(void) {};
++	        // Torchlight: `JetAffectorFactory::~JetAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~JetAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `JetAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Jet";
  			}
  
  			/** See ParticleAffectorFactory  */

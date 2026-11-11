@@ -28,22 +28,18 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
         if (frozen) {
             // Shattered: `ICEEXPLODE` (slot 9) at the centre, `CRYSTALEXPLODE`
             // for 0.2 seconds at the magnitude's default.
-            start_character_particle(victim, tl::core::character_particle::kIceExplode, centre,
-                                     character_ref(event.node_id, owner));
+            start_slot_particle(victim, tl::core::character_particle::kIceExplode,
+                                from_ogre(centre), character_ref(event.node_id, owner));
             start_death_shake("CRYSTALEXPLODE", 0.2f, 1.0f, from_ogre(centre));
             burst = true;
-        } else if (event.burst) {
-            // Exploded, only with `PARTICLE_EXPLODE` (slot 10) and blood shown; the
-            // magnitude `randomBetweenVolatile(0.5, 0.75)` is drawn after the particle.
-            const auto names = tl::core::character_particle_names(victim.particles);
-            if (!names[tl::core::character_particle::kExplode].empty() &&
-                game_settings().show_blood) {
-                start_character_particle(victim, tl::core::character_particle::kExplode, centre,
-                                         character_ref(event.node_id, owner));
-                const float magnitude = tl::core::volatile_random().between(0.5f, 0.75f);
-                start_death_shake("DEATHEXPLODE", 0.3f, magnitude, from_ogre(centre));
-                burst = true;
-            }
+        } else if (event.burst && bursts_on_death(*owner, event.node_id, event.unit)) {
+            // Exploded: the particle, the shake and the unit hidden are `World::kill_unit`'s,
+            // after the death's procs and sample. Here only `clearAnimations`.
+            if (unit.playing_state != nullptr) unit.playing_state->setEnabled(false);
+            unit.playing.clear();
+            unit.playing_state = nullptr;
+            TL_LOG_INFO("script: %s bursts", event.name.c_str());
+            return true;
         }
         if (burst) {
             // `setVisible(false, true)`, `clearAnimations`: gone at once, no death animation.
@@ -58,17 +54,21 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
         }
     }
 
-    // The flight: a blow with a direction and a force, and a model with a
-    // `DEATH_FLIGHT` animation.
-    if (!event.has_direction || !(0.0f < event.force)) return false;
+    // The flight is laid by `World::kill_unit` at its point in `die`, and played on its
+    // `DeathFlight` event (`play_death_flight`).
+    return owner->death_would_fly(event.node_id);
+}
+
+// PORT: drawing, `die`'s `blendAnimation("DEATH_FLIGHT", ...)` for a flight the level laid.
+void Renderer::Impl::play_death_flight(const tl::core::ScriptEvent& event, SceneUnit& unit) {
+    Ogre::Vector3 feet = Ogre::Vector3::ZERO;
+    if (!unit_node_position(event.node_id, feet)) return;
+    const Ogre::Vector3 centre =
+        feet + Ogre::Vector3(0.0f, stats_for_unit(event.unit).radius, 0.0f);
     const float length = scene_animation_length(event.unit, "DEATH_FLIGHT");
-    if (length < 0.0f) return false;
-    tl::core::DeathFlight flight;
-    if (!owner->start_death_flight(event.node_id, event.direction, event.force, &flight)) {
-        return false;
-    }
-    // `blendAnimation("DEATH_FLIGHT", ...)`: the animation lasts as long as the flight.
-    const float rate = length / (flight.path.length() / flight.speed);
+    if (length < 0.0f || !(0.0f < event.rate)) return;
+    // The animation lasts as long as the flight.
+    const float rate = length / event.rate;
     Ogre::AnimationState* started = nullptr;
     if (play_scene_animation(unit.entity, unit.mesh, "DEATH_FLIGHT", /*loops=*/false,
                              rate * unit.rate, /*optional=*/true, &started, unit.armed)) {
@@ -76,7 +76,7 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
         unit.playing = "DEATH_FLIGHT";
         unit.playing_state = started;
         // `queueBlendAnimation("DEATH_LAND", false, 0, 1)` unless it falls.
-        if (!flight.falls) {
+        if (!event.loops) {
             PendingIdle land;
             land.node = event.node_id;
             land.unit = event.unit;
@@ -88,12 +88,11 @@ bool Renderer::Impl::die_burst_or_flight(const tl::core::ScriptEvent& event, Sce
     }
     // The player's blow shakes the camera: `KILL`, 0.2 seconds at 0.5.
     if (event.on) start_death_shake("KILL", 0.2f, 0.5f, from_ogre(centre));
-    const tl::core::Vec3 end = flight.path.point(2);
+    const tl::core::Vec3 end = event.position;
     TL_LOG_INFO("script: %s is flung %.2f to (%.2f, %.2f, %.2f)%s", event.name.c_str(),
                 static_cast<double>(event.force), static_cast<double>(end.x),
                 static_cast<double>(end.y), static_cast<double>(end.z),
-                flight.falls ? ", into the void" : "");
-    return true;
+                event.loops ? ", into the void" : "");
 }
 
 /// Start a swing, unless one is already running.
@@ -163,6 +162,57 @@ void Renderer::Impl::view_add_node_collision(Ogre::SceneNode* node, const std::s
                                              int64_t group) {
     node->_update(true, false);
     add_collision_mesh(path, node->_getFullTransform(), group);
+}
+
+// `rollAttack`'s `interrupt(target, true)` comes first.
+void Renderer::Impl::strike_interrupt(const tl::core::ScriptEvent& event) {
+    if (event.interrupts) {
+        if (event.target_node == 0) {
+            interrupt_player(true);
+        } else if (tl::core::LevelScript* of = event.target_machine != nullptr
+                                                   ? event.target_machine
+                                                   : script_owning(event.target_node)) {
+            std::vector<tl::core::ScriptEvent> events;
+            of->interrupt_unit(event.target_node, quest_log.state(), events);
+            if (NodeMap* nodes = nodes_of(of); nodes != nullptr && !events.empty()) {
+                apply_script_events(events, *nodes);
+            }
+        }
+    }
+}
+
+// `rollAttack`: `applyDamageEffects` on whoever was struck,
+// for any damage, ahead of the transfers; at the attacker's level.
+void Renderer::Impl::strike_damage_effects(const tl::core::ScriptEvent& event) {
+    if (!event.blocked && 0.0f < event.amount) {
+        int level = 1;
+        tl::core::LevelScript* by = script_owning(event.node_id);
+        if (by != nullptr) by->unit_level(event.node_id, level);
+        tl::core::LevelScript* struck = nullptr;
+        if (event.target_node != 0) {
+            struck = event.target_machine != nullptr ? event.target_machine
+                                                     : script_owning(event.target_node);
+        }
+        if (event.target_node == 0 || struck != nullptr) {
+            apply_damage_status(struck, event.target_node, event.amount, event.by_type, event.parts,
+                                event.first_type, event.critical, level,
+                                tl::core::EffectSource{by != nullptr, by, event.node_id});
+        }
+    }
+}
+
+// `applyDamage`: "Glancing Blow!" over a
+// struck one that is not the player's (`+0x5a4`); never for 0 damage.
+void Renderer::Impl::strike_glancing(const tl::core::ScriptEvent& event) {
+    tl::core::LevelScript* struck_by =
+        event.target_machine != nullptr ? event.target_machine : script_owning(event.target_node);
+    if (event.glancing && event.amount != 0.0f && struck_by != nullptr &&
+        !struck_by->unit_is_player_pet(event.target_node)) {
+        Ogre::Vector3 over = Ogre::Vector3::ZERO;
+        if (unit_node_position(event.target_node, over)) {
+            add_combat_text(tl::core::CombatText::GlancingBlow, over);
+        }
+    }
 }
 
 }  // namespace tl::render

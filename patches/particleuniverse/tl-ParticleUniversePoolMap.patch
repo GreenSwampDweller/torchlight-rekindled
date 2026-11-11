@@ -1,8 +1,17 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h b/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
-index 9f08808..af993c3 100644
+index 9f08808..9e631d1 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniversePoolMap.h
-@@ -179,10 +179,8 @@ namespace ParticleUniverse
+@@ -48,6 +48,8 @@ namespace ParticleUniverse
+ 				}
+ 			};
+ 			//-----------------------------------------------------------------------
++			// Torchlight: `PoolMap::~PoolMap` (for systems, the same for each kind) is the
++			// library's: the two maps freed, their elements not deleted.
+ 			virtual ~PoolMap (void)
+ 			{
+ 				if (mManaged)
+@@ -179,10 +181,8 @@ namespace ParticleUniverse
  				// Move element pointed by iterator from released elements to locked elements
  				mLocked.insert(make_pair(mPoolMapIterator->first, mPoolMapIterator->second));
  				mReleased.erase(mPoolMapIterator++); // Watch the ++ at the end to set mPoolMapIterator to the next element

@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffectorFactory.h
+index 6f74823..6f17491 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLinearForceAffectorFactory.h
+@@ -38,9 +38,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			LinearForceAffectorFactory(void) {};
++	        // Torchlight: `LinearForceAffectorFactory::~LinearForceAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~LinearForceAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `LinearForceAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "LinearForce";

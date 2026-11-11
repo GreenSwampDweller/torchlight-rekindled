@@ -36,6 +36,14 @@ void Renderer::Impl::start_character_particle(const tl::core::UnitStats& unit, i
     const std::string name =
         tl::core::character_particle_names(unit.particles)[static_cast<size_t>(slot)];
     if (name.empty()) return;
+    // Its sounds were `World::start_slot_particle`'s.
+    const bool was = slot_sounds_played;
+    slot_sounds_played = true;
+    struct Restore {
+        bool& flag;
+        bool was;
+        ~Restore() { flag = was; }
+    } restore{slot_sounds_played, was};
     // `CResourceManager::createParticle`: the name's file
     // in `media/particles/preload.dat`; an unlisted name makes nothing.
     const std::string file = preloaded_particle_file(name);
@@ -357,6 +365,9 @@ void Renderer::Impl::update_player_effects(float dt) {
         play_effect_fx(player_effects, subject_node->getPosition() + Ogre::Vector3::UNIT_Y * body,
                        "the player");
     }
+    // `updateEffects`' conversions, as a unit's: the player's state is dead (6) once dead.
+    convert_held_statuses(player_health.dead ? tl::core::ai_state::kDead : 0, &player_effects,
+                          "the player");
     player_effects.update_affixes(dt);
     player_effects.calculate_effect_values();
     player_effects.delete_dead_effects();
@@ -684,7 +695,7 @@ void Renderer::Impl::handle_skills_tab(const tl::core::InputState& in, const Ski
     std::vector<PadButton> presses;
     if (pad.dpad_up) presses.push_back(PadButton::DPadUp);
     if (pad.dpad_down) presses.push_back(PadButton::DPadDown);
-    if (a || pad.mouse_a) presses.push_back(PadButton::A);
+    if (a) presses.push_back(PadButton::A);
     if (b) presses.push_back(PadButton::B);
     if (pad.x) presses.push_back(PadButton::X);
     if (pad.y) presses.push_back(PadButton::Y);
@@ -808,35 +819,6 @@ void Renderer::Impl::handle_skills_tab(const tl::core::InputState& in, const Ski
     if (changed) update_menu();
 }
 
-void Renderer::Impl::drop_dragged_skill(const tl::core::InputState& in) {
-    int slot = inventory_menu.skill_slot_at(in);
-    if (slot < 0) slot = game_hud.hotbar_slot_at(in.pointer_x, in.pointer_y);
-    if (slot < 0) return;
-    // The inverse of `skill_button_slot`.
-    tl::core::SkillButton button = tl::core::SkillButton::Y;
-    int set = 0;
-    bool found = false;
-    for (int s = 0; s < 2 && !found; ++s) {
-        for (tl::core::SkillButton b : {tl::core::SkillButton::Y, tl::core::SkillButton::B,
-                                        tl::core::SkillButton::LT, tl::core::SkillButton::RT}) {
-            if (tl::core::skill_button_slot(b, s) != slot) continue;
-            button = b;
-            set = s;
-            found = true;
-            break;
-        }
-    }
-    tl::core::KnownSkill* skill = inventory_menu.selected_skill(player_skills);
-    if (!found || skill == nullptr || !player_skills.map(*skill, button, set)) {
-        TL_LOG_INFO("mouse: skill not mapped to slot %d", slot);
-        return;
-    }
-    play_ui(tl::core::InterfaceSound::SkillAssign);
-    TL_LOG_INFO("mouse: '%s' dragged to function slot %d", skill->entry.name.c_str(), slot);
-    refresh_game_hud();
-    update_menu();
-}
-
 /// Resolve a `Unit Trigger`'s `MODEL` to the mesh, collision and states its unit file
 /// authors: a `CTriggerUnit` (`getUnitModel()` / `getUnitCollisionModel()`;
 /// `unitInit`, reads `MAXSTATES`
@@ -908,7 +890,8 @@ void Renderer::Impl::finish_trigger_unit(int64_t node, const std::string& unit,
     if (pick >= 0 && static_cast<size_t>(pick) < prop.skills.size()) {
         cast_prop_trap(unit, prop.skills[static_cast<size_t>(pick)],
                        prop.skill_levels[static_cast<size_t>(pick)],
-                       at - Ogre::Vector3(0.0f, prop.collision_radius, 0.0f), facing, by_player);
+                       at - Ogre::Vector3(0.0f, prop.collision_radius, 0.0f), facing, by_player,
+                       node);
     }
 }
 
@@ -1169,7 +1152,9 @@ void Renderer::Impl::play_particle_extras(const ParticleFileExtras& extras, cons
                                           const std::string& reference) {
     // `CParticleCache::playSounds`: each sound in order on the preloader's bank,
     // radius the definition's or the bank's 10 (`CSoundBank`).
-    for (const ParticleFileExtras::Sound& sound : extras.sounds) {
+    // A character's slot particle: its sounds were `World::start_slot_particle`'s.
+    const std::vector<ParticleFileExtras::Sound> none;
+    for (const ParticleFileExtras::Sound& sound : slot_sounds_played ? none : extras.sounds) {
         // `getSoundDataObjectByGuid`, played by its name.
         const SoundDefinition* named = sound_by_guid(sound.guid);
         if (named == nullptr) continue;
@@ -1625,9 +1610,9 @@ void Renderer::Impl::convert_unit_body(tl::core::LevelScript* machine, int64_t n
     // `CParticle::Start` on the new model's particle 8, `TRANSFORM`.
     tl::core::Vec3 feet;
     if (machine != nullptr && machine->unit_position(node, feet)) {
-        start_character_particle(stats, tl::core::character_particle::kTransform,
-                                 Ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z),
-                                 character_ref(node, machine));
+        start_slot_particle(stats, tl::core::character_particle::kTransform,
+                            ogre::Vector3(feet.x, feet.y + machine->unit_radius(node), feet.z),
+                            character_ref(node, machine));
     }
     TL_LOG_INFO("transform: node %lld drawn as %s (%s)", static_cast<long long>(node), unit.c_str(),
                 mesh_path.c_str());
@@ -1696,328 +1681,32 @@ void Renderer::Impl::apply_unit_scale(int64_t node) {
     }
 }
 
-namespace renderer_detail {
-/// `Ogre::Quaternion::FromAxes` on the axes a spawner hands over.
-Ogre::Quaternion quaternion_from_axes(const tl::core::SpawnAxes& axes) {
-    Ogre::Quaternion q;
-    q.FromAxes(Ogre::Vector3(axes.x.x, axes.x.y, axes.x.z),
-               Ogre::Vector3(axes.y.x, axes.y.y, axes.y.z),
-               Ogre::Vector3(axes.z.x, axes.z.y, axes.z.z));
-    return q;
-}
-
-}  // namespace renderer_detail
-// PORT: `CLevel +0x1a8`, the level's monster level, for the spawner host.
-int32_t Renderer::Impl::SpawnerHost::level_monster_level() const {
-    // `CLevel +0x1a8`: every spawner here stands in a level.
-    return impl_.level_monster_level;
-}
-
-tl::core::Vec3 Renderer::Impl::SpawnerHost::random_open_position(const tl::core::Vec3& at,
-                                                                 float radius,
-                                                                 bool avoid_no_spawn) {
-    return tl::core::random_open_position(
-        at, 0.0f, radius,
-        [this, avoid_no_spawn](const tl::core::Vec3& p) {
-            return !impl_.passability.ready() ||
-                   (impl_.passability.map_passable(p) && impl_.passability.position_passable(p) &&
-                    !(avoid_no_spawn &&
-                      tl::core::is_in_no_spawn_region(impl_.no_spawn_regions, p, 0.0f)));
-        },
-        tl::core::volatile_random());
-}
-
-bool Renderer::Impl::SpawnerHost::ray_collision(const tl::core::Vec3& from,
-                                                const tl::core::Vec3& to, tl::core::Vec3& normal) {
-    tl::core::CollisionHit hit;
-    if (!impl_.collision.ray_collision(from, to, /*objects=*/true, hit)) return false;
-    normal = hit.normal;
-    return true;
-}
-
-float Renderer::Impl::SpawnerHost::range_random(float lo, float hi) {
-    return Ogre::Math::RangeRandom(lo, hi);
-}
-
-tl::core::RunicRandom& Renderer::Impl::SpawnerHost::volatile_random() {
-    return tl::core::volatile_random();
-}
-
-void Renderer::Impl::SpawnerHost::create_particles(const std::string& file,
-                                                   const tl::core::Vec3& at,
-                                                   const tl::core::SpawnAxes& axes,
-                                                   uint32_t index) {
-    // `CUnitSpawner::createParticleSystemAt`: the layout
-    // at this index used again, a new index loads one. INVENTED: no
-    // `CLevel::snapToValidGround(p, 0.01)`, and a used layout is replaced, not restarted.
-    std::map<uint32_t, std::vector<Ogre::SceneNode*>>& layouts = impl_.spawner_particles[node_];
+// `CUnitSpawner::createParticleSystemAt`: the layout at this
+// index used again, a new index loads one (the caller has snapped the point to the ground).
+// INVENTED: a used layout is replaced, not restarted.
+void Renderer::Impl::view_spawner_particles(int64_t spawner, const std::string& file,
+                                            const tl::core::ogre::Vector3& at,
+                                            const tl::core::ogre::Quaternion& facing,
+                                            uint32_t index) {
+    std::map<uint32_t, std::vector<Ogre::SceneNode*>>& layouts = spawner_particles[spawner];
     const auto used = layouts.find(index);
-    if (used != layouts.end()) impl_.destroy_particle_holders(used->second);
+    if (used != layouts.end()) destroy_particle_holders(used->second);
     // A kind-1 `CLayout`: a `CParticle` once particles are cached.
-    layouts[index] = impl_.place_particle_layout(
-        file, Ogre::Vector3(at.x, at.y, at.z), quaternion_from_axes(axes), nullptr,
+    layouts[index] = place_particle_layout(
+        file, at, facing, nullptr,
         renderer_detail::caching_particles() ? ParticleStart::Now : ParticleStart::Live);
 }
 
-void Renderer::Impl::SpawnerHost::fire_missile(const std::string& resource,
-                                               const tl::core::Vec3& at,
-                                               const tl::core::SpawnAxes& axes) {
-    // `fireMissile` is handed the orientation; the missile flies along its z.
-    impl_.fire_spawner_missile(node_, resource, ogre::Vector3(at.x, at.y, at.z),
-                               ogre::Vector3(axes.z.x, axes.z.y, axes.z.z));
-}
-
-// `CSpawnClassParser::getSpawnClassByName` and
-// `CSpawnClass::rollSpawnClass` with `(level, 0xffffffff,
-// 0, -1, 0, 0)` on `g_Rand`, as `CUnitSpawner::spawnUnitByIndex` rolls.
-tl::core::SpawnClassPick Renderer::Impl::SpawnerHost::roll_spawn_class(const std::string& name,
-                                                                       int32_t level) {
-    if (!impl_.loot_tables_built) {
-        impl_.loot_tables_built = true;
-        impl_.build_spawn_context(impl_.loot_tables, /*items_by_type=*/true);
+bool Renderer::Impl::view_begin_spawn_entrance(int64_t id, Ogre::Entity* entity) {
+    const auto entrance = fidgets.find(entity);
+    if (entrance == fidgets.end() || entrance->second.state == nullptr) return false;
+    spawning_units[id] = entrance->second.state;
+    // `CCharacter::spawn`: `setRenderBehind(false)` for the entrance;
+    // `spawningAI` puts `RENDERBEHIND` back.
+    if (const RenderBehind* behind = render_behind_of(entity)) {
+        set_render_behind(entity, false, behind->hostile);
     }
-    const tl::core::SpawnContext& context = impl_.loot_tables.context;
-    tl::core::SpawnClassPick pick;
-    const tl::core::SpawnClass* table =
-        context.get_spawn_class ? context.get_spawn_class(name) : nullptr;
-    if (table == nullptr) return pick;
-    pick.found_class = true;
-    std::vector<std::string> units;
-    std::vector<bool> enchant;
-    table->roll_spawn_class(units, &enchant, nullptr, nullptr, level, 0xffffffffu, 0, -1, 0, 0,
-                            tl::core::game_random(), context);
-    if (!units.empty()) {
-        pick.unit = units[0];
-        pick.enchant = !enchant.empty() && enchant[0];
-    }
-    return pick;
-}
-
-tl::core::SpawnedUnitRef Renderer::Impl::SpawnerHost::create_unit(
-    const tl::core::SpawnRelease& release, const std::string& name, bool enchant) {
-    using tl::core::SpawnGroup;
-    using tl::core::SpawnSettle;
-    const Ogre::Quaternion facing = quaternion_from_axes(release.axes);
-    const Ogre::Vector3 at(release.position.x, release.position.y, release.position.z);
-    const Ogre::Vector3 spawner(release.spawner_position.x, release.spawner_position.y,
-                                release.spawner_position.z);
-
-    // `CResourceManager::createUnit`: an item by name for `Items`, or a table's pick.
-    impl_.ensure_item_index();
-    const tl::core::ItemStats* data = nullptr;
-    if (release.group == SpawnGroup::Items || release.group == SpawnGroup::SpawnClass) {
-        data = impl_.items.find(name);
-    }
-    if (data != nullptr) {
-        // `createItem(data, false, true, false)`, then `enchant(true)` on the table's flag.
-        const tl::core::ItemStats made = impl_.create_item(*data, false, true, enchant);
-        const size_t before = impl_.dropped_items.size();
-        if (made.is_gold()) {
-            impl_.place_gold(made.gold, at, &made, /*drop_sound=*/release.item_drop);
-        } else if (release.item_drop) {
-            // `addItem(item, p, true)`: `CEquipment::drop` tosses it from there.
-            impl_.drop_item(made, 1, at);
-        } else {
-            impl_.place_ground_item(made, 1, at, facing, tl::core::QuestUnitTag{});
-        }
-        if (impl_.dropped_items.size() == before) return {};
-        DroppedWorldItem& placed = impl_.dropped_items.back();
-        if (release.settle != SpawnSettle::AsAdded && placed.node != nullptr) {
-            placed.node->setPosition(release.settle == SpawnSettle::AtSpawner ? spawner : at);
-            placed.node->setOrientation(facing);
-            placed.rest = from_ogre(facing);
-        }
-        const int64_t id = impl_.next_spawned_id();
-        placed.unit_id = id;
-        impl_.spawner_units[id] = SpawnerUnit{machine_, node_};
-        TL_LOG_INFO("spawner: '%s' releases %s", release.resource.c_str(),
-                    made.display_name.c_str());
-        // Every item but gold is a `CEquipment`.
-        return {tl::core::SpawnedKind::Item, id, !made.is_gold()};
-    }
-    if (release.group != SpawnGroup::Monsters && release.group != SpawnGroup::Props &&
-        release.group != SpawnGroup::SpawnClass) {
-        TL_LOG_WARN("spawner: no %s called '%s'", release.group_upper.c_str(), name.c_str());
-        return {};
-    }
-
-    // A `CBreakable` is an item: `addItem(b, p, item drop)`,
-    // which tosses only a `CEquipment`; then the spawner settles it.
-    if (impl_.is_breakable_unit(name)) {
-        const int64_t id = impl_.next_spawned_id();
-        const Ogre::Vector3* settle = release.settle == SpawnSettle::AtSpawner    ? &spawner
-                                      : release.settle == SpawnSettle::AtPosition ? &at
-                                                                                  : nullptr;
-        if (!impl_.place_breakable(name, at, facing, id, settle)) return {};
-        impl_.spawner_units[id] = SpawnerUnit{machine_, node_};
-        TL_LOG_INFO("spawner: '%s' releases %s", release.resource.c_str(), name.c_str());
-        return {tl::core::SpawnedKind::Item, id, false};
-    }
-
-    // `CLevel::addCharacter(c, p, false)`: grounded, then
-    // settled by the spawner.
-    Ogre::Vector3 place = impl_.dropped_to_ground(at);
-    if (release.settle == SpawnSettle::AtPosition) place = at;
-    if (release.settle == SpawnSettle::AtSpawner) place = spawner;
-
-    const int level = release.level > 0 ? release.level : 0;
-    if (impl_.spawn_unit(name, place, node_, level, /*champion=*/false, release.play_spawn_anim,
-                         facing) == nullptr) {
-        // A prop whose body is a particle layout (see place_layout_bodied_unit()).
-        if (!impl_.place_layout_bodied_unit(name, place)) {
-            TL_LOG_WARN("spawner: '%s' resolved to no unit", name.c_str());
-            return {};
-        }
-        const int64_t id = impl_.next_spawned_id();
-        impl_.spawner_units[id] = SpawnerUnit{machine_, node_};
-        return {tl::core::SpawnedKind::Item, id, false};
-    }
-    const SpawnedUnit& made = impl_.spawned[node_].back();
-    const Ogre::Vector3 forward = facing * Ogre::Vector3::UNIT_Z;
-    impl_.script.add_spawned_unit(made.id, name, tl::core::Vec3{place.x, place.y, place.z},
-                                  release.target_player, std::atan2(forward.x, forward.z));
-    impl_.apply_spawn_level(made.id);
-    impl_.spawner_units[made.id] = SpawnerUnit{machine_, node_};
-    // `addCharacter` -> `createPathfinder`: `MINION_SPAWNCLASS` brings its minions.
-    impl_.spawn_unit_minions(made.id, node_);
-    if (!release.give_loot) impl_.no_loot_units.insert(made.id);
-    if (!release.give_xp) impl_.no_xp_units.insert(made.id);
-    // INVENTED: `DESTROY BODY`'s effect 0x81 is not transcribed; without `PLAY SPAWN ANIM`
-    // its AI state 4 is the machine's own starting state.
-    if (release.play_spawn_anim) {
-        const auto entrance = impl_.fidgets.find(made.entity);
-        if (entrance != impl_.fidgets.end() && entrance->second.state != nullptr) {
-            impl_.spawning_units[made.id] = entrance->second.state;
-            impl_.script.set_spawning(made.id, true);
-            // `CCharacter::spawn`: `setRenderBehind(false)` for the
-            // entrance; `spawningAI` puts `RENDERBEHIND` back.
-            if (const RenderBehind* behind = render_behind_of(made.entity)) {
-                set_render_behind(made.entity, false, behind->hostile);
-            }
-        }
-    }
-    impl_.ensure_prop_index();
-    const bool prop = impl_.prop_files.count(lowered(name)) != 0;
-    TL_LOG_INFO("spawner: '%s' releases %s at (%.2f, %.2f, %.2f)", release.resource.c_str(),
-                name.c_str(), static_cast<double>(place.x), static_cast<double>(place.y),
-                static_cast<double>(place.z));
-    return {prop ? tl::core::SpawnedKind::Item : tl::core::SpawnedKind::Character, made.id, false};
-}
-
-// The spawn listeners (`CUnitSpawner +0x218`): a skill event's (`CSkillEvent::addListeners`)
-// is told of each character released
-// (`unitSpawnedFromUnitSpawner`).
-void Renderer::Impl::SpawnerHost::unit_spawned(const tl::core::SpawnedUnitRef& unit) {
-    // `create_unit` put it in the level's own machine.
-    if (unit.kind != tl::core::SpawnedKind::Character) return;
-    const auto found = impl_.skill_spawners.find(node_);
-    if (found == impl_.skill_spawners.end()) return;
-    if (impl_.script.unit_of(unit.id).empty()) return;
-    impl_.skill_unit_spawned(found->second.source, impl_.script, unit.id);
-}
-
-// A released unit still exists: the spawner's `TSafePointer` is not cleared.
-// PORT: answered from the port's list of what the spawner made.
-bool Renderer::Impl::SpawnerHost::unit_exists(int64_t id) const {
-    const auto found = impl_.spawned.find(node_);
-    if (found == impl_.spawned.end()) return false;
-    for (const SpawnedUnit& unit : found->second) {
-        if (unit.id == id) return true;
-    }
-    return false;
-}
-
-bool Renderer::Impl::SpawnerHost::character_alive(int64_t id) const {
-    return !impl_.script.unit_is_dead(id);
-}
-
-// `CCharacter::die` (vtable +0x330) with no one to blame, on a released unit
-// (`CUnitSpawner::destroyUnits`).
-void Renderer::Impl::SpawnerHost::kill_character(int64_t id) {
-    if (impl_.script.unit_is_dead(id)) return;
-    const auto found = impl_.spawned.find(node_);
-    if (found == impl_.spawned.end()) return;
-    for (const SpawnedUnit& unit : found->second) {
-        if (unit.id != id) continue;
-        const std::string name = unit.unit;
-        impl_.kill_unit(id, name, /*fall=*/true, tl::core::LevelScript::kNoAttacker);
-        return;
-    }
-}
-
-void Renderer::Impl::SpawnerHost::hide_character(int64_t id, bool hide) {
-    // `setEnabled(false)`: the machine forgets it (no thinking, not hunted); still alive.
-    const auto found = impl_.spawned.find(node_);
-    if (found == impl_.spawned.end()) return;
-    for (const SpawnedUnit& unit : found->second) {
-        if (unit.id != id) continue;
-        if (unit.node != nullptr) unit.node->setVisible(!hide);
-        if (hide) impl_.script.remove_spawned_unit(id);
-        return;
-    }
-}
-
-void Renderer::Impl::SpawnerHost::run_particles(bool run) {
-    // `CLayout::stop(false)`: nothing more released, each layout goes once dead.
-    // INVENTED: `CLayout::start` again is not modelled.
-    if (run) return;
-    const auto found = impl_.spawner_particles.find(node_);
-    if (found == impl_.spawner_particles.end()) return;
-    for (auto& layout : found->second) {
-        impl_.transient_particles.push_back(TransientParticles{layout.second, 0.0f});
-    }
-    impl_.spawner_particles.erase(found);
-}
-
-void Renderer::Impl::SpawnerHost::deliver() {
-    if (outputs_.empty() || machine_ == nullptr) return;
-    std::vector<tl::core::ScriptEvent> events;
-    for (uint32_t raised : outputs_) {
-        TL_LOG_INFO("spawner: %lld raises '%s'", static_cast<long long>(node_),
-                    tl::core::logic::output_name(raised));
-        machine_->raise_output(node_, raised, impl_.quest_log.state(), events);
-    }
-    outputs_.clear();
-    if (events.empty()) return;
-    if (NodeMap* nodes = impl_.nodes_of(machine_)) impl_.apply_script_events(events, *nodes);
-}
-
-// PORT: a layout input handed to the spawner node's `UnitSpawner::input`.
-void Renderer::Impl::spawner_input(const tl::core::ScriptEvent& event) {
-    if (event.spawner == nullptr) return;
-    SpawnerHost host(*this, event.machine, event.node_id);
-    event.spawner->input(event.input, host);
-    TL_LOG_INFO("script: '%s' %s (%s '%s'): %u of %u out", event.name.c_str(),
-                tl::core::logic::input_name(event.input), event.spawner->spec().group.c_str(),
-                event.spawner->spec().resource.c_str(), event.spawner->released(),
-                event.spawner->total());
-    host.deliver();
-}
-
-// Every spawner's `CUnitSpawner::update`, once a frame. INVENTED: all stepped
-// here, not among the level's units in their order.
-void Renderer::Impl::step_spawners(float delta) {
-    if (!(delta > 0.0f)) return;
-    for (MachineView& view : machines()) {
-        for (const auto& entry : view.script->unit_spawners()) {
-            SpawnerHost host(*this, view.script, entry.first);
-            entry.second->update(delta, host);
-            host.deliver();
-        }
-    }
-}
-
-void Renderer::Impl::spawned_item_state(int64_t id, int state) {
-    const auto found = spawner_units.find(id);
-    if (found == spawner_units.end()) return;
-    const SpawnerUnit owner = found->second;
-    spawner_units.erase(found);
-    tl::core::UnitSpawner* spawner =
-        owner.machine != nullptr ? owner.machine->unit_spawner(owner.spawner) : nullptr;
-    if (spawner == nullptr) return;
-    SpawnerHost host(*this, owner.machine, owner.spawner);
-    spawner->unit_state_change(id, state, host);
-    host.deliver();
+    return true;
 }
 
 /// `CGenericModel::setAmbient`: every material the model

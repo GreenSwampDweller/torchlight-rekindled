@@ -16,6 +16,7 @@ from xml.sax.saxutils import quoteattr
 from PIL import ImageFont
 
 from build_ui_pack import GOLD, INK, INK_DIM, PANEL, PANEL_DARK, Canvas, at, full, obj, over
+import ui_pack_art as art
 from ui_pack_menu import glyph, outline_box
 
 PROMPT = "FFFCD615"
@@ -134,9 +135,9 @@ def controller(w, h):
 def front_sprites():
     r = 2
     out = {
-        "analog_button_left_ud": stick(36 * r, 48 * r, "L", "ud"),
-        "analog_button_right_ud": stick(32 * r, 39 * r, "R", "ud"),
-        "analog_button_left_down": stick(38 * r, 37 * r, "L", "d"),
+        "analog_button_left_ud": art.stick(36 * r, 48 * r, "L", "ud"),
+        "analog_button_right_ud": art.stick(32 * r, 39 * r, "R", "ud"),
+        "analog_button_left_down": art.stick(38 * r, 37 * r, "L", "d"),
         "loading_icon": torch(124, 150),
         "scroll_button_up_rollover": round_button(27 * r, True),
         "scroll_button_down_rollover": round_button(27 * r, False),
@@ -148,7 +149,7 @@ def front_sprites():
         "checkbox_off": checkbox(50 * r, False),
         "checkbox_on": checkbox(50 * r, True),
         "check": tick(50 * r),
-        "controller": controller(268 * r, 194 * r),
+        "controller": art.controller(268 * r, 194 * r),
     }
     for kind in ("dog", "cat", "chakawary"):
         out[kind] = pet_icon(48 * r, kind, "normal")

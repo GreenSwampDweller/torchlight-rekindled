@@ -40,7 +40,7 @@ TARGETS = {
         "lib": "torchlight",
         "cmake_target": "torchlight",
         "label": "Torchlight Rekindled",
-        "version": "1.0.2",
+        "version": "1.1.1",
     },
 }
 

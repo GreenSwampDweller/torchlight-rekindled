@@ -117,6 +117,70 @@ TL_TEST(mods_loaded_from_a_directory) {
 
 namespace {
 
+// A zip reader that answers for `Big.zip` alone: a mod wrapped in its folder, as a download
+// often is.
+bool fake_list(const std::string& archive, std::vector<std::string>& entries) {
+    if (archive.find("Big.zip") == std::string::npos) return false;
+    entries = {"Big/mod.dat", "Big/media/units/x.dat", "readme.txt"};
+    return true;
+}
+
+bool fake_read(const std::string& archive, const std::string& entry, std::vector<uint8_t>& bytes) {
+    if (archive.find("Big.zip") == std::string::npos || entry != "Big/mod.dat") return false;
+    const std::string text = "[MOD]\n<STRING>NAME:Big Mod\n<STRING>AUTHOR:Zipper\n[/MOD]\n";
+    bytes.assign(text.begin(), text.end());
+    return true;
+}
+
+}  // namespace
+
+/// A `.zip` in the mods directory is a mod beside the folders: its `mod.dat` read from inside,
+/// its root the zip itself, listed in `mods.dat` by its file name. Without a reader it has no
+/// files.
+TL_TEST(zip_mods_are_listed_beside_folders) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "tl_mods_zip_test";
+    std::filesystem::remove_all(dir);
+    write_text(dir / "Necro" / "mod.dat", "[MOD]\n<STRING>NAME:Necromancer\n[/MOD]\n");
+    write_text(dir / "Necro" / "media" / "units" / "x.dat", "[UNIT]\n[/UNIT]\n");
+    write_text(dir / "Big.zip", "PK");
+    write_text(dir / "notes.txt", "not a mod");
+    tl::core::ModArchiveReader reader;
+    reader.list = fake_list;
+    reader.read = fake_read;
+    tl::core::set_mod_archive_reader(reader);
+    tl::core::ModList list = tl::core::load_mods(dir.string());
+    TL_CHECK(list.mods.size() == 2);
+    TL_CHECK(list.mods[0].folder == "Big.zip" && list.mods[0].archive);
+    TL_CHECK(list.mods[0].name == "Big Mod" && list.mods[0].author == "Zipper");
+    TL_CHECK(list.mods[0].active());
+    TL_CHECK(list.mods[1].name == "Necromancer" && !list.mods[1].archive);
+    const std::vector<std::string> roots = tl::core::active_mod_roots(list);
+    TL_CHECK(roots.size() == 2);
+    TL_CHECK(roots[0].size() > 7 && roots[0].compare(roots[0].size() - 7, 7, "Big.zip") == 0);
+    TL_CHECK(roots[1].back() != '/');
+    TL_CHECK(tl::core::save_mods(list));
+    list = tl::core::load_mods(dir.string());
+    TL_CHECK(list.mods.size() == 2 && list.mods[0].folder == "Big.zip" && list.mods[0].archive);
+    tl::core::set_mod_archive_reader(tl::core::ModArchiveReader{});
+    list = tl::core::load_mods(dir.string());
+    TL_CHECK(list.mods.size() == 2 && list.mods[0].archive && !list.mods[0].active());
+    std::filesystem::remove_all(dir);
+}
+
+/// The folder a zip wraps its mod in is read under; a mod zipped from inside its folder, or
+/// with two folders at its root, has none.
+TL_TEST(zip_mod_prefix) {
+    TL_CHECK(tl::core::mod_archive_prefix({"Big/mod.dat", "Big/media/a.dat", "readme.txt"}) ==
+             "Big/");
+    TL_CHECK(tl::core::mod_archive_prefix({"big/MOD.DAT", "Big/media/a.dat"}) == "big/");
+    TL_CHECK(tl::core::mod_archive_prefix({"mod.dat", "media/a.dat"}).empty());
+    TL_CHECK(tl::core::mod_archive_prefix({"MEDIA/a.dat"}).empty());
+    TL_CHECK(tl::core::mod_archive_prefix({"A/media/x", "B/media/y"}).empty());
+    TL_CHECK(tl::core::mod_archive_prefix({}).empty());
+}
+
+namespace {
+
 tl::core::ModInfo* find_mod(tl::core::ModList& list, const char* folder) {
     for (tl::core::ModInfo& mod : list.mods) {
         if (mod.folder == folder) return &mod;

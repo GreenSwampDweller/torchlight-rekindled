@@ -15,6 +15,7 @@
 #include <OgreOverlayContainer.h>
 #include <OgreOverlayManager.h>
 #include <OgrePanelOverlayElement.h>
+#include <OgreShaderGenerator.h>
 #include <OgreTechnique.h>
 #include <OgreTextAreaOverlayElement.h>
 #include <OgreTextureManager.h>
@@ -126,8 +127,16 @@ tl::formats::UiObject export_object(const tl::formats::GuiWindow& window) {
     };
     std::string set_name;
     std::string image_name;
-    const bool has_image =
-        tl::formats::parse_image_reference(window.property("Image", empty), set_name, image_name);
+    // A PC button authors `NormalImage` and `HoverImage` where a picture authors `Image`;
+    // a radio button `UnselectedImage` and `SelectedImage`, its lit art the selected one.
+    const std::string plain = window.property(
+        "Image", window.property("NormalImage", window.property("UnselectedImage", empty)));
+    const bool has_image = tl::formats::parse_image_reference(plain, set_name, image_name);
+    std::string hover_set;
+    std::string hover_name;
+    const bool has_hover = tl::formats::parse_image_reference(
+        window.property("HoverImage", window.property("SelectedImage", empty)), hover_set,
+        hover_name);
     if (ends_with(window.type, "StaticTextOutline")) {
         put("DESCRIPTOR", "Text Outlined");
     } else if (ends_with(window.type, "StaticText")) {
@@ -173,6 +182,7 @@ tl::formats::UiObject export_object(const tl::formats::GuiWindow& window) {
     if (down.find("Bottom") != std::string::npos) put("VERTICAL ALIGN", "BOTTOM");
 
     if (has_image) put("IMAGE", image_name);
+    if (has_hover) put("HOVER", hover_name);
     if (window.has_property("Alpha")) put("ALPHA", window.property("Alpha", empty));
     if (window.property("Visible", empty) == "False") put("RUNTIME HIDDEN", "true");
     if (window.property("AlwaysOnTop", empty) == "True") put("ALWAYS ON TOP", "true");
@@ -181,6 +191,17 @@ tl::formats::UiObject export_object(const tl::formats::GuiWindow& window) {
         object.children.push_back(export_object(child));
     }
     return object;
+}
+
+/// A window's own material let go: the shader system's techniques for it first, or
+/// they outlive it and are torn down over a freed pass.
+void drop_window_material(Ogre::MaterialPtr& material) {
+    if (!material) return;
+    if (auto* shaders = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        shaders->removeAllShaderBasedTechniques(*material);
+    }
+    Ogre::MaterialManager::getSingleton().remove(material);
+    material.reset();
 }
 
 }  // namespace
@@ -204,11 +225,15 @@ bool LayoutScreen::load_art(const std::string& group) {
     // The PC's sets after the console's, so a name both hold keeps the console's.
     std::vector<const char*> paths(std::begin(kImagesets), std::end(kImagesets));
     for (const char* path : pc_imagesets()) paths.push_back(path);
+    for (const std::string& path : extra_sets_) paths.push_back(path.c_str());
     for (const char* path : paths) {
         std::vector<uint8_t> bytes;
         if (!read_menu_resource(path, group, bytes) || bytes.empty()) continue;
         tl::formats::Imageset parsed = tl::formats::parse_imageset(bytes.data(), bytes.size());
-        if (parsed.ok) sets_.push_back(std::move(parsed));
+        // A set listed twice is read once: its material is made by its name.
+        const bool listed = std::any_of(sets_.begin(), sets_.end(),
+                                        [&](const auto& have) { return have.name == parsed.name; });
+        if (parsed.ok && !listed) sets_.push_back(std::move(parsed));
     }
     if (sets_.empty()) {
         TL_LOG_INFO("no %s: none of its imagesets is in the mounted data", tag_.c_str());
@@ -224,6 +249,7 @@ bool LayoutScreen::load_art(const std::string& group) {
         if (!texture) continue;
         textures_.push_back(texture);
         materials_.push_back(build_menu_material(tag_ + "/" + stored.name, texture));
+        apply_set_tint(materials_.back(), stored);
         for (const tl::formats::ImagesetImage& image : stored.images) {
             Sprite entry;
             entry.rect = &image;
@@ -425,23 +451,19 @@ bool LayoutScreen::prepare(const std::string& group, unsigned width, unsigned he
 }
 
 // PORT: a PC window carried onto a console screen (the PC's `.layout` read as authored).
-tl::formats::GuiWindow pc_layout_window(const std::string& group, const std::string& layout,
-                                        const std::string& name) {
-    tl::formats::GuiWindow out;
-    std::vector<uint8_t> bytes;
-    if (!read_menu_resource(layout, group, bytes) || bytes.empty()) return out;
-    const tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
-    const tl::formats::GuiWindow* window = parsed.ok ? parsed.find(name) : nullptr;
+namespace {
+
+/// A PC window's own properties in an export's form: `UnifiedPosition` and `UnifiedSize` as
+/// one `UnifiedAreaRect`. False when it authors no place.
+bool place_pc_window(const tl::formats::GuiWindow& window, tl::formats::GuiWindow& out) {
     tl::formats::UVector2 at, size;
-    if (window == nullptr ||
-        !tl::formats::parse_uvector2(window->property("UnifiedPosition", ""), at) ||
-        !tl::formats::parse_uvector2(window->property("UnifiedSize", ""), size)) {
-        return out;
+    if (!tl::formats::parse_uvector2(window.property("UnifiedPosition", ""), at) ||
+        !tl::formats::parse_uvector2(window.property("UnifiedSize", ""), size)) {
+        return false;
     }
-    out.type = "ceguiWidget/StaticText";
-    out.name = name;
+    out.name = window.name;
     // A property authored twice (`Text` "1", then the words) is its last.
-    for (const auto& [key, value] : window->properties) {
+    for (const auto& [key, value] : window.properties) {
         if (key != "UnifiedPosition" && key != "UnifiedSize")
             out.properties.emplace_back(key, value);
     }
@@ -455,8 +477,69 @@ tl::formats::GuiWindow pc_layout_window(const std::string& group, const std::str
                   static_cast<double>(at.y.scale + size.y.scale),
                   static_cast<double>(at.y.offset + size.y.offset));
     out.properties.emplace_back("UnifiedAreaRect", area);
+    return true;
+}
+
+/// A PC window and everything under it, in an export's form.
+tl::formats::GuiWindow pc_window_tree(const tl::formats::GuiWindow& window) {
+    tl::formats::GuiWindow out;
+    // A `StandardButton`'s frame is its look's; what is carried of it is its caption.
+    const bool text_button = window.type == "GuiLook/StandardButton";
+    out.type = text_button ? "GuiLook/StaticText" : window.type;
+    if (!place_pc_window(window, out)) {
+        out.name = window.name;
+        out.properties = window.properties;
+    }
+    if (text_button) out.properties.emplace_back("HorzTextFormatting", "HorzCentred");
+    out.children.reserve(window.children.size());
+    for (const tl::formats::GuiWindow& child : window.children) {
+        out.children.push_back(pc_window_tree(child));
+    }
+    return out;
+}
+
+}  // namespace
+
+tl::formats::GuiWindow pc_layout_window(const std::string& group, const std::string& layout,
+                                        const std::string& name) {
+    tl::formats::GuiWindow out;
+    std::vector<uint8_t> bytes;
+    if (!read_menu_resource(layout, group, bytes) || bytes.empty()) return out;
+    const tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
+    const tl::formats::GuiWindow* window = parsed.ok ? parsed.find(name) : nullptr;
+    if (window == nullptr || !place_pc_window(*window, out)) return out;
+    out.type = "ceguiWidget/StaticText";
     out.properties.emplace_back("Visible", "False");
     return out;
+}
+
+void LayoutScreen::note_pc_window(const tl::formats::GuiWindow& window) {
+    PcWindow& noted = pc_windows_[window.name];
+    noted.pass_through = window.property("MousePassThroughEnabled", "") == "True";
+    noted.on_click = window.property("onClick", "");
+    for (const tl::formats::GuiWindow& child : window.children) note_pc_window(child);
+}
+
+bool LayoutScreen::create_pc(const std::string& group, unsigned width, unsigned height,
+                             const std::string& layout_path, const std::string& tag,
+                             unsigned short z_order) {
+    if (!prepare(group, width, height, tag)) return false;
+    std::vector<uint8_t> bytes;
+    if (!read_menu_resource(layout_path, group, bytes) || bytes.empty()) {
+        TL_LOG_INFO("no %s: '%s' is not in the mounted data", tag_.c_str(), layout_path.c_str());
+        destroy();
+        return false;
+    }
+    const tl::formats::GuiLayout parsed = tl::formats::parse_gui_layout(bytes.data(), bytes.size());
+    if (!parsed.ok) {
+        TL_LOG_WARN("%s: %s: %s", tag_.c_str(), layout_path.c_str(), parsed.error.c_str());
+        destroy();
+        return false;
+    }
+    note_pc_window(parsed.root);
+    std::vector<tl::formats::UiObject> objects;
+    objects.push_back(export_object(pc_window_tree(parsed.root)));
+    return construct(objects, layout_path, z_order);
 }
 
 bool LayoutScreen::create_export(const std::string& group, unsigned width, unsigned height,
@@ -604,12 +687,16 @@ void LayoutScreen::destroy() {
     }
     if (Ogre::MaterialManager::getSingletonPtr() != nullptr) {
         for (Node& node : nodes_) {
-            if (node.tinted) Ogre::MaterialManager::getSingleton().remove(node.tinted);
-            if (node.faded) Ogre::MaterialManager::getSingleton().remove(node.faded);
+            drop_window_material(node.tinted);
+            drop_window_material(node.faded);
         }
     }
     nodes_.clear();
+    pc_windows_.clear();
     sprites_.clear();
+    if (Ogre::MaterialManager::getSingletonPtr() != nullptr) {
+        for (Ogre::MaterialPtr& material : materials_) drop_window_material(material);
+    }
     materials_.clear();
     textures_.clear();
     sets_.clear();
@@ -645,26 +732,6 @@ void LayoutScreen::resize(unsigned width, unsigned height) {
     width_ = width;
     height_ = height;
     if (built_) layout();
-}
-
-bool LayoutScreen::pointed(const tl::core::InputState& in, const std::string& widget) const {
-    if (!visible_ || !in.pointer) return false;
-    const int index = find_widget(widget);
-    if (index < 0 || is_hidden(index)) return false;
-    const Node& node = nodes_[static_cast<size_t>(index)];
-    return in.pointer_x >= node.left && in.pointer_x < node.left + node.width &&
-           in.pointer_y >= node.top && in.pointer_y < node.top + node.height;
-}
-
-bool LayoutScreen::pointer_along(const tl::core::InputState& in, const std::string& widget,
-                                 float& along) const {
-    if (!visible_ || !in.pointer) return false;
-    const int index = find_widget(widget);
-    if (index < 0 || is_hidden(index)) return false;
-    const Node& node = nodes_[static_cast<size_t>(index)];
-    if (node.width <= 0.0f) return false;
-    along = std::clamp((in.pointer_x - node.left) / node.width, 0.0f, 1.0f);
-    return true;
 }
 
 int LayoutScreen::find_widget(const std::string& name) const {

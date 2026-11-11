@@ -55,4 +55,18 @@ void Renderer::Impl::create_interface() {
     }
 }
 
+// CGameUI::setInteractiveMenuVisible(bool): a count,
+// held at 0. At 1 the bars open and the automap goes; back at 0 they close and it returns
+// (the minimap's half is step_hud_visibility's).
+void Renderer::Impl::set_interactive_menu_visible(bool on) {
+    interactive_menus += on ? 1 : -1;
+    if (interactive_menus < 0) {
+        interactive_menus = 0;
+    } else if (interactive_menus == 1) {
+        if (!hud.letterboxed()) hud.set_letterboxed(true);
+    } else if (interactive_menus == 0 && hud.letterboxed()) {
+        hud.set_letterboxed(false);
+    }
+}
+
 }  // namespace tl::render

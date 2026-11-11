@@ -41,10 +41,10 @@ TL_TEST(dungeon_rank_reads_the_tracker) {
     tracker.player_level = 14;
     travel.trackers.push_back(tracker);
 
-    // Found by name in any case.
+    // Found by the name as given: no upper-casing, so another case is not found.
     TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "MAIN"), 14);
-    TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "main"), 14);
-    TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "Main"), 14);
+    TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "main"), 0);
+    TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "Main"), 0);
 
     // 0 when absent.
     TL_CHECK_EQ(tl::core::get_dungeon_rank(travel, "CRYPT"), 0);

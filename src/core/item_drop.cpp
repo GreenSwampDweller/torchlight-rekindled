@@ -101,11 +101,13 @@ Vec3 snap_item_to_ground(const Vec3& at, const GroundRay& ray,
     return Vec3{tried.x, at.y, tried.z};
 }
 
-Vec3 drop_character_to_ground(const Vec3& at, float max_reach, const GroundRay& ray,
-                              const std::function<bool(const Vec3&)>& open, RunicRandom& rng) {
+Vec3 drop_character_to_ground(const Vec3& at, float max_reach, float collision_radius,
+                              const GroundRay& ray, const std::function<bool(const Vec3&)>& open,
+                              RunicRandom& rng) {
     // `CCharacter::dropToGround`: the open-point search draws
     // no no-spawn test (`randomOpenPosition`'s last argument 0); after thirty misses the point is
-    // left at 100, kept.
+    // left at 100, kept. A hit stands the unit its collision radius above the face
+    // (`+0x74 = hit.y + +0x15C`).
     Vec3 tried = at;
     float reach = 0.1f;
     for (int attempt = 0; attempt < 30; ++attempt) {
@@ -114,6 +116,7 @@ Vec3 drop_character_to_ground(const Vec3& at, float max_reach, const GroundRay& 
         if (ray &&
             ray(Vec3{tried.x, 100.0f, tried.z}, Vec3{tried.x, -100.0f, tried.z}, hit, material) &&
             material != 100) {
+            hit.y = hit.y + collision_radius;
             return hit;
         }
         tried = random_open_position(Vec3{tried.x, 100.0f, tried.z}, 0.0f, reach, open, rng);

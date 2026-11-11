@@ -25,13 +25,13 @@ std::vector<std::string> archive_paths_in_listing_order(const std::string& dir, 
 std::string resolve_archive_path(const std::string& reference);
 /// Keep read_resource()'s data files only while the same archives are mounted.
 void remember_mounts(const std::string& mounts);
-/// Absolute roots of extracted mod folders (`--mod-data`), in priority order; these
-/// filesystems are searched case-insensitively before the base archive.
+/// Absolute roots of the mods (`--mod-data`), in priority order: a mod's folder, or its
+/// `.zip` as mounted; each is searched case-insensitively before the base archive.
 void set_mod_roots(const std::vector<std::string>& roots);
 bool read_mod_resource(const std::string& path, std::vector<uint8_t>& bytes);
 /// Whether a mod answers `path` (read_mod_resource() would read it).
 bool mod_has_file(const std::string& path);
-/// The file a mod answers `path` with, on disk, or empty.
+/// The file a mod answers `path` with, on disk, or empty (a `.zip` mod's has none).
 std::string mod_file_path(const std::string& path);
 /// Each mod's own copy of `path`, in the mods' order.
 std::vector<std::vector<uint8_t>> read_mod_copies(const std::string& path);

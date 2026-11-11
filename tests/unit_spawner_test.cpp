@@ -73,6 +73,10 @@ public:
     }
     bool unit_exists(int64_t id) const override { return existing.count(id) != 0; }
     bool character_alive(int64_t id) const override { return alive.count(id) != 0; }
+    bool resource_names_spawner(const std::string& resource) override {
+        return spawner_resources.count(resource) != 0;
+    }
+    std::set<std::string> spawner_resources;
     void kill_character(int64_t id) override {
         killed.push_back(id);
         alive.erase(id);
@@ -378,8 +382,8 @@ TL_TEST(unit_spawner_settle_rules) {
     TL_CHECK(!level.releases.back().item_drop);
 
     spec.spawn_in_center = false;
+    level.spawner_resources.insert(spec.resource);
     UnitSpawner hut(spec, frame_at(0.0f, 0.0f));
-    hut.set_resource_names_spawner(true);
     hut.spawn(level);
     TL_CHECK(level.releases.back().settle == SpawnSettle::AtSpawner);
 }

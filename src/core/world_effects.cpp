@@ -1,11 +1,11 @@
 // The gameplay half of render/renderer_effects.cpp (core/world.h).
-#include "core/section_profile.h"
 #include "core/skill_grid.h"
 #include "core/world.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 namespace tl::core {
 
@@ -22,164 +22,6 @@ SpawnUnitData spawn_data_of(const tl::core::ItemStats& item) {
     u.max_level = item.spawn_max_level;
     return u;
 }
-
-namespace {
-
-/// The level's characters a missile can meet, gathered across every machine.
-std::vector<tl::core::LevelScript::Reachable> missile_candidates(
-    const std::vector<tl::core::LevelScript*>& machines) {
-    std::vector<tl::core::LevelScript::Reachable> out;
-    for (const tl::core::LevelScript* machine : machines) machine->reachable_characters(out);
-    return out;
-}
-
-/// The first `t` in [0, 1] at which a sphere of `radius` from `from` to `to` touches a
-/// sphere of `other` at `centre`, or a value above 1.
-float sphere_sweep_t(const tl::core::Vec3& from, const tl::core::Vec3& to, float radius,
-                     const tl::core::Vec3& centre, float other) {
-    const tl::core::Vec3 d = to - from;
-    const tl::core::Vec3 f = from - centre;
-    const float reach = radius + other;
-    const float c = f.x * f.x + f.y * f.y + f.z * f.z - reach * reach;
-    if (c <= 0.0f) return 0.0f;
-    const float a = d.x * d.x + d.y * d.y + d.z * d.z;
-    if (!(a > 0.0f)) return 2.0f;
-    const float b = 2.0f * (f.x * d.x + f.y * d.y + f.z * d.z);
-    const float disc = b * b - 4.0f * a * c;
-    if (disc < 0.0f) return 2.0f;
-    const float t = (-b - std::sqrt(disc)) / (2.0f * a);
-    return t >= 0.0f ? t : 2.0f;
-}
-
-/// The first `t` in [0, 1] at which a sphere of `radius` from `from` to `to` touches the
-/// box `low`..`high` (grown by the radius, cut slab by slab), or a value above 1.
-float box_sweep_t(const tl::core::Vec3& from, const tl::core::Vec3& to, float radius,
-                  const tl::core::Vec3& low, const tl::core::Vec3& high) {
-    const float start[3] = {from.x, from.y, from.z};
-    const float delta[3] = {to.x - from.x, to.y - from.y, to.z - from.z};
-    const float lo[3] = {low.x - radius, low.y - radius, low.z - radius};
-    const float hi[3] = {high.x + radius, high.y + radius, high.z + radius};
-    float enter = 0.0f;
-    float leave = 1.0f;
-    for (int axis = 0; axis < 3; ++axis) {
-        if (std::fabs(delta[axis]) < 1e-8f) {
-            if (start[axis] < lo[axis] || hi[axis] < start[axis]) return 2.0f;
-            continue;
-        }
-        float a = (lo[axis] - start[axis]) / delta[axis];
-        float b = (hi[axis] - start[axis]) / delta[axis];
-        if (b < a) std::swap(a, b);
-        enter = std::max(enter, a);
-        leave = std::min(leave, b);
-        if (leave < enter) return 2.0f;
-    }
-    return enter;
-}
-
-/// `CLevel::findCharacterWithinView` as a missile asks it (`CMissile::getClosestTarget`):
-/// the nearest enemy of the player's in the cone.
-int64_t missile_closest(const std::vector<tl::core::LevelScript::Reachable>& candidates,
-                        const tl::core::Vec3& at, const tl::core::Vec3& forward, float angle,
-                        float sight) {
-    const float facing = std::atan2(forward.x, forward.z);
-    int64_t best = 0;
-    float best_d = 0.0f;
-    for (const auto& u : candidates) {
-        if (u.alignment != tl::core::UnitStats::Alignment::Hostile) continue;
-        if (u.mimic_idle) continue;  // `findCharacterWithinView` passes it over
-        if (!tl::core::can_see(at, facing, u.center, 0.0f, angle, sight)) continue;
-        const float dx = u.center.x - at.x;
-        const float dz = u.center.z - at.z;
-        const float d = std::sqrt(dx * dx + dz * dz);
-        if (best == 0 || d < best_d) {
-            best = u.id;
-            best_d = d;
-        }
-    }
-    return best;
-}
-
-bool missile_unit(const std::vector<tl::core::LevelScript::Reachable>& candidates, int64_t id,
-                  tl::core::Vec3& c, float& r, bool& alive) {
-    for (const auto& u : candidates) {
-        if (u.id != id) continue;
-        c = u.center;
-        r = u.radius;
-        alive = true;
-        return true;
-    }
-    return false;
-}
-
-template <typename ImplT>
-std::vector<tl::core::LevelScript::Reachable> gather_missile_candidates(const ImplT* impl,
-                                                                        bool level_placed) {
-    std::vector<tl::core::LevelScript::Reachable> pool = missile_candidates(impl->level_machines);
-    if (level_placed && !impl->player_health.dead && impl->subject_node != nullptr) {
-        const float body = impl->player_stats.radius > 0.0f ? impl->player_stats.radius
-                                                            : tl::core::kDefaultCollisionRadius;
-        const ogre::Vector3 feet = impl->view_position(impl->subject_node);
-        tl::core::LevelScript::Reachable you;
-        you.id = kMissilePlayer;
-        you.unit = "the player";
-        you.center = {feet.x, feet.y + body, feet.z};
-        you.radius = body;
-        you.alignment = tl::core::UnitStats::Alignment::Friendly;
-        pool.push_back(you);
-    }
-    return pool;
-}
-
-/// What a missile can meet, with the player (a level's or a unit's missile) and without: kept
-/// from one missile to the next, gathered again where a blow lands or a skill event runs.
-struct MissilePools {
-    std::vector<tl::core::LevelScript::Reachable> pools[2];
-    bool pooled[2] = {false, false};
-
-    template <typename ImplT>
-    std::vector<tl::core::LevelScript::Reachable>& take(const ImplT* impl, bool with_player) {
-        const int kind = with_player ? 1 : 0;
-        if (!pooled[kind]) {
-            pools[kind] = gather_missile_candidates(impl, with_player);
-            pooled[kind] = true;
-        }
-        return pools[kind];
-    }
-    /// The candidates gathered again for `with_player`; the other kind is gathered when next
-    /// taken.
-    template <typename ImplT>
-    std::vector<tl::core::LevelScript::Reachable> refresh(const ImplT* impl, bool with_player) {
-        pooled[with_player ? 0 : 1] = false;
-        return gather_missile_candidates(impl, with_player);
-    }
-    void forget() { pooled[0] = pooled[1] = false; }
-};
-
-template <typename ImplT, typename FlyingT>
-std::function<bool(int64_t, const tl::core::Vec3&, float, float)> make_missile_harm_hook(
-    ImplT* impl, const FlyingT& flying, std::vector<tl::core::LevelScript::Reachable>& candidates,
-    const ogre::Vector3& struck_at,
-    const std::function<std::vector<tl::core::LevelScript::Reachable>()>& gather) {
-    return [impl, &flying, &candidates, &struck_at, gather](
-               int64_t unit, const tl::core::Vec3& push, float damage_scale, float soak) {
-        const bool landed =
-            flying.level_placed || flying.detached
-                ? impl->level_missile_harm(flying.missile.spec, unit, struck_at, damage_scale, push)
-            : flying.by_weapon
-                ? (flying.source.caster_machine != nullptr
-                       ? impl->unit_weapon_missile_harm(flying.source.caster_machine,
-                                                        flying.source.caster_node, unit, struck_at,
-                                                        damage_scale, soak)
-                       : impl->weapon_missile_harm(unit, struck_at, damage_scale, soak))
-                : impl->missile_harm(
-                      flying.source, unit, soak, struck_at, damage_scale,
-                      std::atan2(flying.missile.forward.x, flying.missile.forward.z));
-        if (landed) candidates = gather();
-        return landed;
-    };
-}
-
-}  // namespace
 
 // PORT: the tables an item roll reads, gathered once.
 tl::core::ItemRollContext World::item_roll_context() {
@@ -209,6 +51,16 @@ tl::core::ItemRollContext World::item_roll_context() {
     // Filling a new item's sound bank draws on `g_Rand` (`init_item_copy`), device or not.
     ensure_sound_index();
     context.sounds = &sound_info;
+    // `CBaseUnit::unitInit` on an item: each `[SKILL]` made, its effects rolled.
+    context.make_skills = [this](const tl::core::ItemStats& item) {
+        if (item.skills.empty()) return;
+        const tl::core::SkillConstruction with = skill_construction();
+        for (const tl::core::ItemStats::Skill& given : item.skills) {
+            const auto skill = player_skill_files.find(tl::core::upper_ascii(given.name));
+            if (skill != player_skill_files.end())
+                tl::core::roll_skill_construction(skill->second->def, with);
+        }
+    };
     return context;
 }
 
@@ -614,6 +466,60 @@ bool World::player_performing_skill() {
         player_skill_runner.is_running(name));
 }
 
+// `CCharacter::interrupt(bool hit)` on the player.
+void World::interrupt_player(bool hit) {
+    // INVENTED: the player holds no AI flags here, so `CANNOT INTERRUPT` never stops it.
+    // State 0x10, an `Animation Controller` holding the player: nothing.
+    if (!scripted_player_animation.empty()) return;
+    bool has_hit = false;
+    for (const auto& entry : player_catalog) {
+        if (tl::core::upper_ascii(entry.first) == "HIT") has_hit = true;
+    }
+    // a skill is active and its animation up, or its swing not over.
+    const bool performing =
+        !player_active_skill.empty() &&
+        (player_active_skill.casting ||
+         (0.0f < player_active_skill.animation_left && !player_active_skill.attack_ended));
+    if (performing) {
+        // `+0x2cc`, the cast's `INTERRUPTABLE`.
+        const tl::core::KnownSkill* active = player_skill(player_active_skill.skill);
+        if (active == nullptr || active->def == nullptr || !active->def->base.interruptable) {
+            return;
+        }
+        if (!has_hit) {
+            // A random `IDLE` (its draws kept; the player's idle is its gait) and state 0.
+            hit = false;
+            (void)tl::core::model_find_random_animation(player_catalog, "IDLE");
+            skill_playback = SkillPlayback{};
+        }
+    }
+    if (hit && !has_hit) return;
+    if (player_death.dying || player_health.dead) return;
+    // The swing (`+0x2ac`) and the cast (`+0x2b4`, `+0x1ff`) dropped, every skill stopped.
+    swing = Swing{};
+    player_active_skill.animation_left = 0.0f;
+    player_active_skill.casting = false;
+    player_skill_runner.stop_all(
+        player_cast_context(),
+        [this](const std::string& n) -> const tl::core::KnownSkill* { return player_skill(n); },
+        /*force=*/false, /*passives=*/false);
+    if (hit) {
+        // A random `HIT` without a loop, `IDLE` (the gait) behind it; state 0x1d.
+        // INVENTED: the player has no AI state 0x1d here, so its input is not held meanwhile.
+        const int index = tl::core::model_find_random_animation(player_catalog, "HIT");
+        if (index >= 0 && static_cast<size_t>(index) < player_catalog.size()) {
+            tl::core::SkillAnimationCue cue;
+            cue.animation = index;
+            cue.speed = 1.0f;
+            cue.duration = player_catalog[static_cast<size_t>(index)].second;
+            play_skill_cue(cue);
+        }
+        TL_LOG_INFO("combat: the player is interrupted");
+    }
+    // The hands' weapon trails off.
+    player_hide_hand_trails();
+}
+
 void World::attempt_to_stop_player_skill(bool stop_path) {
     // `CPlayer::attemptToStopPlayerSkill(bool)`.
     if (player_active_skill.empty()) return;
@@ -932,20 +838,23 @@ const tl::formats::CmpScene* World::cached_layout(const std::string& reference) 
 
 // `CSkillEvent::applyEffects` and
 // `applyWeaponDamage`: `CLevel::rayCollision`
-// from master owner to target, both raised by 1, skipping
-// `objectRayCollision`: level geometry only.
+// from master owner to target, each `getPosition(true)` (the
+// body's centre) raised by 1, skipping `objectRayCollision`: level geometry only.
 bool World::skill_event_sight_blocked(const SkillEventSource& src, tl::core::LevelScript* machine,
                                       int64_t node) {
     if (!src.spec.damage_requires_los) return false;
-    tl::core::Vec3 from = player.position();
-    tl::core::Vec3 to = player.position();
-    if (src.caster_machine != nullptr &&
-        !src.caster_machine->unit_position(src.caster_node, from)) {
+    const float player_body =
+        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
+    const tl::core::Vec3 player_centre = {player.position().x, player.position().y + player_body,
+                                          player.position().z};
+    tl::core::Vec3 from = player_centre;
+    tl::core::Vec3 to = player_centre;
+    if (src.caster_machine != nullptr && !src.caster_machine->unit_centre(src.caster_node, from)) {
         return false;
     }
-    if (machine != nullptr && !machine->unit_position(node, to)) return false;
-    from = {from.x + 0.0f, from.y + 1.0f, from.z + 0.0f};
-    to = {to.x + 0.0f, to.y + 1.0f, to.z + 0.0f};
+    if (machine != nullptr && !machine->unit_centre(node, to)) return false;
+    from = {from.x, from.y + 1.0f, from.z};
+    to = {to.x, to.y + 1.0f, to.z};
     tl::core::CollisionHit hit;
     if (!collision.ray_collision(from, to, /*objects=*/false, hit)) return false;
     TL_LOG_INFO(
@@ -958,12 +867,46 @@ bool World::skill_event_sight_blocked(const SkillEventSource& src, tl::core::Lev
     return true;
 }
 
+// `CSkillEvent::applyWeaponDamage(null, item, 1, 1, false, false)`:
+// nothing with no character invoking (a prop's trap) or no `WEAPONDAMAGEPCT`; the
+// invoker's centre within 3 of the item's height; `DAMAGE_REQUIRES_LOS` with the level between
+// them (each raised by 1) is true with no blow. Then the item's `interact`, from the weapon in hand
+// or, with none, `performAttack` at the item set as target.
+// With `SINGLETARGET` an item passes only when the event has no original target.
+bool World::skill_event_item_blow(const SkillEventSource& src,
+                                  const tl::core::DamageShapeItem& item) {
+    if (src.prop_owner || src.spec.weapon_damage == 0.0f) return false;
+    if (src.single_target && src.has_original_target) return false;
+    tl::core::Vec3 from = player.position();
+    if (src.caster_machine == nullptr) {
+        from.y +=
+            player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
+    } else if (!src.caster_machine->unit_centre(src.caster_node, from)) {
+        return false;
+    }
+    if (std::fabs(from.y - item.at.y) > 3.0f) return false;
+    if (src.spec.damage_requires_los) {
+        tl::core::CollisionHit hit;
+        if (collision.ray_collision({from.x, from.y + 1.0f, from.z},
+                                    {item.at.x, item.at.y + 1.0f, item.at.z},
+                                    /*objects=*/false, hit)) {
+            return true;
+        }
+    }
+    queue_item_interact(item.id, /*by_player=*/src.caster_machine == nullptr);
+    return true;
+}
+
 bool World::skill_event_strike(const SkillEventSource& src, tl::core::LevelScript* machine,
                                int64_t node) {
     // `characterEffectedByDamageShape` and `startEvent`'s
     // `APPLYEFFECTS`: `applyEffects`, `applyWeaponDamage`,
     // `invokeHitSkills`.
     const bool applied = skill_event_effects_on(src, machine, node);
+    // A prop's trap: `applyWeaponDamage` does nothing with no character invoking.
+    // INVENTED: its hit skills, which the trap's own skill would fire, are not run
+    // (no shipped trap authors one).
+    if (src.prop_owner) return applied;
     skill_event_weapon_blow(src, machine, node, 1.0f, 1.0f);
     invoke_hit_skills(src, src.group, machine, node);
     return applied;
@@ -994,8 +937,8 @@ const tl::core::KnownSkill* World::add_executed_skill(const std::string& name, u
 
 bool World::player_skill_target_valid(const tl::core::KnownSkill& skill, const ViewUnit& unit) {
     // `CSkill::getTargetIsValid(candidate, owner, at, false)`,
-    // the player `GOOD` (1). `TARGET_UNITTYPE` and `TARGET_SPECIFIC_UNITS` pass:
-    // no player skill authors them (`LevelScript::unit_skill_target_valid`).
+    // the player `GOOD` (1); `TARGET_SPECIFIC_UNITS` read as
+    // `LevelScript::unit_skill_target_valid` reads it.
     tl::core::SkillTargetQuery query;
     const tl::core::SkillProperty* property = skill.property(skill.effective);
     query.has_property = property != nullptr;
@@ -1005,11 +948,27 @@ bool World::player_skill_target_valid(const tl::core::KnownSkill& skill, const V
     query.owner_alignment = 1;
     query.owner.alive = !player_health.dead;
     query.owner.is_owner = true;
+    // `TARGET_UNITTYPE` (property +0x74): `ISA`, an id of 0 for none. INVENTED: the player's
+    // own type is its class; `Player`, which every class ISAs.
+    const uint32_t want_type = property != nullptr && !property->target_unit_type.empty()
+                                   ? unit_types.id_of(property->target_unit_type)
+                                   : 0;
+    query.owner.unit_type_matches =
+        want_type == 0 || unit_types.isa(tl::core::unit_type::kPlayer, want_type);
+    // `+0x1b0` among `TARGET_SPECIFIC_UNITS`, when it lists any; no list names a class.
+    const bool listed = skill.def != nullptr && !skill.def->target_specific_units.empty();
+    query.owner.specific_unit = !listed;
     tl::core::SkillTargetFacts& t = query.candidate;
     if (unit.player) {
         t = query.owner;
     } else if (unit.machine != nullptr) {
         t.alive = !unit.machine->unit_is_dead(unit.node);
+        if (listed) {
+            const std::string wanted = tl::core::upper_ascii(unit.machine->unit_of(unit.node));
+            const std::vector<std::string>& names = skill.def->target_specific_units;
+            t.specific_unit = std::find(names.begin(), names.end(), wanted) != names.end();
+        }
+        t.unit_type_matches = want_type == 0 || unit.machine->character_isa(unit.node, want_type);
         // `+0x640`: the player's pet has the player for its master.
         t.master_is_owner = unit.machine->unit_is_player_pet(unit.node);
         t.enemy = unit.machine->unit_is_enemy_of(unit.node, nullptr, 0);
@@ -1215,47 +1174,120 @@ tl::core::SkillCastContext World::player_cast_context() {
     // (0x43) is `CCharacter::removePet(NAME)`.
     // INVENTED: other instant types apply nothing.
     context.instant_effect = [this](const tl::core::Effect& effect) {
-        if (effect.type >= 0 && effect.type == effect_types.index_of("DESUMMON MONSTER")) {
-            int removed = 0;
-            for (const MachineView& view : machines()) {
-                std::vector<tl::core::ScriptEvent> events;
-                removed +=
-                    view.script->desummon_player_pets(effect.name, quest_log.state(), events);
-                if (!events.empty()) apply_script_events(events, *view.nodes);
-            }
-            TL_LOG_INFO("skills: %d pet(s) called '%s' desummoned", removed, effect.name.c_str());
-            return;
-        }
-        if (effect.type == tl::core::kEffectTypeDamage) {
-            player_instant_damage(effect);
-            return;
-        }
-        // Case 0x71, `WARP`, the player's only:
-        // `CGameClient::warpLevels(NAME, 0, (int)value(), false, L"", false)`.
-        constexpr int kEffectTypeWarp = 0x71;
-        if (effect.type == kEffectTypeWarp) {
-            const float value = tl::core::effect_column_value(effect, 0, stat_graphs);
-            warp_by_effect(effect.name, static_cast<int32_t>(value));
-            return;
-        }
-        if (effect.type != tl::core::kEffectTypeOpenTownPortal &&
-            effect.type != tl::core::kEffectTypeOpenPortal) {
-            return;
-        }
-        load_unit_types();
-        const tl::core::ItemUseTarget target = player_use_target();
-        if (!tl::core::effect_valid_for_unit(target, nullptr, effect, 0.0f, unit_types)) return;
-        if (effect.type == tl::core::kEffectTypeOpenPortal) {
-            // Case 0x8d: `openMapPortal(NAME, level)` (vtable +0x1c4).
-            open_map_portal(effect.name);
-            return;
-        }
-        // Case 0x2d: `openPortal(level)` (vtable +0x1c0),
-        // then `incrementJournalStatistic(0xd, 1)`.
-        open_town_portal();
-        count_journal(tl::core::JournalStatistic::PortalsUsed);
+        player_instant_effect(effect);
     };
     return context;
+}
+
+void World::player_instant_effect(const tl::core::Effect& effect) {
+    if (effect.type >= 0 && effect.type == effect_types.index_of("DESUMMON MONSTER")) {
+        int removed = 0;
+        for (const MachineView& view : machines()) {
+            std::vector<tl::core::ScriptEvent> events;
+            removed += view.script->desummon_player_pets(effect.name, quest_log.state(), events);
+            if (!events.empty()) apply_script_events(events, *view.nodes);
+        }
+        TL_LOG_INFO("skills: %d pet(s) called '%s' desummoned", removed, effect.name.c_str());
+        return;
+    }
+    if (effect.type == tl::core::kEffectTypeDamage) {
+        player_instant_damage(effect);
+        return;
+    }
+    // Cases 7 HP RECHARGE and 0x7c HP RECHARGE PLAYER: a value of 0 or more is
+    // `modifyHP(value)`, held to `maxHP()`; at 0 health only a whole-`maxHP()` heal lands.
+    if (effect.type == tl::core::kEffectTypeHpRecharge ||
+        effect.type == tl::core::kEffectTypeHpRechargePlayer) {
+        const tl::core::EffectOwner source =
+            instant_caster_none ? tl::core::EffectOwner{} : skill_effects.owner;
+        const float value =
+            tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, stat_graphs,
+                                        source, &tl::core::volatile_random());
+        // Below 0 it goes on as case 0x34 `DAMAGE` does.
+        if (value < 0.0f) {
+            player_instant_damage(effect, &value);
+            return;
+        }
+        if (!(0.0f <= value) || player_health.dead || !(player_health.max > 0.0f)) return;
+        const float ceiling = static_cast<float>(static_cast<int>(player_health.max));
+        if (player_health.current <= 0.0f && 0.0f < value && value < ceiling) return;
+        player_health.current = std::min(ceiling, player_health.current + value);
+        return;
+    }
+    // Case 0x7f `STOP SKILL`: a `v(0, 100)` at or under the value
+    // stops every copy of `NAME`, `stopSkillsByName(NAME, true)`.
+    if (effect.type == tl::core::kEffectTypeStopSkill) {
+        const tl::core::EffectOwner source =
+            instant_caster_none ? tl::core::EffectOwner{} : skill_effects.owner;
+        const float value =
+            tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, stat_graphs,
+                                        source, &tl::core::volatile_random());
+        const int roll = tl::core::volatile_random().integer_between(0, 100);
+        if (value < static_cast<float>(roll)) return;
+        player_skill_runner.stop_by_name(effect.name, player_cast_context(),
+                                         [this](const std::string& n) { return player_skill(n); });
+        return;
+    }
+    // Cases 0x72..0x78 (the permanent attributes, `AWARD STATPOINT`) and 0x8f `RESPEC`,
+    // as an item's use applies them.
+    if ((tl::core::kEffectTypePermanentStrength <= effect.type &&
+         effect.type <= tl::core::kEffectTypeAwardStatpoint) ||
+        effect.type == tl::core::kEffectTypeRespec) {
+        const float value = tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll,
+                                                        stat_graphs, tl::core::EffectOwner{});
+        switch (effect.type) {
+            case tl::core::kEffectTypePermanentStrength:
+                player_character.add_permanent_attribute(tl::core::StatType::Strength, value);
+                break;
+            case tl::core::kEffectTypePermanentDexterity:
+                player_character.add_permanent_attribute(tl::core::StatType::Dexterity, value);
+                break;
+            case tl::core::kEffectTypePermanentMagic:
+                player_character.add_permanent_attribute(tl::core::StatType::Magic, value);
+                break;
+            case tl::core::kEffectTypePermanentDefense:
+                player_character.add_permanent_attribute(tl::core::StatType::Defense, value);
+                break;
+            case tl::core::kEffectTypePermanentHealth:
+                player_character.add_permanent_hp(value);
+                refresh_player_maxima();
+                break;
+            case tl::core::kEffectTypePermanentMana:
+                player_character.add_permanent_mp(value);
+                refresh_player_maxima();
+                break;
+            case tl::core::kEffectTypeAwardStatpoint:
+                player_character.award_stat_points(value);
+                break;
+            case tl::core::kEffectTypeRespec: respec_player(); break;
+            default: break;
+        }
+        return;
+    }
+    // Case 0x71, `WARP`, the player's only:
+    // `CGameClient::warpLevels(NAME, 0, (int)value(), false, L"", false)`.
+    constexpr int kEffectTypeWarp = 0x71;
+    if (effect.type == kEffectTypeWarp) {
+        const float value = tl::core::effect_column_value(effect, 0, stat_graphs);
+        warp_by_effect(effect.name, static_cast<int32_t>(value));
+        return;
+    }
+    if (effect.type != tl::core::kEffectTypeOpenTownPortal &&
+        effect.type != tl::core::kEffectTypeOpenPortal) {
+        return;
+    }
+    load_unit_types();
+    const tl::core::ItemUseTarget target = player_use_target();
+    if (!tl::core::effect_valid_for_unit(target, nullptr, effect, 0.0f, unit_types)) return;
+    if (effect.type == tl::core::kEffectTypeOpenPortal) {
+        // Case 0x8d: `openMapPortal(NAME, level)` (vtable +0x1c4).
+        open_map_portal(effect.name);
+        return;
+    }
+    // Case 0x2d: `openPortal(level)` (vtable +0x1c0),
+    // then `incrementJournalStatistic(0xd, 1)`.
+    open_town_portal();
+    count_journal(tl::core::JournalStatistic::PortalsUsed);
 }
 
 tl::core::ItemUseTarget World::player_use_target() {
@@ -1616,8 +1648,8 @@ void World::play_hit_particle(const tl::core::UnitStats& victim, const ogre::Vec
                               const ogre::Vector3& at, CharacterRef who) {
     const tl::core::ParticlePoint p = tl::core::blow_particle_position(
         {from.x, from.y, from.z}, {at.x, at.y, at.z}, victim.radius);
-    start_character_particle(victim, tl::core::hit_particle_slot(game_settings().show_blood),
-                             ogre::Vector3(p.x, p.y, p.z), who);
+    start_slot_particle(victim, tl::core::hit_particle_slot(game_settings().show_blood),
+                        ogre::Vector3(p.x, p.y, p.z), who);
 }
 
 // `CCharacter::playStrikeParticle`.
@@ -1626,16 +1658,58 @@ void World::play_strike_particle(const tl::core::UnitStats& attacker, const ogre
                                  CharacterRef who) {
     const tl::core::ParticlePoint p =
         tl::core::blow_particle_position({from.x, from.y, from.z}, {at.x, at.y, at.z}, radius);
-    start_character_particle(attacker, tl::core::strike_particle_slot(critical, blocked),
-                             ogre::Vector3(p.x, p.y, p.z), who);
+    start_slot_particle(attacker, tl::core::strike_particle_slot(critical, blocked),
+                        ogre::Vector3(p.x, p.y, p.z), who);
 }
 
 // `CCharacter::die`. INVENTED: the point
 // (`+0x210`, from the object at `+0x200`, unread); the unit's position stands in.
 void World::play_death_particle(const tl::core::UnitStats& unit, const ogre::Vector3& at,
                                 CharacterRef who) {
-    start_character_particle(unit, tl::core::death_particle_slot(game_settings().show_blood), at,
-                             who);
+    start_slot_particle(unit, tl::core::death_particle_slot(game_settings().show_blood), at, who);
+}
+
+void World::start_slot_particle(const tl::core::UnitStats& unit, int slot, const ogre::Vector3& at,
+                                CharacterRef who) {
+    if (slot < 0 || tl::core::character_particle::kCount <= slot) return;
+    const std::string name =
+        tl::core::character_particle_names(unit.particles)[static_cast<size_t>(slot)];
+    const std::string file = name.empty() ? std::string() : preloaded_particle_file(name);
+    if (!file.empty()) play_particle_sounds(file, at);
+    start_character_particle(unit, slot, at, who);
+}
+
+void World::play_particle_sounds(const std::string& file, const ogre::Vector3& at) {
+    const ParticleFileExtras* extras = particle_extras(file);
+    if (extras == nullptr) return;
+    // Each sound in its own slot of the bank, at its `VOLUME` (the definition's when 0):
+    // the chance, the instance among the recordings kept, and for a play heard at the
+    // listener the variation (`CSoundBank::playSample`). The bank's radius
+    // is 10 where the definition gives none.
+    tl::core::RunicRandom& rolls = tl::core::volatile_random();
+    for (const ParticleFileExtras::Sound& sound : extras->sounds) {
+        const SoundDefinition* named = sound_by_guid(sound.guid);
+        if (named == nullptr || named->files.empty()) continue;
+        if (named->play_chance >= 0 && named->play_chance <= rolls.integer_between(1, 100))
+            continue;
+        const std::vector<size_t> kept = tl::core::bank_recordings(*named);
+        if (kept.empty()) continue;
+        const std::string& recording = named->files[kept[static_cast<size_t>(
+            rolls.integer_between(0, static_cast<int>(kept.size()) - 1))]];
+        const float volume = sound.volume != 0.0f ? sound.volume : named->volume;
+        const float radius = named->radius != 0.0f ? named->radius : 10.0f;
+        const float heard =
+            volume * tl::core::configure_volume_scale(radius, sound_listener, {at.x, at.y, at.z});
+        const float variation = 0.0f < heard ? rolls.between(0.0f, named->volume_variation) : 0.0f;
+        play_recording(named->name, recording, variation, at);
+    }
+}
+
+void World::particle_link_started(const tl::core::ScriptEvent& event) {
+    const auto found = particle_link_files.find(event.node_id);
+    if (found == particle_link_files.end()) return;
+    play_particle_sounds(found->second,
+                         ogre::Vector3(event.position.x, event.position.y, event.position.z));
 }
 
 // PORT: a level character's key for its particle slots.
@@ -1676,11 +1750,13 @@ bool World::award_player_fame(int amount) {
 
 // `CCharacter::applyInstantEffect`, case
 // 0x34, with the player as the character struck.
-void World::player_instant_damage(const tl::core::Effect& effect) {
+void World::player_instant_damage(const tl::core::Effect& effect, const float* rolled) {
     if (player_health.dead) return;
     const float value =
-        tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, stat_graphs,
-                                    skill_effects.owner, &tl::core::volatile_random());
+        rolled != nullptr
+            ? *rolled
+            : tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, stat_graphs,
+                                          skill_effects.owner, &tl::core::volatile_random());
     const float v = 0.0f < value ? -value : value;
     if (!(v < 0.0f)) return;
     // The effect's owner: the unit whose skill event this is, or the player.
@@ -1704,7 +1780,8 @@ void World::player_instant_damage(const tl::core::Effect& effect) {
         TL_LOG_INFO("combat: player blocked '%s' from %s", effect.name.c_str(), from.c_str());
         return;
     }
-    // INVENTED: a critical's interrupt and the knock-back are not applied.
+    // A critical's interrupt. INVENTED: the knock-back is not applied.
+    if (hit.interrupts) interrupt_player(true);
     hurt_player(static_cast<float>(hit.damage), from,
                 by_unit ? instant_caster_node : tl::core::LevelScript::kNoAttacker,
                 /*struck=*/true);
@@ -1780,28 +1857,30 @@ void World::step_player_skill_turn(float dt) {
     }
 }
 
-void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level, int group,
-                              const tl::formats::AdmSection& event,
-                              const tl::core::SkillEventTarget& target) {
-    const tl::core::SkillEventSpec spec = tl::core::read_skill_event(event);
-    // The event's caster: the player, an `EXECUTE_SKILL`'s (`event_caster_override`), or a
-    // placed unit casting its own skill (`unit_event_caster`).
-    const bool unit_cast = unit_event_caster.machine != nullptr;
-    Ogre::SceneNode* const caster_node = unit_cast ? unit_event_caster.scene
-                                         : event_caster_override != nullptr ? event_caster_override
-                                                                            : subject_node;
-    if (caster_node == nullptr || skill.def == nullptr) return;
-    // The caster's body radius (`+0x194`).
-    const float caster_body = unit_cast                    ? unit_event_caster.radius
-                              : player_stats.radius > 0.0f ? player_stats.radius
-                                                           : tl::core::kDefaultCollisionRadius;
-    const float player_body =
-        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
-    std::string reference = spec.file;
-    for (char& c : reference) {
-        if (c == '\\') c = '/';
-    }
+bool World::place_skill_event_layout(const std::string& reference, const ogre::Vector3& origin,
+                                     const ogre::Quaternion& basis) {
+    const bool was_event = std::exchange(placing_skill_event_layout, true);
+    const bool placed = place_layout(reference, origin, basis, /*depth=*/1);
+    placing_skill_event_layout = was_event;
+    return placed;
+}
 
+// an `EVENT_START` (group 0) whose property has a `SLOWDOWNMS` slows the game,
+// `CGameSpeed::addSpeedModifier(seconds, 10.0f)`, type 0.
+void World::start_event_slowdown(const tl::core::SkillProperty* slowing) {
+    if (slowing == nullptr || !(slowing->slowdown > 0.0f)) return;
+    load_game_speed();
+    game_speed.add_modifier(static_cast<int32_t>(tl::core::GameSpeedType::Decelerate),
+                            slowing->slowdown, 10.0f);
+}
+
+// The event's fields from its skill and property, as `CSkillEvent::startEvent`
+// reads them; a `DURATIONOVERRIDEMS` hold is queued.
+World::SkillEventSource World::skill_event_source_of(const tl::core::KnownSkill& skill,
+                                                     uint32_t level, int group,
+                                                     const tl::formats::AdmSection& event,
+                                                     const tl::core::SkillEventTarget& target,
+                                                     const tl::core::SkillEventSpec& spec) {
     SkillEventSource source;
     source.skill = skill.entry.name;
     source.level = level;
@@ -1813,6 +1892,10 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
         property != nullptr && property->section != nullptr ? &property->event_section() : nullptr;
     source.duration_override = property != nullptr ? property->events_duration_override : 0.0f;
     source.target_type = property != nullptr ? property->target_type : skill.def->base.target_type;
+    source.target_unit_type =
+        property != nullptr ? property->target_unit_type : skill.def->base.target_unit_type;
+    source.single_target =
+        property != nullptr ? property->single_target : skill.def->base.single_target;
     // The blocks were made with the skill (`kSkillBlockTargetDefault`).
     source.unauthored = tl::core::kSkillBlockTargetDefault;
     source.target_alignment = skill.def->target_alignment;
@@ -1833,6 +1916,44 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
         hold.left = static_cast<float>(hold_ms) * 0.001f;  // `fmuls` by 0.001f
         skill_event_holds.push_back(hold);
     }
+    return source;
+}
+
+// `startEvent`'s first `applyEffects`: when the caster handed in is a character
+// (`+0x34`, whatever the target), on the skill's master owner, ending in its `updateEffects(0)`
+// - a status affix due lands now, before the layout. INVENTED: the owner's own
+// `applyAffixesAndEffects` half is not carried, nor a player owner's update.
+void World::caster_updates_at_event_start() {
+    if (unit_event_caster.machine == nullptr) return;
+    std::vector<tl::core::ScriptEvent> updated;
+    unit_update_effects(unit_event_caster.machine, unit_event_caster.node, 0.0f, updated);
+    if (NodeMap* nodes = nodes_of(unit_event_caster.machine);
+        nodes != nullptr && !updated.empty()) {
+        apply_script_events(updated, *nodes);
+    }
+}
+
+void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level, int group,
+                              const tl::formats::AdmSection& event,
+                              const tl::core::SkillEventTarget& target) {
+    const tl::core::SkillEventSpec spec = tl::core::read_skill_event(event);
+    // The event's caster: the player, an `EXECUTE_SKILL`'s (`event_caster_override`), or a
+    // placed unit casting its own skill (`unit_event_caster`).
+    const bool unit_cast = unit_event_caster.machine != nullptr;
+    Ogre::SceneNode* const caster_node = unit_cast ? unit_event_caster.scene
+                                         : event_caster_override != nullptr ? event_caster_override
+                                                                            : subject_node;
+    if (caster_node == nullptr || skill.def == nullptr) return;
+    // The caster's body radius (`+0x194`).
+    const float caster_body = unit_cast                    ? unit_event_caster.radius
+                              : player_stats.radius > 0.0f ? player_stats.radius
+                                                           : tl::core::kDefaultCollisionRadius;
+    const float player_body =
+        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
+    std::string reference = spec.file;
+    std::replace(reference.begin(), reference.end(), '\\', '/');
+
+    SkillEventSource source = skill_event_source_of(skill, level, group, event, target, spec);
 
     // `CSkillEvent::startEvent`, where the layout goes:
     // no target unit for target type 11 (`TARGET_POS`); the origin is `triggerEvent`'s.
@@ -1844,6 +1965,10 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
     if (target.yaw.has_value())
         facing = ogre::Quaternion(ogre::Radian(*target.yaw), ogre::Vector3::UNIT_Y);
     const bool has_unit = target.has_unit && source.target_type != 0xb;
+    source.has_original_target = has_unit;
+    source.original_machine = has_unit ? target.machine : nullptr;
+    source.original_node = has_unit ? target.unit : 0;
+    caster_updates_at_event_start();
     // A target item (a breakable) takes the unit's place: radius 0, centre at its node.
     const int item_index = !has_unit && target.item != 0 && source.target_type != 0xb
                                ? breakable_index(target.item)
@@ -1993,7 +2118,7 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
 
             const size_t before = nested_scripts.size();
             const size_t systems_before = view_particle_mark();
-            if (!place_layout(reference, at, facing, /*depth=*/1)) {
+            if (!place_skill_event_layout(reference, at, facing)) {
                 TL_LOG_WARN("skills: '%s' could not place '%s'", source.skill.c_str(),
                             reference.c_str());
                 return;
@@ -2076,13 +2201,13 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
             live_skill_events.push_back(live);
             // `startEvent` ends in `updateEvent`.
             update_skill_event_lines(live_skill_events.back());
-            // Casting the skill is the `Play` its `LAYOUT CONTROL` timelines wait for.
+            // Casting is the `Play` its timelines wait for (`startEvent` state 0).
             for (size_t i = before; i < nested_scripts.size(); ++i) {
                 NestedScript& machine = nested_scripts[i];
                 std::vector<tl::core::ScriptEvent> events;
                 machine.running = true;
                 machine.script.play_layout_timelines(quest_log.state(), events,
-                                                     /*backwards=*/false);
+                                                     /*backwards=*/false, /*restart=*/true);
                 if (!events.empty()) apply_script_events(events, machine.nodes);
             }
             TL_LOG_INFO("skills: '%s' places %s at (%.2f, %.2f, %.2f)%s", source.skill.c_str(),
@@ -2093,8 +2218,8 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
     // `APPLYEFFECTS` (+0x138) with a target: `applyEffects`, `applyWeaponDamage`,
     // `invokeHitSkills`; without, a unit group's event (4, 5, 6, 8) still lays its effects.
     // A breakable (`ISA(0x1d)`) is broken when `effectsTargetEnemy`
-    // answers (vtable +0x280). INVENTED: item target types 7 and 8 and the game-speed
-    // modifier (+0xa8) are not carried.
+    // answers (vtable +0x280). INVENTED: target types 7 and 8 (`ITEM`, `UNIDENTIFIED_ITEM`),
+    // `applyEffects` on a target that is neither, are not carried.
     auto* unit_machine = static_cast<tl::core::LevelScript*>(const_cast<void*>(target.machine));
     const bool unit_is_character =
         has_unit && (unit_machine == nullptr || !unit_machine->unit_of(target.unit).empty());
@@ -2121,6 +2246,7 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
             }
         }
     }
+    if (group == 0) start_event_slowdown(skill.property(level));
 
     // The executed skills' point: the point given, else the target's centre, else origin.
     tl::core::Vec3 point{at.x, at.y, at.z};
@@ -2149,6 +2275,125 @@ void World::start_skill_event(const tl::core::KnownSkill& skill, uint32_t level,
                          point);
 }
 
+namespace {
+
+// The dead only for a corpse shape or `TARGET_CORPSES`; else the living. Alive is
+// `(int)CCharacter::HP() > 0`, `HP` the floor: so 0 < HP < 1 is a corpse.
+bool life_as_asked(bool corpses, float hp) {
+    const bool alive = std::floor(hp) >= 1.0f;
+    return corpses ? !alive : alive;
+}
+
+}  // namespace
+
+bool World::skill_event_who(const tl::core::DamageShapeUnit& who, SkillEventWho& out) {
+    if (who.machine == nullptr) {
+        const float body =
+            player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
+        out.centre_y = player.position().y + body;
+        out.hp = player_health.dead ? 0.0f : player_health.current;
+        out.side = tl::core::UnitStats::Alignment::Friendly;
+        return true;
+    }
+    const auto* machine = static_cast<const tl::core::LevelScript*>(who.machine);
+    tl::core::Vec3 centre;
+    float max = 0.0f;
+    if (!machine->unit_centre(who.node, centre) || !machine->unit_health(who.node, out.hp, max)) {
+        return false;
+    }
+    out.centre_y = centre.y;
+    out.unit = machine->unit_of(who.node);
+    out.side = machine->unit_side(who.node).value_or(tl::core::UnitStats::Alignment::Neutral);
+    out.pet = machine->unit_is_player_pet(who.node);
+    return true;
+}
+
+std::vector<std::string> World::skill_event_specific_units(const tl::formats::AdmSection* event) {
+    // `TARGET_SPECIFIC_UNITS` (+0xd8): `UNIT_GUID`s in the original, unit names here.
+    std::vector<std::string> specific;
+    if (event == nullptr) return specific;
+    for (const tl::formats::AdmSection& part : event->children) {
+        if (tl::core::upper_ascii(part.name) != "TARGET_SPECIFIC_UNITS") continue;
+        for (const tl::formats::AdmRecord& record : part.records) {
+            if (tl::core::upper_ascii(record.key) == "UNIT") {
+                specific.push_back(tl::core::upper_ascii(record.text));
+            }
+        }
+    }
+    return specific;
+}
+
+bool World::skill_event_can_affect(const SkillEventSource& src,
+                                   const std::vector<std::string>& specific,
+                                   const tl::core::DamageShapeUnit& who, bool corpses,
+                                   bool by_shape, const float* shape_y, bool turned_back) {
+    // `CSkillEvent::getCharacterCanBeAffectedByDamageShape`,
+    // with the player as the skill's master owner.
+    SkillEventWho w;
+    if (!skill_event_who(who, w)) return false;
+    if (!life_as_asked(corpses || src.spec.target_corpses, w.hp)) return false;
+    // `SINGLETARGET`: only the event's original target, or any for a
+    // turned-back missile (`CMissile +0x28c`).
+    const bool original = src.has_original_target && who.machine == src.original_machine &&
+                          (who.machine == nullptr || who.node == src.original_node);
+    if (src.single_target && !original && !turned_back) return false;
+    // An owner that is not a character (the skill manager's unit, `+0x150` clear) passes
+    // every living character here.
+    if (src.prop_owner) return true;
+    // `canEffectPosObject`, for a shape only.
+    if (by_shape && (shape_y == nullptr || std::fabs(*shape_y - w.centre_y) > 3.0f)) {
+        return false;
+    }
+    // `TARGET_UNITTYPE`: an id of 0 passes everyone.
+    const uint32_t want = src.target_unit_type.empty() ? 0 : unit_types.id_of(src.target_unit_type);
+    if (want != 0) {
+        // INVENTED: the player's own type is its class; `Player`, which every class ISAs.
+        const bool isa = who.machine == nullptr
+                             ? unit_types.isa(tl::core::unit_type::kPlayer, want)
+                             : static_cast<tl::core::LevelScript*>(const_cast<void*>(who.machine))
+                                   ->character_isa(who.node, want);
+        if (!isa) return false;
+    }
+    if (!specific.empty() && std::find(specific.begin(), specific.end(),
+                                       tl::core::upper_ascii(w.unit)) == specific.end()) {
+        return false;
+    }
+    if (src.target_type == 4) return true;  // `EVERYBODY`
+    // `SELFANDPETS` (10): the owner, a pet of it (`+0x5a4` the owner) or its master; `PETS`
+    // (9): a pet of it.
+    const bool by_unit = src.caster_machine != nullptr;
+    auto* const who_machine = static_cast<tl::core::LevelScript*>(const_cast<void*>(who.machine));
+    bool self = who.machine == nullptr;
+    bool pet = w.pet;
+    bool owners_master = false;  // the player has no master
+    if (by_unit) {
+        tl::core::LevelScript* m = nullptr;
+        int64_t n = 0;
+        self = who_machine == src.caster_machine && who.node == src.caster_node;
+        pet = who_machine != nullptr && who_machine->unit_master(who.node, m, n) &&
+              m == src.caster_machine && n == src.caster_node;
+        owners_master = who_machine == nullptr
+                            ? src.caster_machine->unit_is_player_pet(src.caster_node)
+                            : src.caster_machine->unit_master(src.caster_node, m, n) &&
+                                  m == who_machine && n == who.node;
+    }
+    if (src.target_type == 10 && !self && !pet && !owners_master) return false;
+    if (src.target_type == 9 && !pet) return false;
+    // `CCharacter::isEnemy` from the owner's side; then a
+    // berserk owner or one of side 4 passes everyone.
+    // INVENTED: the player's AI flag 1 is never set, its side never 4.
+    const bool enemy =
+        by_unit ? src.caster_machine->unit_is_enemy_of(
+                      src.caster_node,
+                      static_cast<tl::core::LevelScript*>(const_cast<void*>(who.machine)), who.node)
+                : w.side == tl::core::UnitStats::Alignment::Hostile;
+    if (by_unit && src.caster_machine->unit_affects_anyone(src.caster_node)) return true;
+    if (src.target_alignment == 2 && enemy) return true;
+    if (src.target_alignment == 1 && !enemy) return true;
+    // A turned-back missile harms anyone left.
+    return turned_back;
+}
+
 void World::hang_player_skill_event(const SkillEventSource& source, size_t first) {
     if (first >= nested_scripts.size()) return;
     // The shapes this event's layout placed, by machine and node.
@@ -2160,16 +2405,7 @@ void World::hang_player_skill_event(const SkillEventSource& source, size_t first
     }
     if (shapes.empty()) return;
 
-    // `TARGET_SPECIFIC_UNITS` (+0xd8): `UNIT_GUID`s in the original, unit names here.
-    std::vector<std::string> specific;
-    for (const tl::formats::AdmSection& part : source.event->children) {
-        if (tl::core::upper_ascii(part.name) != "TARGET_SPECIFIC_UNITS") continue;
-        for (const tl::formats::AdmRecord& record : part.records) {
-            if (tl::core::upper_ascii(record.key) == "UNIT") {
-                specific.push_back(tl::core::upper_ascii(record.text));
-            }
-        }
-    }
+    const std::vector<std::string> specific = skill_event_specific_units(source.event);
 
     // The shape's position for `canEffectPosObject`:
     // within 3.0 of the unit's centre in height.
@@ -2183,85 +2419,20 @@ void World::hang_player_skill_event(const SkillEventSource& source, size_t first
         }
         return false;
     };
-    // The character's centre, HP and side; false for an unrun unit; null machine: player.
-    struct Who {
-        float centre_y = 0.0f;
-        float hp = 0.0f;
-        tl::core::UnitStats::Alignment side = tl::core::UnitStats::Alignment::Neutral;
-        std::string unit;
-        bool pet = false;
-    };
-    const auto describe = [this](const tl::core::DamageShapeUnit& who, Who& out) {
-        if (who.machine == nullptr) {
-            const float body = player_stats.radius > 0.0f ? player_stats.radius
-                                                          : tl::core::kDefaultCollisionRadius;
-            out.centre_y = player.position().y + body;
-            out.hp = player_health.dead ? 0.0f : player_health.current;
-            out.side = tl::core::UnitStats::Alignment::Friendly;
-            return true;
-        }
-        const auto* machine = static_cast<const tl::core::LevelScript*>(who.machine);
-        tl::core::Vec3 feet;
-        float max = 0.0f;
-        if (!machine->unit_position(who.node, feet) ||
-            !machine->unit_health(who.node, out.hp, max)) {
-            return false;
-        }
-        out.centre_y = feet.y + machine->unit_radius(who.node);
-        out.unit = machine->unit_of(who.node);
-        out.side = machine->unit_side(who.node).value_or(tl::core::UnitStats::Alignment::Neutral);
-        out.pet = machine->unit_is_player_pet(who.node);
-        return true;
-    };
-
     auto listener = std::make_unique<SkillEventListener>();
     const SkillEventSource src = source;
-    // `CSkillEvent::getCharacterCanBeAffectedByDamageShape`,
-    // with the player as the skill's master owner.
-    listener->can = [src, specific, shape_height, describe](const tl::core::DamageShape& shape,
-                                                            const tl::core::DamageShapeUnit& who) {
-        Who w;
-        if (!describe(who, w)) return false;
-        // The dead only for a corpse shape or `TARGET_CORPSES`; else the living.
-        if (!shape.target_corpse && !src.spec.target_corpses) {
-            if (w.hp < 1.0f) return false;
-        } else if (0.0f < w.hp) {
-            return false;
-        }
-        // INVENTED: `SINGLETARGET` (+0xb4) and `TARGET_UNITTYPE` (+0x74) are not read.
+    listener->can = [this, src, specific, shape_height](const tl::core::DamageShape& shape,
+                                                        const tl::core::DamageShapeUnit& who) {
         float shape_y = 0.0f;
-        if (!shape_height(shape, shape_y) || !(std::fabs(shape_y - w.centre_y) <= 3.0f))
-            return false;
-        if (!specific.empty() && std::find(specific.begin(), specific.end(),
-                                           tl::core::upper_ascii(w.unit)) == specific.end()) {
-            return false;
-        }
-        if (src.target_type == 4) return true;  // `EVERYBODY`
-        // `SELFANDPETS` (10) and `PETS` (9). INVENTED: a placed unit's pets are unknown, so
-        // only the owner counts for one.
-        const bool by_unit = src.caster_machine != nullptr;
-        const bool self = by_unit ? who.machine == src.caster_machine && who.node == src.caster_node
-                                  : who.machine == nullptr;
-        const bool pet = by_unit ? false : w.pet;
-        if (src.target_type == 10 && !self && !pet) return false;
-        if (src.target_type == 9 && !pet) return false;
-        // `CCharacter::isEnemy` from the owner's side.
-        // INVENTED: the player's AI flag 1 is never set, its side never 4.
-        const bool enemy =
-            by_unit
-                ? src.caster_machine->unit_is_enemy_of(
-                      src.caster_node,
-                      static_cast<tl::core::LevelScript*>(const_cast<void*>(who.machine)), who.node)
-                : w.side == tl::core::UnitStats::Alignment::Hostile;
-        if (src.target_alignment == 2) return enemy;
-        if (src.target_alignment == 1) return !enemy;
-        return false;
+        const bool known = shape_height(shape, shape_y);
+        return skill_event_can_affect(src, specific, who, shape.target_corpse, true,
+                                      known ? &shape_y : nullptr, false);
     };
     // `CSkillEvent::characterEffectedByDamageShape`.
-    listener->act = [this, src, shape_height, describe](const tl::core::DamageShape& shape,
-                                                        const tl::core::DamageShapeUnit& who) {
-        Who w;
-        if (!describe(who, w)) return false;
+    listener->act = [this, src, shape_height](const tl::core::DamageShape& shape,
+                                              const tl::core::DamageShapeUnit& who) {
+        SkillEventWho w;
+        if (!skill_event_who(who, w)) return false;
         float shape_y = 0.0f;
         if (!shape_height(shape, shape_y) || !(std::fabs(shape_y - w.centre_y) <= 3.0f))
             return false;
@@ -2270,19 +2441,14 @@ void World::hang_player_skill_event(const SkillEventSource& source, size_t first
         return skill_event_strike(src, machine, who.node);
     };
     // `CSkillEvent::itemEffectedByDamageShape`: within 3
-    // of the item's height, then `applyWeaponDamage(null, item, ...)`,
-    // true also when `isDamaging`.
-    // INVENTED: `SINGLETARGET`, the owner's height test and `+0x14a` sight ray are not run.
+    // of the item's height (`canEffectPosObject`), then `applyWeaponDamage(null,
+    // item, 1, 1)`, true also when `isDamaging`.
+    //
     listener->item = [this, src, shape_height](const tl::core::DamageShape& shape,
                                                const tl::core::DamageShapeItem& item) {
         float shape_y = 0.0f;
-        if (!shape_height(shape, shape_y) || !(std::fabs(shape_y - item.at.y) <= 3.0f))
-            return false;
-        bool acted = false;
-        if (src.spec.weapon_damage != 0.0f) {
-            queue_item_interact(item.id, /*by_player=*/src.caster_machine == nullptr);
-            acted = true;
-        }
+        if (!shape_height(shape, shape_y) || std::fabs(shape_y - item.at.y) > 3.0f) return false;
+        bool acted = skill_event_item_blow(src, item);
         if (src.event != nullptr) {
             tl::core::SkillCastContext context;
             context.types = &effect_types;
@@ -2302,119 +2468,6 @@ void World::hang_player_skill_event(const SkillEventSource& source, size_t first
         entry.first->damage_shape_add_listener(entry.second, listener.get());
     }
     skill_event_listeners.push_back(std::move(listener));
-}
-
-bool World::skill_event_effects_on(const SkillEventSource& src, tl::core::LevelScript* machine,
-                                   int64_t node) {
-    if (src.event == nullptr) return false;
-    // Out of sight: nothing is applied, and the call still answers true.
-    if (skill_event_sight_blocked(src, machine, node)) return true;
-    if (machine == nullptr) {
-        // `applyEffects` on the player: its own manager.
-        tl::core::SkillCastContext context = player_cast_context();
-        if (src.caster_machine != nullptr) {
-            // A placed unit's event: the player is its target, not its caster.
-            context.target_is_caster = false;
-            context.target_is_enemy =
-                src.caster_machine->unit_is_enemy_of(src.caster_node, nullptr, 0);
-            context.target_is_casters_pet = false;
-        }
-        // `addListenerToUnit` from `applyAffixesAndEffects`: the skill watches the player.
-        context.observe_target = [this, &src](const std::string& skill) {
-            unit_observers.add({nullptr, 0}, skill_observer_for(src.caster_machine, src.caster_node,
-                                                                skill, src.run));
-        };
-        // `setOwner(effect, caster)`: the event's caster owns what lands.
-        context.source = tl::core::EffectSource{
-            true, src.caster_machine, src.caster_machine != nullptr ? src.caster_node : 0};
-        context.owner_level = event_caster_level(src.caster_machine, src.caster_node);
-        tl::core::LevelScript* const saved_machine = instant_caster_machine;
-        const int64_t saved_node = instant_caster_node;
-        instant_caster_machine = src.caster_machine;
-        instant_caster_node = src.caster_node;
-        const bool on_player = tl::core::apply_event_effects(
-            *src.event, context, src.skill, src.property, src.unauthored, src.duration_override);
-        instant_caster_machine = saved_machine;
-        instant_caster_node = saved_node;
-        return on_player;
-    }
-    // `applyEffects` on a placed character, through its
-    // `applyEffectOnUnit` (`unit_effect_on_unit`).
-    const tl::core::UnitStats::Alignment side =
-        machine->unit_side(node).value_or(tl::core::UnitStats::Alignment::Neutral);
-    tl::core::EffectManager* manager = unit_effect_manager(machine, node);
-    if (manager == nullptr) return false;
-    tl::core::SkillCastContext context;
-    context.target = manager;
-    context.types = &effect_types;
-    context.unit_types = &unit_types;
-    context.affix = [this](const std::string& name) -> const tl::core::Affix* {
-        return affixes.get_affix(name);
-    };
-    context.target_is_caster = false;
-    context.target_is_enemy = side == tl::core::UnitStats::Alignment::Hostile;
-    context.target_is_casters_pet = machine->unit_is_player_pet(node);
-    // `addListenerToUnit` from `applyAffixesAndEffects`: the skill watches the unit.
-    context.observe_target = [this, &src, machine, node](const std::string& skill) {
-        unit_observers.add({machine, node},
-                           skill_observer_for(src.caster_machine, src.caster_node, skill, src.run));
-    };
-    // `setOwner(effect, caster)`: the event's caster owns what lands.
-    context.source = tl::core::EffectSource{true, src.caster_machine,
-                                            src.caster_machine != nullptr ? src.caster_node : 0};
-    context.owner_level = event_caster_level(src.caster_machine, src.caster_node);
-    if (src.caster_machine != nullptr) {
-        // From the caster's side (`CCharacter::isEnemy`).
-        // INVENTED: a placed unit's own pets are not known.
-        context.target_is_caster = machine == src.caster_machine && node == src.caster_node;
-        context.target_is_enemy = !context.target_is_caster && src.caster_machine->unit_is_enemy_of(
-                                                                   src.caster_node, machine, node);
-        context.target_is_casters_pet = false;
-    }
-    tl::core::LevelScript* const saved_machine = instant_caster_machine;
-    const int64_t saved_node = instant_caster_node;
-    instant_caster_machine = src.caster_machine;
-    instant_caster_node = src.caster_node;
-    // The direction `applyEffects` hands on. INVENTED:
-    // caster to target; the original's is from the event's object (`startEvent`),
-    // a shape's (`characterEffectedByDamageShape`)
-    // or the missile's (`missileApplyingEffects`).
-    const bool saved_set = effect_direction_set;
-    const std::array<float, 3> saved_direction = effect_direction;
-    {
-        tl::core::Vec3 from;
-        tl::core::Vec3 to;
-        bool known = machine->unit_position(node, to);
-        if (src.caster_machine != nullptr) {
-            known = known && src.caster_machine->unit_position(src.caster_node, from);
-        } else {
-            from = player.position();
-        }
-        const float dx = to.x - from.x;
-        const float dy = to.y - from.y;
-        const float dz = to.z - from.z;
-        const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
-        effect_direction_set = known && 1e-08f < length;
-        if (effect_direction_set) effect_direction = {dx / length, dy / length, dz / length};
-    }
-    // `alive()`: a body with hit points after gets up (`HP()`,
-    // `setAIState(2)`).
-    const bool was_alive = !machine->unit_is_dead(node);
-    const bool applied = tl::core::apply_event_effects(*src.event, context, src.skill, src.property,
-                                                       src.unauthored, src.duration_override);
-    effect_direction_set = saved_set;
-    effect_direction = saved_direction;
-    instant_caster_machine = saved_machine;
-    instant_caster_node = saved_node;
-    std::vector<tl::core::ScriptEvent> events;
-    if (machine->unit_gets_up(node, was_alive, quest_log.state(), events)) {
-        TL_LOG_INFO("skill event: %s gets up (%s)", machine->unit_of(node).c_str(),
-                    src.skill.c_str());
-    }
-    if (NodeMap* nodes = nodes_of(machine); nodes != nullptr && !events.empty()) {
-        apply_script_events(events, *nodes);
-    }
-    return applied;
 }
 
 bool World::find_character_within_view(const tl::core::Vec3& at, const ogre::Quaternion& facing,
@@ -2444,9 +2497,9 @@ bool World::find_character_within_view(const tl::core::Vec3& at, const ogre::Qua
             if (angle < off && (angle <= 0.0f || 2.0f <= distance || 30.0f <= off)) return false;
             if (range < distance) return false;
         }
-        tl::core::CollisionHit hit;
+        tl::core::CollisionHit hit;  // the objects tested too (`li r10, 0`)
         if (collision.ray_collision({at.x, at.y + 5.0f, at.z},
-                                    {centre.x, centre.y + 5.0f, centre.z}, false, hit)) {
+                                    {centre.x, centre.y + 5.0f, centre.z}, /*objects=*/true, hit)) {
             return false;
         }
         if (!nearest) {
@@ -2490,7 +2543,8 @@ bool World::find_character_within_view(const tl::core::Vec3& at, const ogre::Qua
 void World::find_player_skill_target(const tl::core::KnownSkill& skill) {
     // `CCharacter::castSkill`: no target, no
     // target item, and a `FINDTARGETANGLE` above 0.
-    if (player_target_node != 0 || player_skill_item != 0) return;
+    // The cone is the pad's; under the mouse the pointer names the target.
+    if (tl::core::mouse_controls() || player_target_node != 0 || player_skill_item != 0) return;
     if (subject_node == nullptr) return;
     const tl::core::SkillProperty* property = skill.property(skill.effective);
     const float angle = property != nullptr ? property->find_target_angle : 0.0f;
@@ -2737,825 +2791,6 @@ void WorldState::SkillObserver::unit_state_change(const void* machine, int64_t u
         *this, static_cast<tl::core::LevelScript*>(const_cast<void*>(machine)), unit, state);
 }
 
-// `CMissile::doDamageToCharacter` with no listeners:
-// `DAMAGE_MONSTER` (`CResourceManager::getGraphDamage`) at
-// the victim's level x `randomBetweenVolatile(+0x284, +0x288)` x 1.0, no attacker.
-bool World::level_missile_harm(const tl::core::MissileSpec& spec, int64_t unit,
-                               const ogre::Vector3& at, float damage_scale,
-                               const tl::core::Vec3& push) {
-    const bool you = unit == kMissilePlayer;
-    tl::core::LevelScript* owner = nullptr;
-    std::string victim = "the player";
-    int level = static_cast<int>(player_character.level());
-    if (!you) {
-        owner = script_owning(unit);
-        if (owner == nullptr || owner->unit_is_dead(unit)) return false;
-        std::vector<tl::core::LevelScript::Reachable> found;
-        owner->reachable_characters(found);
-        const auto it = std::find_if(found.begin(), found.end(),
-                                     [unit](const auto& r) { return r.id == unit; });
-        if (it == found.end()) return false;
-        victim = it->unit;
-        level = effective_monster_level(unit);
-    } else if (player_health.dead) {
-        return false;
-    }
-    const std::string curve =
-        std::string(tl::core::kMonsterDamageGraph) + tl::core::difficulty_suffix(config.difficulty);
-    const float graph = stat_graphs.value(curve, static_cast<float>(level), 0.0f);
-    const float roll =
-        tl::core::volatile_random().between(spec.min_damage_percent, spec.max_damage_percent);
-    // `doDamageToCharacter` hands its scale only to the
-    // listeners.
-    (void)damage_scale;
-    const float amount = graph * roll * 1.0f;
-    if (you) {
-        hurt_player(amount, spec.name, tl::core::LevelScript::kNoAttacker, /*struck=*/true);
-    } else {
-        // The direction the missile hands on, and its `FORCE` (+0x28c).
-        tl::core::KillingBlow blow;
-        blow.has_direction = true;
-        blow.direction = push;
-        blow.force = spec.knockback;
-        hurt_unit(unit, victim, amount, false, 0, owner, &blow, /*struck=*/true);
-    }
-    TL_LOG_INFO(
-        "missile: the level's %s strikes %s at (%.2f, %.2f, %.2f) for %.1f (graph %.1f x %.2f)",
-        spec.name.c_str(), victim.c_str(), static_cast<double>(at.x), static_cast<double>(at.y),
-        static_cast<double>(at.z), static_cast<double>(amount), static_cast<double>(graph),
-        static_cast<double>(roll));
-    return true;
-}
-
-bool World::skill_event_reaches_height(const ogre::Vector3& at, tl::core::LevelScript* machine,
-                                       int64_t node) {
-    // CSkillEvent::canEffectPosObject: the body's centre.
-    float centre = 0.0f;
-    if (machine == nullptr) {
-        const float body =
-            player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
-        centre = player.position().y + body;
-    } else {
-        tl::core::Vec3 feet;
-        if (!machine->unit_position(node, feet)) return false;
-        centre = feet.y + machine->unit_radius(node);
-    }
-    return std::fabs(at.y - centre) <= 3.0f;
-}
-
-void World::fire_missile_hit_event(const SkillEventSource& source, tl::core::LevelScript* machine,
-                                   int64_t node, const ogre::Vector3& at, float yaw) {
-    // `missileApplyingEffects`: not for a turned-back missile (`+0x294`, never
-    // set here) or an `EVENT_MISSILEHIT` event.
-    constexpr int kMissileHit = 6;
-    if (source.group == kMissileHit) return;
-    // Whether the skill authors the group at all, for the log.
-    const auto authors_it = [&source](const tl::core::KnownSkill& skill) {
-        const tl::core::SkillProperty* property = skill.property(source.level);
-        if (property == nullptr || property->section == nullptr) return false;
-        for (const tl::formats::AdmSection& child : property->event_section().children) {
-            if (tl::core::upper_ascii(child.name) == "EVENT_MISSILEHIT") return true;
-        }
-        return false;
-    };
-    tl::core::SkillEventTarget target;
-    target.run = source.run;
-    target.origin = tl::core::Vec3{at.x, at.y, at.z};
-    target.yaw = yaw;
-    target.has_unit = true;
-    target.unit = machine != nullptr ? node : 0;
-    target.machine = machine;
-    if (source.caster_machine == nullptr) {
-        const tl::core::KnownSkill* skill = player_skill(source.skill);
-        if (skill == nullptr) return;
-        tl::core::SkillCastContext context = player_cast_context();
-        context.event_target = target;
-        tl::core::SkillRunner& runner = skill_runner_running(skill->entry.name);
-        const bool running = runner.is_running(skill->entry.name);
-        runner.trigger_skill_event(*skill, kMissileHit, context);
-        if (authors_it(*skill)) {
-            TL_LOG_INFO("missile: '%s' EVENT_MISSILEHIT%s", source.skill.c_str(),
-                        running ? "" : " (the skill is not running: nothing)");
-        }
-        return;
-    }
-    tl::core::LevelScript& owner = *source.caster_machine;
-    tl::core::LevelScript::UnitCasting* casting = owner.unit_casting(source.caster_node);
-    const tl::core::KnownSkill* skill = unit_skill_named(owner, source.caster_node, source.skill);
-    if (casting == nullptr || skill == nullptr) return;
-    // The hit can come mid-cast of another unit (`unit_cast_caster`): put back after.
-    const tl::core::SkillCaster outer_caster = unit_cast_caster;
-    tl::core::SkillCastContext context =
-        unit_cast_context(owner, source.caster_node, machine, node, true);
-    context.event_target = target;
-    const UnitEventCaster saved = unit_event_caster;
-    unit_event_caster = unit_event_caster_for(&owner, source.caster_node);
-    const bool running = casting->runner.is_running(skill->entry.name);
-    casting->runner.trigger_skill_event(*skill, kMissileHit, context);
-    unit_event_caster = saved;
-    unit_cast_caster = outer_caster;
-    if (authors_it(*skill)) {
-        TL_LOG_INFO("missile: %s's '%s' EVENT_MISSILEHIT%s",
-                    owner.unit_of(source.caster_node).c_str(), source.skill.c_str(),
-                    running ? "" : " (the skill is not running: nothing)");
-    }
-}
-
-bool World::missile_harm(const SkillEventSource& source, int64_t unit, float soak_scale,
-                         const ogre::Vector3& at, float damage_scale, float yaw) {
-    if (source.caster_machine != nullptr) {
-        // A placed unit's missile: `CSkillEvent::getCharacterCanBeHarmedByMissile`
-        // from its owner's side (`MISSILE_TARGET_SELF`, `TARGET_CORPSES`,
-        // `EVERYBODY`, else `CCharacter::isEnemy` against `TARGET_ALIGNMENT`). INVENTED: as in
-        // the player's half, `SINGLETARGET` and the rest are not read.
-        const bool you = unit == kMissilePlayer;
-        tl::core::LevelScript* machine = you ? nullptr : script_owning(unit);
-        const int64_t node = you ? 0 : unit;
-        if (!you && machine == nullptr) return false;
-        const bool self = !you && machine == source.caster_machine && unit == source.caster_node;
-        const bool dead = you ? player_health.dead : machine->unit_is_dead(unit);
-        const bool target_self =
-            source.event != nullptr && source.event->bool_or("MISSILE_TARGET_SELF", false);
-        if (!(target_self && self)) {
-            if (source.spec.target_corpses ? !dead : dead) return false;
-            if (source.target_type != 4) {
-                const bool enemy = !self && source.caster_machine->unit_is_enemy_of(
-                                                source.caster_node, machine, node);
-                if (source.target_alignment == 2   ? !enemy
-                    : source.target_alignment == 1 ? enemy
-                                                   : true) {
-                    return false;
-                }
-            }
-        }
-        const std::string victim = you ? std::string("the player") : machine->unit_of(unit);
-        // `missileApplyingEffects`: `canEffectPosObject`,
-        // `EVENT_MISSILEHIT`, `applyWeaponDamage`, `applyEffects`,
-        // `invokeHitSkills`.
-        if (!skill_event_reaches_height(at, machine, node)) return true;
-        fire_missile_hit_event(source, machine, node, at, yaw);
-        const float weapon_part =
-            skill_event_weapon_blow(source, machine, node, damage_scale, soak_scale);
-        const bool applied = skill_event_effects_on(source, machine, node);
-        invoke_hit_skills(source, source.group, machine, node);
-        TL_LOG_INFO("missile: %s's '%s' strikes %s at (%.2f, %.2f, %.2f): weapon %.1f%s",
-                    source.caster_machine->unit_of(source.caster_node).c_str(),
-                    source.skill.c_str(), victim.c_str(), static_cast<double>(at.x),
-                    static_cast<double>(at.y), static_cast<double>(at.z),
-                    static_cast<double>(weapon_part), applied ? ", effects applied" : "");
-        return true;
-    }
-    tl::core::LevelScript* owner = script_owning(unit);
-    if (owner == nullptr || owner->unit_is_dead(unit)) return false;
-    std::vector<tl::core::LevelScript::Reachable> found;
-    owner->reachable_characters(found);
-    const auto it =
-        std::find_if(found.begin(), found.end(), [unit](const auto& r) { return r.id == unit; });
-    if (it == found.end()) return false;
-    const tl::core::LevelScript::Reachable target = *it;
-
-    // `CSkillEvent::getCharacterCanBeHarmedByMissile`, its last test:
-    // `TARGET_ALIGNMENT` from the player's side; a unit it may not affect is flown through.
-    using Alignment = tl::core::UnitStats::Alignment;
-    bool affects = false;
-    switch (source.target_alignment) {
-        case 0: affects = target.alignment == Alignment::Neutral; break;
-        case 1: affects = target.alignment == Alignment::Friendly; break;
-        case 3: affects = true; break;
-        default: affects = target.alignment == Alignment::Hostile; break;
-    }
-    if (!affects) return false;
-
-    // `missileApplyingEffects`: the height test
-    // (`canEffectPosObject`), `EVENT_MISSILEHIT`, then
-    // `applyWeaponDamage`.
-    if (!skill_event_reaches_height(at, owner, unit)) return true;
-    fire_missile_hit_event(source, owner, unit, at, yaw);
-    const float weapon_part =
-        skill_event_weapon_blow(source, owner, unit, damage_scale, soak_scale);
-
-    // `applyEffects` onto the unit's own manager
-    // (`skill_event_effects_on`). INVENTED: resistances are not applied to effect damage.
-    float effect_part = 0.0f;
-    if (source.event != nullptr && !owner->unit_is_dead(unit)) {
-        float before = 0.0f;
-        float max = 0.0f;
-        owner->unit_health(unit, before, max);
-        skill_event_effects_on(source, owner, unit);
-        float after = 0.0f;
-        owner->unit_health(unit, after, max);
-        effect_part = std::max(0.0f, before - after);
-    }
-    // `invokeHitSkills`.
-    invoke_hit_skills(source, source.group, owner, unit);
-    TL_LOG_INFO("missile: '%s' strikes %s at (%.2f, %.2f, %.2f): weapon %.1f, effects %.1f",
-                source.skill.c_str(), target.unit.c_str(), static_cast<double>(at.x),
-                static_cast<double>(at.y), static_cast<double>(at.z),
-                static_cast<double>(weapon_part), static_cast<double>(effect_part));
-    return true;
-}
-
-void World::fire_spawner_missile(int64_t node_id, const std::string& resource,
-                                 const ogre::Vector3& at, const ogre::Vector3& forward) {
-    const auto found = skill_spawners.find(node_id);
-    // A spawner no skill placed is the level's: no owner, no listeners
-    // (`createAndFireMissile`).
-    const bool level_placed = found == skill_spawners.end();
-    const SkillSpawner* spawner = level_placed ? nullptr : &found->second;
-    // `CResourceManager::createMissile` -> `CMissilePreloader::createNewMissileRef`:
-    // the missile of that name, upper-cased.
-    const tl::formats::CmpNode* node = missile_named(resource);
-    if (node == nullptr) {
-        TL_LOG_WARN("missiles: no missile named '%s' in media/missiles/", resource.c_str());
-        return;
-    }
-    const tl::core::MissileSpec spec = tl::core::read_missile_spec(*node);
-
-    // The owner: the player, its body sphere and target; none for a level's own missile.
-    const float body =
-        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
-    const ogre::Vector3 feet =
-        subject_node != nullptr ? view_position(subject_node) : ogre::Vector3::ZERO;
-    // A placed unit's skill: the owner is that unit, and the missile can meet
-    // the player as well as the level's characters.
-    tl::core::LevelScript* const caster = level_placed ? nullptr : spawner->source.caster_machine;
-    const int64_t caster_node = level_placed ? 0 : spawner->source.caster_node;
-    const bool by_unit = caster != nullptr;
-    const auto gather = [this, level_placed, by_unit]() {
-        return gather_missile_candidates(this, level_placed || by_unit);
-    };
-    std::vector<tl::core::LevelScript::Reachable> candidates = gather();
-    int64_t target = 0;
-    if (by_unit) {
-        // The owner's target (`CCharacter +0x340`).
-        tl::core::LevelScript* target_machine = nullptr;
-        int64_t target_node = 0;
-        if (caster->unit_target(caster_node, target_machine, target_node)) {
-            target = target_machine == nullptr ? kMissilePlayer : target_node;
-        }
-    } else if (!level_placed) {
-        for (const auto& r : candidates) {
-            if (r.id == player_target_node &&
-                r.alignment == tl::core::UnitStats::Alignment::Hostile) {
-                target = r.id;
-            }
-        }
-    }
-
-    FlyingMissile flying;
-    flying.level_placed = level_placed;
-    if (!level_placed) flying.source = spawner->source;
-    flying.missile = tl::core::missile_from_template(spec);
-    flying.missile.owner = 0;
-    if (by_unit) {
-        flying.missile.owner = caster_node;
-        tl::core::Vec3 caster_feet;
-        if (caster->unit_position(caster_node, caster_feet)) {
-            const float radius = caster->unit_radius(caster_node);
-            flying.missile.owner_center = {caster_feet.x, caster_feet.y + radius, caster_feet.z};
-            flying.missile.owner_radius = radius;
-        }
-    } else if (!level_placed) {
-        flying.missile.owner_center = {feet.x, feet.y + body, feet.z};
-        flying.missile.owner_radius = body;
-    }
-    flying.missile.target = target;
-
-    // `CMissile::fireMissile`: on first launch (`+0x1b5`) the event's
-    // `CSkillEvent::missileValidateTargetBeforeLaunch`
-    // settles the target: `MISSILE_TARGET_SELF` (`+0x14f`) the owner (hittable, `+0x144`);
-    // target type 0 nobody; a target unit (`CSkill +0x40`) unless type 1 or 11; else the
-    // event's point.
-    if (!level_placed && spawner->source.event != nullptr && !flying.missile.fired) {
-        if (spawner->source.event->bool_or("MISSILE_TARGET_SELF", false)) {
-            // INVENTED: aimed at the target's centre, not the owner's bone
-            // (`getBonePosition(owner, 1, 1)`); a player-owned one cannot meet the player.
-            if (by_unit) {
-                flying.missile.target = caster_node;
-                flying.missile.hits_owner = true;
-            }
-        } else if (spawner->source.target_type == 0) {
-            flying.missile.target = 0;
-        }
-        // INVENTED: the skill's target (`+0x40`) is not kept per run; the owner's stands in.
-    }
-
-    launch_missile(std::move(flying), at, forward,
-                   level_placed ? std::string("the level") : spawner->source.skill);
-}
-
-// `CMissile::fireMissile`, with the world it flies in.
-void World::launch_missile(FlyingMissile flying, const ogre::Vector3& at,
-                           const ogre::Vector3& forward, const std::string& who) {
-    const tl::core::MissileSpec spec = flying.missile.spec;
-    const bool level_placed = flying.level_placed;
-    const int64_t target = flying.missile.target;
-    // What it can meet: the level's characters, and the player for a level's or unit's.
-    const bool with_player = level_placed || flying.source.caster_machine != nullptr;
-    const auto gather = [this, with_player]() {
-        return gather_missile_candidates(this, with_player);
-    };
-    std::vector<tl::core::LevelScript::Reachable> candidates = gather();
-
-    tl::core::MissileWorld world;
-    world.unit = [&candidates](int64_t id, tl::core::Vec3& c, float& r, bool& alive) {
-        return missile_unit(candidates, id, c, r, alive);
-    };
-    world.closest_target = [&candidates](const tl::core::Vec3& from, const tl::core::Vec3& fwd,
-                                         float angle, float sight) {
-        return missile_closest(candidates, from, fwd, angle, sight);
-    };
-
-    // For fire_missile's point-blank hit.
-    ogre::Vector3 struck_at = at;
-    world.harm = make_missile_harm_hook(this, flying, candidates, struck_at, gather);
-    world.get_active_units_at_position = [this, &candidates, &spec](
-                                             const tl::core::Vec3& position, float radius,
-                                             std::vector<int64_t>* items_out) {
-        std::vector<tl::core::ActiveUnitCandidate> active_candidates;
-        active_candidates.reserve(candidates.size());
-        for (const auto& c : candidates) {
-            active_candidates.push_back({c.id, c.center});
-        }
-        std::vector<int64_t> hit = tl::core::get_active_units_at_position(
-            active_candidates, position, radius, breakable_item_candidates(), items_out);
-        TL_LOG_INFO("missile: '%s' area %.2f at (%.2f, %.2f, %.2f): %zu unit(s), %zu item(s)",
-                    spec.name.c_str(), static_cast<double>(radius), static_cast<double>(position.x),
-                    static_cast<double>(position.y), static_cast<double>(position.z), hit.size(),
-                    items_out != nullptr ? items_out->size() : size_t{0});
-        return hit;
-    };
-    world.interact_item = [this](int64_t item) { return queue_item_interact(item); };
-    world.unit_kind = [this](int64_t unit) {
-        return standing_breakable(unit) != nullptr ? tl::core::MissileUnitKind::Item
-                                                   : tl::core::MissileUnitKind::Character;
-    };
-    // `CLevel::rayCollision`, objects included.
-    world.ray = [this](const tl::core::Vec3& from, const tl::core::Vec3& to,
-                       tl::core::Vec3& point) {
-        tl::core::CollisionHit hit;
-        if (!collision.ray_collision(from, to, /*objects=*/true, hit)) return false;
-        point = hit.point;
-        return true;
-    };
-    world.volatile_rolls = &tl::core::volatile_random();
-    world.reflect = [this](int64_t unit) {
-        return missile_reflect_share(unit == kMissilePlayer ? 0 : unit);
-    };
-    tl::core::fire_missile(flying.missile, tl::core::Vec3{at.x, at.y, at.z},
-                           tl::core::Vec3{forward.x, forward.y, forward.z}, world);
-
-    const tl::core::Vec3& p = flying.missile.position;
-    const tl::core::Vec3& f = flying.missile.forward;
-    flying.node = view_create_node(ogre::Vector3(p.x, p.y, p.z));
-    view_aim_node(flying.node, ogre::Vector3(p.x, p.y, p.z), ogre::Vector3(f.x, f.y, f.z));
-    flying.active = place_particle_layout(spec.active, ogre::Vector3::ZERO,
-                                          ogre::Quaternion::IDENTITY, flying.node);
-    if (!spec.release.empty()) {
-        transient_particles.push_back(TransientParticles{
-            place_particle_layout(spec.release, ogre::Vector3(p.x, p.y, p.z),
-                                  view_orientation(flying.node), nullptr, ParticleStart::Cached),
-            kMissileParticleStopSeconds, false, false, true});
-    }
-    missiles.push_back(std::move(flying));
-    if (level_placed) {
-        TL_LOG_INFO("missiles: %s deals %.3f to %.3f of the damage graph", spec.name.c_str(),
-                    static_cast<double>(spec.min_damage_percent),
-                    static_cast<double>(spec.max_damage_percent));
-    }
-    TL_LOG_INFO("missiles: '%s' fires %s from (%.2f, %.2f, %.2f) along (%.2f, %.2f, %.2f)%s",
-                who.c_str(), spec.name.c_str(), static_cast<double>(at.x),
-                static_cast<double>(at.y), static_cast<double>(at.z),
-                static_cast<double>(forward.x), static_cast<double>(forward.y),
-                static_cast<double>(forward.z), target != 0 ? ", at its target" : "");
-}
-
-// `CEquipment::fireMissiles(CCharacter*, CCharacter*)`.
-bool World::fire_weapon_missiles(int64_t target, int breakable) {
-    // no `MISSILE` (`+0x400`), no missile.
-    if (!has_weapon || weapon.missile.empty() || subject_node == nullptr) return false;
-
-    // The hand's tag point (`+0x2e8`, or `+0x2f8` left; vtable +0x200). INVENTED: with no
-    // weapon model, the character's centre.
-    const float body =
-        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
-    const ogre::Vector3 feet = view_position(subject_node);
-    ogre::Vector3 hand;
-    float height = 0.0f;
-    const bool drawn = view_held_item(weapon_entity, hand, height);
-    ogre::Vector3 start = drawn ? hand : feet + ogre::Vector3(0.0f, body, 0.0f);
-
-    // `getForwardAbsolute` (vtable +0x138), or from the hand to the target's centre.
-    ogre::Vector3 direction = view_derived_orientation(subject_node) * ogre::Vector3::UNIT_Z;
-    tl::core::Vec3 aim;
-    bool aimed = false;
-    if (target != 0) {
-        if (tl::core::LevelScript* owner = script_owning(target)) {
-            aimed = owner->unit_position(target, aim);
-        }
-    } else if (breakable >= 0 && breakables[static_cast<size_t>(breakable)].node != nullptr) {
-        const ogre::Vector3 p = view_position(breakables[static_cast<size_t>(breakable)].node);
-        aim = tl::core::Vec3{p.x, p.y, p.z};
-        aimed = true;
-    }
-    if (aimed) {
-        direction = ogre::Vector3(aim.x - start.x, aim.y - start.y, aim.z - start.z);
-        const float length = direction.length();
-        if (1e-08f < length) direction = direction * (1.0f / length);
-    }
-
-    // out to the tip, the model's box height (vtable +0xd8) times
-    // `WEAPON_SCALE * 0.8`; one unit with no model.
-    if (drawn) {
-        start += direction * height * (player_stats.weapon_scale * 0.8f);
-    } else {
-        start += direction;
-    }
-
-    // `CMissilePreloader::createNewMissileRef`; none of
-    // that name fires nothing.
-    const tl::formats::CmpNode* node = missile_named(weapon.missile);
-    if (node == nullptr) {
-        TL_LOG_WARN("missiles: the weapon's '%s' is not a missile in media/missiles/",
-                    weapon.missile.c_str());
-        return false;
-    }
-
-    // `CMissile::fireMissile(start, target or ZERO, missile, getEquippedTo(), ..., target)`,
-    // the weapon its listener.
-    FlyingMissile flying;
-    flying.by_weapon = true;
-    flying.missile = tl::core::missile_from_template(tl::core::read_missile_spec(*node));
-    flying.missile.owner = 0;
-    flying.missile.owner_center = {feet.x, feet.y + body, feet.z};
-    flying.missile.owner_radius = body;
-    flying.missile.target = target;
-    launch_missile(std::move(flying), start, direction, "the weapon");
-    return true;
-}
-
-// `CEquipment::fireMissiles(CCharacter*, CCharacter*)`,
-// for a placed character.
-void World::fire_unit_weapon_missile(tl::core::LevelScript* machine, int64_t node,
-                                     const std::string& missile, bool left, bool aimed,
-                                     tl::core::LevelScript* target_machine, int64_t target_node) {
-    if (machine == nullptr || missile.empty()) return;
-    tl::core::Vec3 feet;
-    if (!machine->unit_position(node, feet)) return;
-    const std::string unit = machine->unit_of(node);
-    const tl::core::UnitStats stats = stats_for_unit(unit);
-    const float radius = machine->unit_radius(node);
-
-    // The hand's node (`+0x2f8` left, else `+0x2e8`). INVENTED: no item drawn, the centre.
-    Ogre::Entity* body = nullptr;
-    for (const auto& entry : scene_units) {
-        if (entry.second.node == node) body = entry.second.entity;
-    }
-    if (body == nullptr) {
-        for (const auto& owner : spawned) {
-            for (const SpawnedUnit& made : owner.second) {
-                if (made.id == node) body = made.entity;
-            }
-        }
-    }
-    Ogre::Entity* held = nullptr;
-    if (body != nullptr) {
-        const auto found = unit_held_items.find(body);
-        if (found != unit_held_items.end()) held = found->second.held[left ? 1 : 0];
-    }
-    ogre::Vector3 hand;
-    float height = 0.0f;
-    const bool drawn = view_held_item(held, hand, height);
-    ogre::Vector3 start = drawn ? hand : ogre::Vector3(feet.x, feet.y + radius, feet.z);
-
-    // `getForwardAbsolute`, or from the hand to the target's centre.
-    float facing = 0.0f;
-    machine->unit_facing(node, facing);
-    ogre::Vector3 direction(std::sin(facing), 0.0f, std::cos(facing));
-    int64_t target = 0;
-    if (aimed) {
-        tl::core::Vec3 aim;
-        bool have = false;
-        if (target_machine == nullptr) {
-            if (subject_node != nullptr) {
-                const float own = player_stats.radius > 0.0f ? player_stats.radius
-                                                             : tl::core::kDefaultCollisionRadius;
-                const ogre::Vector3 p = view_position(subject_node);
-                aim = {p.x, p.y + own, p.z};
-                have = true;
-                target = kMissilePlayer;
-            }
-        } else if (target_machine->unit_position(target_node, aim)) {
-            aim.y += target_machine->unit_radius(target_node);
-            have = true;
-            target = target_node;
-        }
-        if (have) {
-            direction = ogre::Vector3(aim.x - start.x, aim.y - start.y, aim.z - start.z);
-            const float length = direction.length();
-            if (1e-08f < length) direction = direction * (1.0f / length);
-        }
-    }
-
-    // Out to the weapon's tip: its model's height times `WEAPON_SCALE * 0.8`;
-    // one unit with no model.
-    if (drawn) {
-        const float scale = stats.weapon_scale > 0.0f ? stats.weapon_scale : 1.0f;
-        start += direction * height * (scale * 0.8f);
-    } else {
-        start += direction;
-    }
-
-    const tl::formats::CmpNode* spec = missile_named(missile);
-    if (spec == nullptr) {
-        TL_LOG_WARN("missiles: %s's weapon '%s' is not a missile in media/missiles/", unit.c_str(),
-                    missile.c_str());
-        return;
-    }
-    // `CMissile::fireMissile(start, ..., getEquippedTo(), ..., target)`.
-    FlyingMissile flying;
-    flying.by_weapon = true;
-    flying.source.caster_machine = machine;
-    flying.source.caster_node = node;
-    flying.missile = tl::core::missile_from_template(tl::core::read_missile_spec(*spec));
-    flying.missile.owner = node;
-    flying.missile.owner_center = {feet.x, feet.y + radius, feet.z};
-    flying.missile.owner_radius = radius;
-    flying.missile.target = target;
-    launch_missile(std::move(flying), start, direction, unit + "'s weapon");
-}
-
-// `CEquipment::missileApplyingEffects` and
-// `CEquipment::getCharacterCanBeHarmedByMissile`, for a
-// placed wielder: a turned-back missile (`CMissile +0x294`, X360 `+0x28c`, never set here)
-// harms anyone; else the wielder's `isEnemy`.
-bool World::unit_weapon_missile_harm(tl::core::LevelScript* wielder, int64_t wielder_node,
-                                     int64_t unit, const ogre::Vector3& at, float damage_scale,
-                                     float soak_scale) {
-    const bool you = unit == kMissilePlayer;
-    tl::core::LevelScript* machine = you ? nullptr : script_owning(unit);
-    if (!you && machine == nullptr) return false;
-    const int64_t node = you ? 0 : unit;
-    if (you ? player_health.dead : machine->unit_is_dead(unit)) return false;
-    if (!wielder->unit_is_enemy_of(wielder_node, machine, node)) return false;
-    // `rollAttack(level, unit, weapon, flags 0, damage scale, soak scale, 7)`.
-    std::vector<tl::core::ScriptEvent> events;
-    if (!wielder->unit_skill_blow(wielder_node, machine, node, damage_scale, soak_scale, events)) {
-        return true;
-    }
-    const float amount = events.empty() ? 0.0f : events.back().amount;
-    if (NodeMap* nodes = nodes_of(wielder)) apply_script_events(events, *nodes);
-    TL_LOG_INFO("missile: %s's weapon strikes %s at (%.2f, %.2f, %.2f): %.1f",
-                wielder->unit_of(wielder_node).c_str(),
-                you ? "the player" : machine->unit_of(unit).c_str(), static_cast<double>(at.x),
-                static_cast<double>(at.y), static_cast<double>(at.z), static_cast<double>(amount));
-    return true;
-}
-
-// `CEquipment::missileApplyingEffects`.
-bool World::weapon_missile_harm(int64_t unit, const ogre::Vector3& at, float damage_scale,
-                                float soak_scale) {
-    tl::core::LevelScript* owner = script_owning(unit);
-    if (owner == nullptr || owner->unit_is_dead(unit)) return false;
-    // `CCharacter::isEnemy(unit, the missile's owner)`, as in
-    // `getCharacterCanBeHarmedByMissile`.
-    if (!owner->unit_is_enemy_of(unit, nullptr, 0)) return false;
-    // `getEquippedTo()->rollAttack(level, unit, weapon, 0, damage scale, soak scale, 7)`.
-    const std::string name = owner->unit_of(unit);
-    const float dealt = player_blow(unit, damage_scale, soak_scale);
-    const bool critical = last_blow_critical;
-    const tl::core::KillingBlow killing = last_killing_blow;
-    show_player_blow(unit, name, dealt);
-    if (dealt > 0.0f) hurt_unit(unit, name, dealt, critical, 0, owner, &killing, /*struck=*/true);
-    slow_on_player_kill(owner->unit_is_dead(unit));
-    TL_LOG_INFO("missile: the weapon's '%s' strikes %s at (%.2f, %.2f, %.2f): %.1f",
-                weapon.missile.c_str(), name.c_str(), static_cast<double>(at.x),
-                static_cast<double>(at.y), static_cast<double>(at.z), static_cast<double>(dealt));
-    return true;
-}
-
-void World::dispose_transient_particles(float delta) {
-    const tl::core::SectionScope timed(tl::core::Section::Disposal);
-    // Every list whose time is up, asked together: one walk of the systems a frame.
-    std::vector<const std::vector<Ogre::SceneNode*>*> due;
-    std::vector<char> stop;
-    std::vector<char> by_updating;
-    std::vector<size_t> due_at;
-    for (size_t i = 0; i < transient_particles.size(); ++i) {
-        TransientParticles& transient = transient_particles[i];
-        transient.left -= delta;
-        if (transient.left > 0.0f) continue;
-        // `CParticle::Stop(false)`, then wait for `getNumberOfParticlesUpdating`
-        // to reach zero.
-        due.push_back(&transient.holders);
-        stop.push_back(!transient.stopped && !transient.self_timed ? 1 : 0);
-        by_updating.push_back(transient.missile ? 1 : 0);
-        due_at.push_back(i);
-    }
-    if (!due.empty()) {
-        // Alive until `CParticle::updateLevelObject` has stopped it.
-        std::vector<char> alive;
-        view_transients_alive(due, stop, by_updating, alive);
-        std::vector<Ogre::SceneNode*> dead;
-        for (size_t k = due.size(); k-- > 0;) {
-            TransientParticles& transient = transient_particles[due_at[k]];
-            transient.stopped = true;
-            if (alive[k] != 0) continue;
-            dead.insert(dead.end(), transient.holders.begin(), transient.holders.end());
-            transient_particles.erase(transient_particles.begin() + static_cast<long>(due_at[k]));
-        }
-        destroy_particle_holders(dead);
-    }
-}
-
-void World::step_missiles(float delta) {
-    dispose_transient_particles(delta);
-    flush_item_interacts();
-    if (missiles.empty() || !(delta > 0.0f)) return;
-
-    MissilePools pools;
-    for (size_t i = 0; i < missiles.size();) {
-        FlyingMissile& flying = missiles[i];
-        // What it can meet: the characters, and the player for a level's missile.
-        const bool with_player = flying.level_placed || flying.source.caster_machine != nullptr;
-        const auto gather = [this, with_player, &pools]() {
-            return pools.refresh(this, with_player);
-        };
-        std::vector<tl::core::LevelScript::Reachable>& candidates = pools.take(this, with_player);
-        const SkillEventSource source = flying.source;
-        ogre::Vector3 struck_at = ogre::Vector3::ZERO;
-
-        tl::core::MissileWorld world;
-        world.unit = [&candidates](int64_t id, tl::core::Vec3& c, float& r, bool& alive) {
-            return missile_unit(candidates, id, c, r, alive);
-        };
-        world.closest_target = [&candidates](const tl::core::Vec3& at, const tl::core::Vec3& fwd,
-                                             float angle, float sight) {
-            return missile_closest(candidates, at, fwd, angle, sight);
-        };
-        // `CLevel::preSortedSphereCollision`: level faces and body spheres, first met.
-        world.sweep = [this, &candidates](
-                          const tl::core::Vec3& from, const tl::core::Vec3& to, float radius,
-                          bool objects, const std::vector<int64_t>& ignore, tl::core::Vec3& centre,
-                          tl::core::Vec3& normal, int64_t& unit) {
-            float best = 2.0f;
-            unit = 0;
-            std::vector<const tl::core::LevelScript::Reachable*> met;
-            std::vector<int64_t> ids;
-            met.reserve(candidates.size());
-            ids.reserve(candidates.size());
-            for (const auto& u : candidates) {
-                if (std::find(ignore.begin(), ignore.end(), u.id) != ignore.end()) continue;
-                met.push_back(&u);
-                ids.push_back(u.id);
-            }
-            // `CLevel::objectSphereCollision` asks each
-            // unit's `CBaseUnit::sphereCollision`
-            // (`unit_collider_sweeps`). INVENTED: the body sphere where nothing is drawn.
-            std::vector<float> swept;
-            std::vector<char> drawn;
-            unit_collider_sweeps(ids, from, to, radius, swept, drawn);
-            for (size_t k = 0; k < met.size(); ++k) {
-                const float t = drawn[k] != 0 ? swept[k]
-                                              : sphere_sweep_t(from, to, radius, met[k]->center,
-                                                               met[k]->radius);
-                if (t < best) {
-                    best = t;
-                    unit = met[k]->id;
-                }
-            }
-            // A breakable is a unit too: the box of its collision group, whatever
-            // `COLLIDES WITH OBJECTS` says.
-            for (const BreakableWorld& b : breakables) {
-                if (b.node == nullptr || !b.state.usable || !b.has_collision) continue;
-                if (std::find(ignore.begin(), ignore.end(), b.id) != ignore.end()) continue;
-                tl::core::Vec3 box_low;
-                tl::core::Vec3 box_high;
-                if (!collision.group_bounds(b.id, box_low, box_high)) continue;
-                const float t = box_sweep_t(from, to, radius, box_low, box_high);
-                if (t < best) {
-                    best = t;
-                    unit = b.id;
-                }
-            }
-            if (!collision.empty()) {
-                // CMissile::checkCollision: `sortForCollisionByPoints`.
-                collision.sort_for_collision_by_points(from, to, radius);
-                tl::core::CollisionHit hit;
-                if (collision.pre_sorted_sphere_collision(from, to, radius, objects, hit)) {
-                    const tl::core::Vec3 d = to - from;
-                    const tl::core::Vec3 m = hit.centre - from;
-                    const float len2 = d.x * d.x + d.y * d.y + d.z * d.z;
-                    const float t =
-                        len2 > 0.0f ? std::sqrt((m.x * m.x + m.y * m.y + m.z * m.z) / len2) : 0.0f;
-                    if (t < best) {
-                        // A face of a breakable's own collision is that breakable.
-                        unit = standing_breakable(hit.group) != nullptr ? hit.group : 0;
-                        centre = hit.centre;
-                        normal = hit.normal;
-                        return true;
-                    }
-                }
-            }
-            if (!(best <= 1.0f)) return false;
-            const tl::core::Vec3 d = to - from;
-            centre = {from.x + d.x * best, from.y + d.y * best, from.z + d.z * best};
-            for (const auto& u : candidates) {
-                if (u.id != unit) continue;
-                const tl::core::Vec3 n = centre - u.center;
-                const float l = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-                normal = l > 0.0f ? tl::core::Vec3{n.x / l, n.y / l, n.z / l}
-                                  : tl::core::Vec3{0.0f, 1.0f, 0.0f};
-            }
-            return true;
-        };
-        world.harm = make_missile_harm_hook(this, flying, candidates, struck_at, gather);
-        world.get_active_units_at_position = [this, &candidates, &flying](
-                                                 const tl::core::Vec3& position, float radius,
-                                                 std::vector<int64_t>* items_out) {
-            std::vector<tl::core::ActiveUnitCandidate> active_candidates;
-            active_candidates.reserve(candidates.size());
-            for (const auto& c : candidates) {
-                active_candidates.push_back({c.id, c.center});
-            }
-            std::vector<int64_t> hit = tl::core::get_active_units_at_position(
-                active_candidates, position, radius, breakable_item_candidates(), items_out);
-            TL_LOG_INFO("missile: '%s' area %.2f at (%.2f, %.2f, %.2f): %zu unit(s), %zu item(s)",
-                        flying.missile.spec.name.c_str(), static_cast<double>(radius),
-                        static_cast<double>(position.x), static_cast<double>(position.y),
-                        static_cast<double>(position.z), hit.size(),
-                        items_out != nullptr ? items_out->size() : size_t{0});
-            return hit;
-        };
-        world.interact_item = [this](int64_t item) { return queue_item_interact(item); };
-        world.unit_kind = [this](int64_t unit) {
-            return standing_breakable(unit) != nullptr ? tl::core::MissileUnitKind::Item
-                                                       : tl::core::MissileUnitKind::Character;
-        };
-        world.volatile_rolls = &tl::core::volatile_random();
-        world.reflect = [this](int64_t unit) {
-            return missile_reflect_share(unit == kMissilePlayer ? 0 : unit);
-        };
-
-        const tl::core::Vec3 before = flying.missile.position;
-        struck_at = ogre::Vector3(before.x, before.y, before.z);
-        const tl::core::MissileStep step = tl::core::update_missile(flying.missile, delta, world);
-        const tl::core::Vec3& p = flying.missile.position;
-        const ogre::Vector3 now(p.x, p.y, p.z);
-        if (flying.node != nullptr) {
-            const tl::core::Vec3& f = flying.missile.forward;
-            view_aim_node(flying.node, now, ogre::Vector3(f.x, f.y, f.z));
-        }
-        if (step.hit) {
-            // `HIT` where it struck, facing along the velocity.
-            transient_particles.push_back(TransientParticles{
-                place_particle_layout(flying.missile.spec.hit, now,
-                                      flying.node != nullptr ? view_orientation(flying.node)
-                                                             : ogre::Quaternion::IDENTITY,
-                                      nullptr, ParticleStart::Cached),
-                kMissileParticleStopSeconds, false, false, true});
-        }
-        if (step.killed) {
-            TL_LOG_INFO("missile: %s ends at (%.2f, %.2f, %.2f) after %.2f units",
-                        flying.missile.spec.name.c_str(), static_cast<double>(p.x),
-                        static_cast<double>(p.y), static_cast<double>(p.z),
-                        static_cast<double>(flying.missile.travelled_total));
-            transient_particles.push_back(TransientParticles{
-                place_particle_layout(flying.missile.spec.die, now, ogre::Quaternion::IDENTITY,
-                                      nullptr, ParticleStart::Cached),
-                kMissileParticleStopSeconds, false, false, true});
-            // `CSkillEvent::missileDieing`: unless the event is
-            // `EVENT_MISSILEDIE`, group 7 from the missile's centre, no unit or point.
-            constexpr int kMissileDie = 7;
-            if (!flying.level_placed && !flying.by_weapon && !flying.detached &&
-                flying.source.group != kMissileDie) {
-                if (const tl::core::KnownSkill* skill = player_skill(flying.source.skill)) {
-                    tl::core::SkillCastContext context = player_cast_context();
-                    context.event_target = tl::core::SkillEventTarget{};
-                    context.event_target.run = flying.source.run;
-                    context.event_target.origin = p;
-                    context.event_target.yaw =
-                        flying.node != nullptr
-                            ? view_orientation(flying.node).getYaw().valueRadians()
-                            : 0.0f;
-                    skill_runner_running(skill->entry.name)
-                        .trigger_skill_event(*skill, kMissileDie, context);
-                    pools.forget();
-                }
-            }
-        }
-        if (!step.active_visible && !flying.active.empty()) destroy_particle_holders(flying.active);
-        if (step.finished) {
-            destroy_particle_holders(flying.active);
-            if (flying.node != nullptr) view_destroy_node(flying.node);
-            missiles.erase(missiles.begin() + static_cast<long>(i));
-            continue;
-        }
-        ++i;
-    }
-    flush_item_interacts();
-}
-
 std::vector<tl::core::ActiveUnitCandidate> World::breakable_item_candidates() const {
     // The near item list (`CLevel::updateNearUnitList`), newest
     // first (`CLevel::addItem`); broken ones too.
@@ -3567,19 +2802,6 @@ std::vector<tl::core::ActiveUnitCandidate> World::breakable_item_candidates() co
         out.push_back({b.id, {at.x, at.y, at.z}});
     }
     return out;
-}
-
-void World::clear_missiles() {
-    for (FlyingMissile& flying : missiles) {
-        destroy_particle_holders(flying.active);
-        if (flying.node != nullptr) view_destroy_node(flying.node);
-    }
-    missiles.clear();
-    for (TransientParticles& t : transient_particles) destroy_particle_holders(t.holders);
-    transient_particles.clear();
-    skill_spawners.clear();
-    live_skill_events.clear();
-    skill_event_holds.clear();
 }
 
 void World::refresh_skill_effects() {

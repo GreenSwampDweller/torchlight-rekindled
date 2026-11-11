@@ -46,6 +46,8 @@ inline constexpr int kEffectTypeWarp = 0x71;                ///< `WARP`
 inline constexpr int kEffectTypeOpenPortal = 0x8d;          ///< `OPEN PORTAL`
 inline constexpr int kEffectTypeRespec = 0x8f;              ///< `RESPEC`
 inline constexpr int kEffectTypeHpRechargePlayer = 0x7c;    ///< `HP RECHARGE PLAYER`
+inline constexpr int kEffectTypeStopSkill = 0x7f;           ///< `STOP SKILL`
+inline constexpr int kEffectTypeSwapPosWithPet = 0x8e;      ///< `SWAP POS WITH PET`
 
 /// `CEquipment +0x248`'s "used up for good" marker: `useOnTarget` never counts
 /// it down and `performItemUse` never removes the item for it.

@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -101,6 +102,16 @@ struct SkillCastContext {
     bool target_is_caster = true;
     bool target_is_enemy = false;
     bool target_is_casters_pet = false;
+    /// No character casts (a prop's trap): every `TARGET` arm applies.
+    bool no_caster_character = false;
+    /// `CEffect::setOwner(effect, the skill's owner, true)`, the roll
+    /// `applyAffixesAndEffects` makes for an effect with no owner yet, before the caster's. A
+    /// prop's skill, its owner null, leaves the effect owned by the prop after it, so only its
+    /// first apply rolls it. Null: none.
+    const EffectRolls* ownerless_rolls = nullptr;
+    /// The block's effects (group, effect) already owned; an effect enters at its first apply.
+    /// Null: every apply rolls.
+    std::set<std::pair<size_t, size_t>>* ownerless_owned = nullptr;
 
     /// The unit casting, for the weapon gate `CSkillManager::startPassiveSkills`
     /// runs before each passive. Null skips that gate.
@@ -519,14 +530,16 @@ bool weapon_requirements_met(const SkillProperty& property, const SkillCaster& c
 /// `CSkill::requirementsMet(CBaseUnit*, ESKILL_ACTIVATION_TYPE, const Vector3*,
 /// CBaseUnit*, bool)`. `Position` (1), `Target` (2),
 /// `Item` (7) and `UnidentifiedItem` (8) are tested; everything else, `Self` included,
-/// falls through to the weapon gate. `m_gAllowSkillTesting` is not modelled.
-bool requirements_met(const KnownSkill& skill, uint32_t level, const SkillCaster& caster);
+/// falls through to the weapon gate. `m_gAllowSkillTesting` is not modelled. `activation`
+/// is the type asked: a skill of another type is refused unless either is 0 (`Any`).
+bool requirements_met(const KnownSkill& skill, uint32_t level, const SkillCaster& caster,
+                      SkillActivation activation = SkillActivation::Any);
 
 /// One of the two units `position_for_skill` reads.
 struct SkillPositionUnit {
     Vec3 centre;            ///< `getPosition(true)`
-    float radius = 0.0f;    ///< `+0x194`, taken off the height
-    Vec3 forward{0, 0, 1};  ///< vtable `+0x130`, asked only by `POSITIONFLEE`
+    float radius = 0.0f;    ///< X360 `+0x15c`, taken off the height
+    Vec3 forward{0, 0, 1};  ///< X360 vtable `+0x98`, asked only by `POSITIONFLEE`
 };
 
 /// `CSkillManager::getPositionForSkill(CSkill*, CBaseUnit*)`:
@@ -614,7 +627,8 @@ public:
 
     /// `CSkillManager::getSkillCanBeExecuted`:
     /// not cooling, and `requirements_met`.
-    bool can_be_executed(const KnownSkill& skill, uint32_t level, const SkillCaster& caster) const;
+    bool can_be_executed(const KnownSkill& skill, uint32_t level, const SkillCaster& caster,
+                         SkillActivation activation = SkillActivation::Any) const;
 
     /// `CSkillManager::executeSkill(CSkill*, ...)`: an
     /// exclusive skill stops every running skill sharing its GUID, then `startSkill`; on
@@ -639,13 +653,15 @@ public:
     void stop_by_name(const std::string& skill_name, const SkillCastContext& context,
                       const std::function<const KnownSkill*(const std::string&)>& lookup);
 
-    /// `CSkillManager::stopAllSkills(force, false, passives)`:
-    /// passives only with `passives`; with `force` each is stopped (`CSkill::stopSkill`),
-    /// without it `CSkill::attemptToStopSkill` cuts the
-    /// countdown to 0.001 when every event can stop, and `update` ends the run.
+    /// `CSkillManager::stopAllSkills(force, keep_on_death, passives)`:
+    /// passives only with `passives`; `keep_on_death` spares a skill with
+    /// `EVENT_CASTERDIE` events, no property or `DONT_STOP_ON_DEATH`; with `force` each is
+    /// stopped (`CSkill::stopSkill`), without it `CSkill::attemptToStopSkill`
+    /// cuts the countdown to 0.001 when every event can stop, and `update`
+    /// ends the run.
     void stop_all(const SkillCastContext& context,
                   const std::function<const KnownSkill*(const std::string&)>& lookup, bool force,
-                  bool passives);
+                  bool passives, bool keep_on_death = false);
 
     /// `CSkillManager::triggerSkillEvent(ESKILL_EVENT_TYPE, ...)`:
     /// the group on every listed skill through `CSkill::triggerEvent`,
@@ -659,17 +675,21 @@ public:
     /// its `run`'s, else the last started. Whether anything fired.
     bool trigger_skill_event(const KnownSkill& skill, int group, const SkillCastContext& context);
 
-    /// `CSkill::updateSkill(float)` over every entry, the
+    /// `CSkill::updateSkill(float)` over the active list, the
     /// loop of `CSkillManager::update(float)`: cooldowns
     /// run down, running skills advance, and one whose minimum time is up fires `EVENT_END`
-    /// and stops. Without `lookup` the clocks still tick but the group cannot fire.
+    /// and stops; a copy neither running nor cooling leaves the list. Without `lookup` the
+    /// clocks still tick but the group cannot fire.
     void update(float dt, const SkillCastContext& context,
                 const std::function<const KnownSkill*(const std::string&)>& lookup);
 
     /// Every entry, in insertion order, for `--effects-dump` and the tests.
     // PORT: an accessor of the runner.
     const std::deque<std::pair<std::string, SkillRunState>>& entries() const { return entries_; }
-    void clear() { entries_.clear(); }
+    void clear() {
+        entries_.clear();
+        active_.clear();
+    }
 
 private:
     SkillRunState* find(const std::string& skill_name);
@@ -685,7 +705,13 @@ private:
     /// Insertion order (`TArrayList<CSkill*>::add`), the order `EVENT_END` fires in. A deque,
     /// because a fired group can start another skill while its copy must stay put.
     std::deque<std::pair<std::string, SkillRunState>> entries_;
+    /// `CSkillManager +0x1c`, the active list: the copies started (indices into `entries_`),
+    /// in the console's order. `update` swap-removes a copy neither running nor cooling.
+    std::vector<size_t> active_;
     uint64_t serial_ = 0;
+    // PORT: where a copy stands in `entries_`, and whether the active list holds it.
+    size_t index_of(const SkillRunState& state) const;
+    bool in_active(size_t index) const;
 };
 
 }  // namespace tl::core

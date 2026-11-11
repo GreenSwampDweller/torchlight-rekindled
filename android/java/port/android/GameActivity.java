@@ -16,6 +16,9 @@ import android.app.NativeActivity;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputFilter;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
@@ -39,6 +42,32 @@ public final class GameActivity extends NativeActivity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     OnBackInvokedDispatcher.PRIORITY_DEFAULT, toBackground);
         }
+        hideSystemBars();
+    }
+
+    /**
+     * The whole screen: the status and navigation bars hidden until a swipe
+     * from the edge shows them for a moment (immersive mode). A desktop mode
+     * (Samsung DeX) keeps its taskbar and the window's title bar over an app
+     * that does not ask for this, and runs it in a window.
+     */
+    @SuppressWarnings("deprecation")  // setDecorFitsSystemWindows: the layout under the bars before Android 15
+    private void hideSystemBars() {
+        Window window = getWindow();
+        window.setDecorFitsSystemWindows(false);
+        WindowInsetsController controller = window.getInsetsController();
+        if (controller == null) return;
+        controller.setSystemBarsBehavior(
+                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        controller.hide(WindowInsets.Type.systemBars());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // The bars come back with a dialog (the keyboard's) or a switch away;
+        // they are hidden again once the game has the window back.
+        if (hasFocus) hideSystemBars();
     }
 
     @Override

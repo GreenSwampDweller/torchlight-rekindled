@@ -223,6 +223,25 @@ bool World::complete_quest_by_dialog(const std::string& name) {
     return true;
 }
 
+// What a `Quest Controller`'s change of a quest leads to past the level's machines:
+// `CQuestController::setQuestComplete(true)` ends in
+// `CQuestManager::completeQuest`; Force Not Accepted / Not
+// Complete in `removeQuest(quest, false)` and `resetQuest`.
+void World::quest_controller_changed(const tl::core::ScriptEvent& event) {
+    if (event.status == tl::core::QuestStatus::Unknown) quest_log.drop(event.text);
+    if (event.status == tl::core::QuestStatus::Complete) {
+        load_quest_book();
+        if (const tl::core::QuestDefinition* quest = quest_book.find(event.text)) {
+            quest_log.apply_completion_consequences(*quest);
+        }
+        pay_quest_completions();
+    }
+    report_gates_waiting_on(event.text);
+    // `giveQuest` / `completeQuest` both end in `updateAutomapIcons` and `updateNPCIcons`.
+    update_automap_icons();
+    update_npc_icons();
+}
+
 void World::quest_completed(const std::string& name) {
     pay_quest_completions();
     report_gates_waiting_on(name);
@@ -234,17 +253,23 @@ void World::quest_completed(const std::string& name) {
     refresh_game_hud();
 }
 
+// `CQuest::giveRewardForQuest`, its payout: the log runs it
+// before the quests it gives and `cleanUp`'s `reinitializeQuest` (`QuestLog::set_payout`).
+void World::pay_quest_completion(const tl::core::QuestCompletion& done) {
+    if (done.quest == nullptr) return;
+    // CQuest::giveRewardForQuest: incrementJournalStatistic(4, 1)
+    count_journal(tl::core::JournalStatistic::QuestsCompleted);
+    if (done.held && done.quest->reward_spec.any()) reward_player(done);
+    TL_LOG_INFO("quest complete: %s%s", done.quest->name.c_str(),
+                done.held ? "" : " (not held - nothing to pay)");
+    // No banner here: "Quest Complete" is questEventUpdate's; completeQuest's
+    // setIsComplete sends event 4, which it skips for a complete quest.
+}
+
 void World::pay_quest_completions() {
     const std::vector<tl::core::QuestCompletion> done_list = quest_log.take_completions();
     for (const tl::core::QuestCompletion& done : done_list) {
-        if (done.quest == nullptr) continue;
-        // CQuest::giveRewardForQuest: incrementJournalStatistic(4, 1)
-        count_journal(tl::core::JournalStatistic::QuestsCompleted);
-        if (done.held && done.quest->reward_spec.any()) reward_player(done);
-        TL_LOG_INFO("quest complete: %s%s", done.quest->name.c_str(),
-                    done.held ? "" : " (not held - nothing to pay)");
-        // No banner here: "Quest Complete" is questEventUpdate's; completeQuest's
-        // setIsComplete sends event 4, which it skips for a complete quest.
+        if (!done.paid) pay_quest_completion(done);
     }
     // `CQuest::giveRewardForQuest` ends in `cleanUp(true)`, after the payout:
     // what the quests take back (`QuestLog` queued it with each completion),

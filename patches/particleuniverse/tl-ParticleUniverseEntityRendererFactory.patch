@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRendererFactory.h
+index e72735e..64cf738 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseEntityRendererFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			EntityRendererFactory(void) {};
++	        // Torchlight: `EntityRendererFactory::~EntityRendererFactory` is the library's (the script members apart).
+ 	        virtual ~EntityRendererFactory(void) {};
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `EntityRendererFactory::getRendererType` is the library's (the same name).
+ 			String getRendererType(void) const
+ 			{
+ 				return "Entity";
+ 			}
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `EntityRendererFactory::createRenderer` is the library's: made, then given its type.
+ 			ParticleRenderer* createRenderer(void)
+ 			{
+ 				return _createRenderer<EntityRenderer>();

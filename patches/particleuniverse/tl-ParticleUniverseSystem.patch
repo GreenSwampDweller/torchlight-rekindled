@@ -79,10 +79,10 @@ index 919a8b7..3ba33d4 100644
  			@remarks
  				Scaling is done on a Particle System level and is independent of the scaling of the SceneNode
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
-index 7961966..43a57d3 100644
+index 7961966..56baba3 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseSystem.cpp
-@@ -52,12 +52,53 @@ namespace ParticleUniverse
+@@ -52,12 +52,56 @@ namespace ParticleUniverse
  	{
  		protected:
  			ParticleSystem* mTarget;
@@ -92,6 +92,9 @@ index 7961966..43a57d3 100644
  		public:
 -			ParticleSystemUpdateValue(ParticleSystem* target) : mTarget(target) {}
 +			ParticleSystemUpdateValue(ParticleSystem* target) : mTarget(target), mTimeToStep(0.0f) {}
++			// Torchlight: `ParticleSystemUpdateValue::~ParticleSystemUpdateValue`,
++			// nothing of its own.
++			~ParticleSystemUpdateValue(void) {}
  			
 +			// Torchlight: `ParticleSystemUpdateValue::getValue`, 0.
  			Real getValue(void) const {return 0;}
@@ -138,7 +141,7 @@ index 7961966..43a57d3 100644
  	};
  	//-----------------------------------------------------------------------
  	ParticleSystem::ParticleSystem(const String& name) :
-@@ -81,9 +122,10 @@ namespace ParticleUniverse
+@@ -81,9 +125,10 @@ namespace ParticleUniverse
  		mTimeSinceLastUpdate(0.0f),
  		mFixedTimeout(DEFAULT_FIXED_TIMEOUT),
  		mFixedTimeoutSet(false),
@@ -152,7 +155,7 @@ index 7961966..43a57d3 100644
  		mFastForwardSet(false),
  		mOriginalFastForwardSet(false),
  		mFastForwardTime(DEFAULT_FAST_FORWARD_TIME),
-@@ -91,6 +133,7 @@ namespace ParticleUniverse
+@@ -91,6 +136,7 @@ namespace ParticleUniverse
  		mMainCameraName(DEFAULT_MAIN_CAMERA_NAME),
  		mMainCameraNameSet(false),
  		mCurrentCamera(0),
@@ -160,7 +163,7 @@ index 7961966..43a57d3 100644
  		mParticleSystemScale(DEFAULT_SCALE),
  		mParticleSystemScaleVelocity(DEFAULT_SCALE_VELOCITY),
  		mParticleSystemScaleTime(DEFAULT_SCALE_TIME),
-@@ -111,6 +154,7 @@ namespace ParticleUniverse
+@@ -111,6 +157,7 @@ namespace ParticleUniverse
  		particleType = PT_SYSTEM;
  	}
  	//-----------------------------------------------------------------------
@@ -168,7 +171,7 @@ index 7961966..43a57d3 100644
  	ParticleSystem::ParticleSystem(const String& name, const String& resourceGroupName) :
  		IElement(),
  		mAABB(),
-@@ -132,9 +176,10 @@ namespace ParticleUniverse
+@@ -132,9 +179,10 @@ namespace ParticleUniverse
  		mTimeSinceLastUpdate(0.0f),
  		mFixedTimeout(DEFAULT_FIXED_TIMEOUT),
  		mFixedTimeoutSet(false),
@@ -182,7 +185,7 @@ index 7961966..43a57d3 100644
  		mFastForwardSet(false),
  		mOriginalFastForwardSet(false),
  		mFastForwardTime(DEFAULT_FAST_FORWARD_TIME),
-@@ -142,6 +187,7 @@ namespace ParticleUniverse
+@@ -142,6 +190,7 @@ namespace ParticleUniverse
  		mMainCameraName(DEFAULT_MAIN_CAMERA_NAME),
  		mMainCameraNameSet(false),
  		mCurrentCamera(0),
@@ -190,7 +193,7 @@ index 7961966..43a57d3 100644
  		mParticleSystemScale(DEFAULT_SCALE),
  		mParticleSystemScaleVelocity(DEFAULT_SCALE_VELOCITY),
  		mParticleSystemScaleTime(DEFAULT_SCALE_TIME),
-@@ -161,14 +207,21 @@ namespace ParticleUniverse
+@@ -161,14 +210,21 @@ namespace ParticleUniverse
  		mBoundingRadius = 1;
  	}
  	//-----------------------------------------------------------------------
@@ -215,7 +218,7 @@ index 7961966..43a57d3 100644
  		{
  			// Destroy controller
  			ControllerManager::getSingleton().destroyController(mTimeController);
-@@ -176,6 +229,11 @@ namespace ParticleUniverse
+@@ -176,6 +232,11 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -227,7 +230,7 @@ index 7961966..43a57d3 100644
  	ParticleSystem& ParticleSystem::operator=(const ParticleSystem& ps)
  	{
  		// Destroy all existing techniques.
-@@ -192,7 +250,7 @@ namespace ParticleUniverse
+@@ -192,7 +253,7 @@ namespace ParticleUniverse
  			addTechnique(clonedTechnique);
  		}
  
@@ -236,7 +239,7 @@ index 7961966..43a57d3 100644
  		mNonvisibleUpdateTimeout = ps.mNonvisibleUpdateTimeout;
  		mNonvisibleUpdateTimeoutSet = ps.mNonvisibleUpdateTimeoutSet;
  		mResourceGroupName = ps.mResourceGroupName;
-@@ -217,13 +275,12 @@ namespace ParticleUniverse
+@@ -217,13 +278,12 @@ namespace ParticleUniverse
  		mParticleSystemScaleTime = ps.mParticleSystemScaleTime;
  		mKeepLocal = ps.mKeepLocal;
  		mTightBoundingBox = ps.mTightBoundingBox;
@@ -255,7 +258,7 @@ index 7961966..43a57d3 100644
  
  		// Notify.
  		mSuppressNotifyEmissionChange = false;
-@@ -347,11 +404,13 @@ namespace ParticleUniverse
+@@ -347,11 +407,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -269,7 +272,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::setTightBoundingBox(bool tightBoundingBox)
  	{
  		mTightBoundingBox = tightBoundingBox;
-@@ -412,29 +471,53 @@ namespace ParticleUniverse
+@@ -412,29 +474,53 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -327,7 +330,7 @@ index 7961966..43a57d3 100644
  	const Vector3& ParticleSystem::getDerivedPosition(void)
  	{
  		if (mMarkedForEmission)
-@@ -456,6 +539,7 @@ namespace ParticleUniverse
+@@ -456,6 +542,7 @@ namespace ParticleUniverse
  		return mDerivedPosition;
  	}
  	//-----------------------------------------------------------------------
@@ -335,7 +338,7 @@ index 7961966..43a57d3 100644
  	const Quaternion& ParticleSystem::getDerivedOrientation(void) const
  	{
  		if (mMarkedForEmission)
-@@ -520,6 +604,7 @@ namespace ParticleUniverse
+@@ -520,6 +607,7 @@ namespace ParticleUniverse
  		pos = mRotationCentre + mRotationOffset * (pos - mRotationCentre);
  	}
  	//-----------------------------------------------------------------------
@@ -343,7 +346,7 @@ index 7961966..43a57d3 100644
  	ParticleTechnique* ParticleSystem::createTechnique(void)
  	{
  		ParticleTechnique* technique = ParticleSystemManager::getSingletonPtr()->createTechnique();
-@@ -527,12 +612,18 @@ namespace ParticleUniverse
+@@ -527,12 +615,18 @@ namespace ParticleUniverse
  		return technique;
  	}
  	//-----------------------------------------------------------------------
@@ -362,7 +365,7 @@ index 7961966..43a57d3 100644
  		_notifyEmissionChange();
  	}
  	//-----------------------------------------------------------------------
-@@ -556,12 +647,14 @@ namespace ParticleUniverse
+@@ -556,12 +650,14 @@ namespace ParticleUniverse
  		_notifyEmissionChange();
  	}
  	//-----------------------------------------------------------------------
@@ -377,7 +380,7 @@ index 7961966..43a57d3 100644
  	ParticleTechnique* ParticleSystem::getTechnique (const String& techniqueName) const
  	{
  		if (techniqueName == BLANK_STRING)
-@@ -580,11 +673,13 @@ namespace ParticleUniverse
+@@ -580,11 +676,13 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -391,7 +394,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::destroyTechnique(ParticleTechnique* technique)
  	{
  		assert(technique && "Technique is null!");
-@@ -603,11 +698,13 @@ namespace ParticleUniverse
+@@ -603,11 +701,13 @@ namespace ParticleUniverse
  		_notifyEmissionChange();
  	}
  	//-----------------------------------------------------------------------
@@ -405,7 +408,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::destroyAllTechniques (void)
  	{
  		ParticleTechniqueIterator it;
-@@ -630,6 +727,7 @@ namespace ParticleUniverse
+@@ -630,6 +730,7 @@ namespace ParticleUniverse
  		return mFastForwardInterval;
  	}
  	//-----------------------------------------------------------------------
@@ -413,7 +416,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::setFastForward(Real time, Real interval)
  	{
  		mFastForwardSet = true;
-@@ -638,6 +736,7 @@ namespace ParticleUniverse
+@@ -638,6 +739,7 @@ namespace ParticleUniverse
  		mFastForwardInterval = interval;
  	}
  	//-----------------------------------------------------------------------
@@ -421,7 +424,7 @@ index 7961966..43a57d3 100644
  	const String& ParticleSystem::getMainCameraName(void) const
  	{
  		return mMainCameraName;
-@@ -657,14 +756,12 @@ namespace ParticleUniverse
+@@ -657,14 +759,12 @@ namespace ParticleUniverse
  		return mMainCameraNameSet;
  	}
  	//-----------------------------------------------------------------------
@@ -438,7 +441,7 @@ index 7961966..43a57d3 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleSystem::setMainCamera(Camera* camera)
-@@ -682,6 +779,7 @@ namespace ParticleUniverse
+@@ -682,6 +782,7 @@ namespace ParticleUniverse
  		return mCurrentCamera;
  	}
  	//-----------------------------------------------------------------------
@@ -446,7 +449,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::fastForward(void)
  	{
  		if (!mFastForwardSet)
-@@ -701,6 +799,9 @@ namespace ParticleUniverse
+@@ -701,6 +802,9 @@ namespace ParticleUniverse
  		_pushSystemEvent(PU_EVT_SYSTEM_ATTACHING);
  
  		MovableObject::_notifyAttached(parent, isTagPoint);
@@ -456,7 +459,7 @@ index 7961966..43a57d3 100644
  		
  		if (parent)
  		{
-@@ -736,98 +837,92 @@ namespace ParticleUniverse
+@@ -736,98 +840,92 @@ namespace ParticleUniverse
  		_pushSystemEvent(PU_EVT_SYSTEM_ATTACHED);
  	}
  	//-----------------------------------------------------------------------
@@ -602,7 +605,7 @@ index 7961966..43a57d3 100644
  		ParticleTechniqueIterator it;
  		ParticleTechniqueIterator itEnd = mTechniques.end();
  		for (it = mTechniques.begin(); it != itEnd; ++it)
-@@ -849,257 +944,244 @@ namespace ParticleUniverse
+@@ -849,257 +947,244 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1020,7 +1023,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_resetBounds(void)
  	{
  		// Reset the bounds to zero
-@@ -1114,18 +1196,22 @@ namespace ParticleUniverse
+@@ -1114,18 +1199,22 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1044,7 +1047,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::setScale(const Vector3& scale)
  	{
  		// Set the scale and notify the particle techniques
-@@ -1133,6 +1219,7 @@ namespace ParticleUniverse
+@@ -1133,6 +1222,7 @@ namespace ParticleUniverse
  		_notifyRescaled();
  	}
  	//-----------------------------------------------------------------------
@@ -1052,7 +1055,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_notifyRescaled(void)
  	{
  		// Notify the particle techniques
-@@ -1144,11 +1231,13 @@ namespace ParticleUniverse
+@@ -1144,11 +1234,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1066,7 +1069,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::setScaleVelocity(const Real& scaleVelocity)
  	{
  		// Set the scale and notify the particle techniques
-@@ -1156,6 +1245,7 @@ namespace ParticleUniverse
+@@ -1156,6 +1248,7 @@ namespace ParticleUniverse
  		_notifyVelocityRescaled();
  	}
  	//-----------------------------------------------------------------------
@@ -1074,7 +1077,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_notifyVelocityRescaled(void)
  	{
  		// Notify the particle techniques
-@@ -1167,16 +1257,19 @@ namespace ParticleUniverse
+@@ -1167,16 +1260,19 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1094,7 +1097,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_initForEmission(void)
  	{
  		// The system itself is emitted.
-@@ -1186,6 +1279,7 @@ namespace ParticleUniverse
+@@ -1186,6 +1282,7 @@ namespace ParticleUniverse
  		start();
  	}
  	//-----------------------------------------------------------------------
@@ -1102,7 +1105,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
  	{
  		// The system itself is expired.
-@@ -1195,6 +1289,7 @@ namespace ParticleUniverse
+@@ -1195,6 +1292,7 @@ namespace ParticleUniverse
  		stop();
  	}
  	//-----------------------------------------------------------------------
@@ -1110,7 +1113,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_process(ParticleTechnique* technique, Real timeElapsed)
  	{
  		// Inherited from the Particle class and is only called if the Particle System is emitted.
-@@ -1213,17 +1308,19 @@ namespace ParticleUniverse
+@@ -1213,17 +1311,19 @@ namespace ParticleUniverse
  		return mNonvisibleUpdateTimeout;
  	}
  	//-----------------------------------------------------------------------
@@ -1135,7 +1138,7 @@ index 7961966..43a57d3 100644
  		}
  	}
  	// --------------------------------------------------------------------
-@@ -1242,39 +1339,46 @@ namespace ParticleUniverse
+@@ -1242,39 +1342,46 @@ namespace ParticleUniverse
  		mLodDistanceList.push_back(distance * distance);
  	}
  	// --------------------------------------------------------------------
@@ -1192,7 +1195,7 @@ index 7961966..43a57d3 100644
  	size_t ParticleSystem::getNumEmittedTechniques (void) const
  	{
  		ParticleTechniqueConstIterator it;
-@@ -1291,6 +1395,7 @@ namespace ParticleUniverse
+@@ -1291,6 +1398,7 @@ namespace ParticleUniverse
  		return count;
  	}
  	//-----------------------------------------------------------------------
@@ -1200,7 +1203,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_markForEmission(void)
  	{
  		// Reset the marks on all techniques.
-@@ -1314,6 +1419,7 @@ namespace ParticleUniverse
+@@ -1314,6 +1422,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1208,7 +1211,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_resetMarkForEmission(void)
  	{
  		ParticleTechniqueIterator it;
-@@ -1324,11 +1430,13 @@ namespace ParticleUniverse
+@@ -1324,11 +1433,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1222,7 +1225,7 @@ index 7961966..43a57d3 100644
  	void ParticleSystem::_notifyEmissionChange(void)
  	{
  		if (mSuppressNotifyEmissionChange)
-@@ -1338,85 +1446,97 @@ namespace ParticleUniverse
+@@ -1338,85 +1449,97 @@ namespace ParticleUniverse
  		_markForEmission();
  	}
  	//-----------------------------------------------------------------------
@@ -1345,7 +1348,7 @@ index 7961966..43a57d3 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleSystem::start(Real stopTime)
-@@ -1431,37 +1551,21 @@ namespace ParticleUniverse
+@@ -1431,37 +1554,21 @@ namespace ParticleUniverse
  		stopFade(stopTime);
  	}
  	//-----------------------------------------------------------------------
@@ -1386,7 +1389,7 @@ index 7961966..43a57d3 100644
  		}
  	}
  	//-----------------------------------------------------------------------
-@@ -1509,13 +1613,11 @@ namespace ParticleUniverse
+@@ -1509,13 +1616,11 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1401,7 +1404,7 @@ index 7961966..43a57d3 100644
  			mState = ParticleSystem::PSS_PAUSED;
  
  			ParticleTechniqueIterator it;
-@@ -1525,9 +1627,6 @@ namespace ParticleUniverse
+@@ -1525,9 +1630,6 @@ namespace ParticleUniverse
  				(*it)->_notifyPause();
  			}
  		}
@@ -1411,7 +1414,7 @@ index 7961966..43a57d3 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleSystem::pause(Real pauseTime)
-@@ -1543,6 +1642,9 @@ namespace ParticleUniverse
+@@ -1543,6 +1645,9 @@ namespace ParticleUniverse
  			// Generate the event
  			_pushSystemEvent(PU_EVT_SYSTEM_RESUMING);
  

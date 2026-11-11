@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tl::core {
 
@@ -67,6 +68,11 @@ struct MeshPlacement {
     /// A room piece's place in the order the level's objects were made (a link's at its node):
     /// the order `bakeCollision` and `populate` walk a room's pieces in.
     uint64_t made = 0;
+    /// The links a room piece was made through, outermost first, each its kind's rank and the
+    /// order made: `CEditorScene::GetObjectsCreatedByADescriptor` lists a
+    /// scene's own pieces, then each `Layout Link`'s, `Layout Link Particle`'s and `Layout Link
+    /// Timeline`'s in turn.
+    std::vector<uint64_t> link_path;
     /// A piece of a linked layout: `bakeCollision` collides it, `CLevel::populate`
     /// takes no section of it (only the room scene's own `Room Piece`s).
     bool linked = false;

@@ -76,6 +76,8 @@ inline constexpr int kEffectTypePercentMagicItemDamageBonus = 0x67;
 /// refuses a skill outright when the caster
 /// holds one, gated on the skill's own `CSkill +0x70` flag.
 inline constexpr int kEffectTypeSilence = 0x80;
+/// `DESUMMON ON DEATH`, row 129: a unit spawner's `DESTROY BODY` puts it on what it releases.
+inline constexpr int kEffectTypeDesummonOnDeath = 0x81;
 
 /// `CEffect +0x48`: the unit that put the effect on - a skill's caster
 /// (`CSkillEffectAndAffixes::applyAffixesAndEffects`), a blow's
@@ -211,6 +213,11 @@ public:
     bool offer_effect(const Effect& effect, const std::string& affix = std::string(),
                       const std::string& skill = std::string());
     bool has_unit_hook() const { return static_cast<bool>(context_.on_unit); }
+    /// Inside `Context::on_unit`: whether a take is `cloneEffect`'s new copy (true) or an
+    /// effect of this manager's own affix (false).
+    bool offering_copy() const { return offering_copy_; }
+    /// Whether the character's manager (`+0x17c`) exists: made by its first affix or effect.
+    bool made() const { return made_; }
 
     LiveEffect& add_effect(const Effect& effect, const std::string& affix = std::string(),
                            const std::string& skill = std::string());
@@ -274,6 +281,11 @@ public:
     /// touched: a caller recalculates.
     void clear_effects(bool remove_effects);
 
+    /// `CEffectManager::~CEffectManager()`: `clearEffects(false)`, every
+    /// affix's effects rolled again as `~CAffix` takes them off (`calculateBaseValue(0)`, on
+    /// `rolls`) - the draws an item's deletion makes.
+    void destroy(const EffectRolls& rolls);
+
     /// `CEffectManager::calculateEffectValues()`:
     /// the per-type cache every query reads.
     /// Dead effects are left out of it.
@@ -300,8 +312,8 @@ public:
     /// <skill>` finds the bonuses that name it.
     float effect_value(int type, const std::string& name) const;
 
-    /// `CEffectManager::hasEffect(EEFFECT_TYPE)`.
-    ///
+    /// `CEffectManager::hasEffect(EEFFECT_TYPE)`:
+    /// an effect of that type on the passive or dynamic list, dead or not.
     bool has_effect(int type) const;
 
     /// The `SHIELD BUFFER` (0x7a) walk of `CCharacter::modifyDamage`:
@@ -399,6 +411,9 @@ private:
     std::vector<LiveAffix> affixes_;
     /// PORT: the last `LiveAffix::id` given.
     uint32_t last_affix_id_ = 0;
+    /// PORT: `offering_copy()`.
+    bool offering_copy_ = false;
+    bool made_ = false;
     /// `+0x80`: the total per effect type.
     std::array<float, kEffectTypeCacheCount> cache_{};
     /// `+0x2c8`: live unit themes.

@@ -13,6 +13,7 @@
 #include "core/affix_book.h"
 #include "core/ai_flags.h"
 #include "core/ai_skills.h"
+#include "core/ai_state.h"
 #include "core/collision.h"
 #include "core/combat.h"
 #include "core/damage_shape.h"
@@ -47,6 +48,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -88,33 +90,6 @@ bool can_see(const Vec3& from, float facing, const Vec3& at, float motion_radius
 /// the cross product in three `fmsubs`.
 bool can_see_along(const Vec3& from, const Vec3& forward, const Vec3& at, float motion_radius,
                    float view_angle, float sight_range);
-
-/// `EAIState` values the script reads or sets (`CCharacter::setAIState`).
-///
-namespace ai_state {
-inline constexpr int32_t kNone = 0;
-inline constexpr int32_t kFidget = 1;
-inline constexpr int32_t kIdle = 2;
-inline constexpr int32_t kAttack = 3;
-inline constexpr int32_t kHunt = 4;
-inline constexpr int32_t kDying = 5;
-inline constexpr int32_t kDead = 6;
-inline constexpr int32_t kFlee = 10;
-/// `returnToTownAI`
-inline constexpr int32_t kGoingToTown = 0x29;
-/// `updateInTownTimer`
-inline constexpr int32_t kInTown = 0x2a;
-/// `CCharacter::skillAI`
-inline constexpr int32_t kSkill = 0xd;
-/// `performingSkillAI`
-inline constexpr int32_t kPerformingSkill = 0xe;
-/// `skillApproachAI`
-inline constexpr int32_t kSkillApproach = 0xf;
-/// `CMonster::jumpDownAI`
-inline constexpr int32_t kJumpDown = 0x10;
-inline constexpr int32_t kPlayAnimation = 0x23;
-inline constexpr int32_t kScripted = 0x2c;
-}  // namespace ai_state
 
 /// The running script of one loaded layout.
 class LevelScript {
@@ -199,6 +174,12 @@ public:
                             DeathFlight* laid = nullptr);
     /// The character is flying its death flight.
     bool unit_flying(int64_t id) const;
+    /// Whether `die`'s flight would take this death: a killing blow with a direction and a
+    /// force, and a `DEATH_FLIGHT` animation.
+    bool death_would_fly(int64_t id) const;
+    /// `die`'s `DEATH_FLIGHT` branch on a killed character: the
+    /// flight laid and started, a `DeathFlight` event raised. False when it does not fly.
+    bool fly_killed_unit(int64_t id, std::vector<ScriptEvent>& out);
     /// This machine's living characters whose master is `(master_machine, master_node)`,
     /// oldest first: its share of the master's pet list (`die`).
     std::vector<int64_t> pets_of(const LevelScript* master_machine, int64_t master_node) const;
@@ -277,6 +258,13 @@ public:
         player_forward_ = forward;
         player_moving_ = moving;
         player_running_ = running;
+    }
+    /// The player's position (`+0x70`) as `update` takes it, for a caller that does not step the
+    /// machine: the point `level_camera_look_at()` falls back to.
+    void set_player_at(const Vec3& at) {
+        player_at_ = at;
+        // The camera follows the player while nothing holds it (`camera_stop` puts it back there).
+        if (camera_holder_ == 0) camera_look_at_ = at;
     }
     /// The player's `walkingSpeed()` and `runningSpeed()`,
     /// which a pet's `idleAI` compares and
@@ -359,6 +347,10 @@ public:
     /// `KSETTINGS_PLAYER_UNTARGETABLE` (`PLAYERNOTARGET`, `CConsole::executeCommandLine`);
     /// `CGame::CGame` resets it.
     void set_player_untargetable(bool on) { player_untargetable_ = on; }
+    /// The player's own targetable byte (`+0x511` on the console): `CMonster::reactToDamage` against an
+    /// untargetable attacker ends before its roll. INVENTED: the player's `UNTARGETABLE` and `TARGETABLE`
+    /// animation keys do not set it.
+    void set_player_targetable(bool on) { player_targetable_ = on; }
     /// The interface's half of `CGameUI::getUIIsInCinematic`:
     /// the cinematic menu (`+0x540`) and the
     /// interactive menus counted in `+0x178c`, which only the scene knows.
@@ -374,6 +366,10 @@ public:
     /// `CCharacter::mana()` and `maxMana()`
     /// of this machine's character.
     bool unit_mana(int64_t id, float& mana, float& max);
+    /// The unit's `[SKILL]` blocks read now (`CBaseUnit::unitInit` reads them as the unit is
+    /// made; the port's machine otherwise reads them on the first update): for a caller that
+    /// fires the unit's create-event skills before any update.
+    void ensure_unit_skills(int64_t id);
     /// `CCharacter::performingSkillLoose` on
     /// a placed unit: a skill held and its animation up or not run out.
     bool unit_skill_holds(int64_t id) const;
@@ -386,9 +382,23 @@ public:
     std::optional<UnitStats::Alignment> unit_side(int64_t id) const;
     /// The character's `+0x640` is the player.
     bool unit_is_player_pet(int64_t id) const;
+    /// A placed unit's `NO GOLD` / `NO TREASURE` (`CCharacter +0x63b` / `+0x63c`); false when
+    /// missing.
+    bool unit_no_gold(int64_t id) const;
+    bool unit_no_treasure(int64_t id) const;
+    /// `CCharacter::alignment()` of a character (with the `TURN ALIGNMENT` swap); -1 when missing.
+    int32_t unit_console_alignment(int64_t id) const;
+    /// A `CHAMPION` character's rolled name (`+0x4c0`), empty for none.
+    std::string unit_champion_name(int64_t id) const;
+    /// `CBaseUnit::ISA` of one of this machine's characters.
+    bool character_isa(int64_t id, uint32_t want) { return unit_isa(updated_character(id), want); }
     /// The character's `+0x640` is set: the player or a character the level
     /// still runs (`has_master`).
     bool unit_has_master(int64_t id) const;
+    /// The character's `+0x5a4` when it is a character a level runs (not the player).
+    bool unit_master(int64_t id, LevelScript*& machine, int64_t& node) const;
+    /// The character's target item (X360 `+0x28c`), 0 for none.
+    int64_t unit_target_item(int64_t id) const;
     /// `CCharacter::setVisible` with `+0x70d`, as `applyInstantEffect`'s `FADE OUT` (0x6f) and
     /// `SET VISIBLE` (0x70) and `updateAnimation`'s mesh keys set it; damage shapes pass over
     /// a hidden character (`characterUpdatedInLevel`). `immediate`: at once, or
@@ -514,6 +524,9 @@ public:
     void set_link_activation(std::function<void(int64_t link, std::vector<ScriptEvent>& out)> f) {
         link_activation_ = std::move(f);
     }
+    /// `CQuestManager::calculateNPCIcon` for a character, which a Monster's
+    /// Show, Hide, Enable and Disable end.
+    void set_npc_icon(std::function<void(const std::string& unit)> f) { npc_icon_ = std::move(f); }
 
     /// How long a unit's animation runs in seconds, negative when it has none by that name:
     /// `CGenericModel::getAnimationLengthSeconds`.
@@ -606,6 +619,14 @@ public:
         /// on the unit's manager.
         std::function<void(LevelScript& machine, int64_t node, const std::string& name)>
             stop_by_name;
+        /// `CLevel::findItemWithinView` from `at` turned along
+        /// `forward` (a skill's frame), within `angle` degrees either side and `reach`: the
+        /// breakable's id, 0 for none.
+        std::function<int64_t(LevelScript& machine, int64_t node, const Vec3& at,
+                              const Vec3& forward, float angle, float reach)>
+            item_within_view;
+        /// Where a breakable stands (`getPosition(true)`); false when it is gone.
+        std::function<bool(int64_t item, Vec3& at)> item_position;
         /// `CGameGlobals +0x60`, `MANA_RECHARGE_RATE`: a percent of the pool
         /// per second (`CCharacter::updateMana`).
         float mana_recharge_rate = 0.0f;
@@ -628,6 +649,12 @@ public:
         std::function<void(LevelScript& machine, int64_t node, int type,
                            LevelScript* target_machine, int64_t target_node, bool has_target)>
             procs;
+        /// A damage shape's own hit when not over time: an ownerless instant `DAMAGE` effect of
+        /// `amount` and the shape's damage type, pointing along `direction`, through the
+        /// character's `applyEffectOnUnit`.
+        std::function<void(LevelScript& machine, int64_t node, float amount, int32_t damage_type,
+                           const Vec3& direction)>
+            shape_hit;
     };
     void set_unit_skills(UnitSkills hooks) { unit_skills_ = std::move(hooks); }
     /// `CSkillManager::addSkill` on the character's own manager: a spell the
@@ -742,6 +769,10 @@ public:
     /// level (units, then `iLevelUpdate`), interface (dialogs), then descriptors in
     /// `CLayoutScene::createDescriptors` order. The level runs on `delta` times the game speed.
     void update(float delta, const Vec3& player, QuestState& quests, std::vector<ScriptEvent>& out);
+    /// `CLevel::updateLayouts` alone: each descriptor's
+    /// update (vtable `+0x100`) with `delta`, as `update` runs it and `loadLevel` once at 0.001.
+    void update_layouts(float delta, const Vec3& player, QuestState& quests,
+                        std::vector<ScriptEvent>& out);
 
     /// `CGameSpeed::getGameSpeed()` times the client's multiplier: `CLevel::update`
     /// runs the near-unit timer, level-update objects and
@@ -765,8 +796,11 @@ public:
     bool has_characters() const { return !characters_.empty(); }
 
     /// `Play` on a `Layout Link Timeline`: run the timelines this layout marks
-    /// `LAYOUT CONTROL`.
-    void play_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out, bool backwards);
+    /// `LAYOUT CONTROL`. `restart`: the layout's start (state 0, from
+    /// `CLayout::initOnLoad` and `CSkillEvent::startEvent`), each timeline reset to its
+    /// beginning and stopped before it plays, so a key at 0 fires.
+    void play_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out, bool backwards,
+                               bool restart = false);
     void stop_layout_timelines(QuestState& quests, std::vector<ScriptEvent>& out);
     /// `CLayout::callFunctionOnObjects(stop)` on a timeline or particle
     /// layout's `Sound` nodes: those whose bank loops are stopped, the rest play out.
@@ -787,8 +821,11 @@ public:
     size_t arm_hostiles();
 
     /// `CLevel::addCharacter` ends with `dropToGround(4.0)`:
-    /// every character placed here stood on the floor once the collision is in.
+    /// every character placed here stood on the floor once the collision is in. A character
+    /// already dropped by its own add (`mark_dropped`) is not dropped again.
     void drop_characters_to_ground(std::vector<ScriptEvent>& out);
+    /// The character's `addCharacter` drop was made where it was placed (a populated unit).
+    void mark_dropped(int64_t id);
 
     bool node_targetable(int64_t id) const;
     /// `CSceneNodeObject::getEnabled` on a node this machine holds; a node it
@@ -824,6 +861,9 @@ public:
         std::function<std::vector<DamageShapeItem>()> list;
         /// `CItem::interact(nullptr)` (vtable +0x280).
         std::function<void(int64_t item)> interact;
+        /// Every one standing, near or not, and the interact made at once: an instant shape's.
+        std::function<std::vector<DamageShapeItem>()> all;
+        std::function<void(int64_t item)> interact_now;
     };
     void set_level_items(const LevelItems* items) { level_items_ = items; }
     /// `CLevel::updateItems`: every update listener's
@@ -918,12 +958,21 @@ public:
     /// A unit a `Unit Spawner` has just released. `creation`, when given, is
     /// what making it already drew; otherwise it is drawn here.
     void add_spawned_unit(int64_t id, const std::string& unit, const Vec3& at, bool hunts,
-                          float facing = 0.0f, const UnitCreation* creation = nullptr);
+                          float facing = 0.0f, const UnitCreation* creation = nullptr,
+                          bool activate_effects = true);
+    /// The own effects' activation `make_character` left out (`activate_effects` false).
+    void activate_own_effects(int64_t id);
+    /// A released unit's `TARGET PLAYER`: the player as target, `MONSTER_HUNT`, the AI flag.
+    void hunt_player(int64_t id);
+    /// `CCharacter::spawn` opens with `calculateActiveRange` against the
+    /// camera's focal point; true when the unit is visible and in active range, which is what
+    /// its entrance (AI state 12, the animation, `SPAWN_SOUND`) is gated on.
+    bool spawn_in_active_range(int64_t id, std::vector<ScriptEvent>& out);
 
     /// `CCharacter::makeChampion(name, theme)`, as
     /// `CLevel::populateSectionOfLevel` runs it: the figures
     /// and scale + 0.2; name and theme are the caller's. False for a non-character or champion.
-    bool make_unit_champion(int64_t id);
+    bool make_unit_champion(int64_t id, const std::string& name);
 
     /// A character's scale (`+0x98`); 0 for a node that is not one.
     float unit_scale(int64_t id) const;
@@ -940,6 +989,8 @@ public:
 
     /// A unit that moved under its own steam (the pet).
     void move_unit(int64_t id, const Vec3& at);
+    /// `setOrientation` and `setPosition` on a character at once (`SWAP POS WITH PET`).
+    void place_unit(int64_t id, const Vec3& at, float facing);
 
     void remove_spawned_unit(int64_t id);
 
@@ -1024,6 +1075,8 @@ public:
     /// `AC()`, `maxHP()`, `damageDefense(type)`); false for a node that is
     /// not a character.
     bool unit_defender(int64_t id, Defender& out) const;
+    /// What `setLevel` and `makeChampion` left on a character; null for a node that is not one.
+    const UnitCombat* unit_combat(int64_t id) const;
     /// A unit's own `+0x620`, by `EDAMAGE_TYPES`, as `applyDamageEffects`
     /// reads it - without the effects
     /// `damageDefense` adds.
@@ -1048,11 +1101,15 @@ public:
     /// Where a script-run unit stands, feet on the ground; false when it is not
     /// one.
     bool unit_position(int64_t id, Vec3& at) const;
+    /// The body's centre (`getPosition(true)`), as the motion keeps it.
+    bool unit_centre(int64_t id, Vec3& at) const;
     /// A unit's final target position (X360 +0x1c0): where `castSkill` aimed
     /// a skill at a place.
     bool unit_final_target(int64_t id, Vec3& at) const;
     /// A script-run unit's collision radius (`+0x194`), 0 when it is not one.
     float unit_radius(int64_t id) const;
+    /// A unit's `COLLISION_RADIUS` by its name, before any character of it is made.
+    float unit_radius_of(const std::string& unit) const { return stats_for(unit).radius; }
     /// A script-run unit's target (`CCharacter +0x340`): false when it holds
     /// none. A null `machine` is the player.
     bool unit_target(int64_t id, LevelScript*& machine, int64_t& node) const;
@@ -1079,6 +1136,10 @@ public:
         unit_effect_tables_ = tables;
         has_unit_effect_tables_ = true;
     }
+    /// Those tables, null until they are set.
+    const EffectManager::Context* unit_effect_tables() const {
+        return has_unit_effect_tables_ ? &unit_effect_tables_ : nullptr;
+    }
     /// The affixes a unit's `[AFFIXES]` name (`CEffectGroupManager`).
     // PORT: the level machine's wiring, set by the renderer.
     void set_affix_book(const AffixBook* affixes) { affix_book_ = affixes; }
@@ -1087,9 +1148,13 @@ public:
     // PORT: the level machine's wiring, set by the renderer.
     void set_sound_data(const SoundDataInformation* sounds) { sound_data_ = sounds; }
     /// Whether the sound system starts a sound it is asked to play; past that
-    /// `CSoundManager::` `playSound` draws the volume variation. Unset: never.
-    // PORT: the level machine's wiring, set by the renderer.
+    /// `CSoundManager::` `playSound` draws the volume variation. Unset: the
+    /// console's rule, a play that `playSound`'s zero-volume cull lets through.
+    // PORT: a check's replay of the console's answers.
     void set_audio_plays(std::function<bool()> plays) { audio_plays_ = std::move(plays); }
+    /// Where the sound listener stands now (`CSoundManager +0x14`/`+0x1c`).
+    // PORT: the level machine's wiring, set by the renderer.
+    void set_listener(std::function<Vec3()> listener) { listener_ = std::move(listener); }
     /// Whether a unit's model, as `CCharacter::loadModel`
     /// loads it, adds a sound sample from its animations' keys
     /// (`manifest_adds_sound_sample`), by unit name.
@@ -1099,7 +1164,9 @@ public:
     }
     /// `CBaseUnit::activateEffect(CEffect*)`
     /// on a level unit: a cast-skill effect teaches it its skill.
-    void activate_unit_effect(int64_t node, Effect& effect);
+    /// `construct` false: the effect's skill was already made when the effect was rolled
+    /// (`roll_own_effects`, as `createEffect` activates it), so no `CSkill::CSkill` again.
+    void activate_unit_effect(int64_t node, Effect& effect, bool construct = true);
     /// A character's own `[EFFECT]`s as it was made (rolled), or null.
     // PORT: an accessor of the level machine's unit records.
     const std::vector<Effect>* unit_own_effects_made(int64_t id) const;
@@ -1158,13 +1225,32 @@ public:
     /// `CCharacter::die`'s `playSample(12)`, after its procs: the unit's
     /// `DEATH_SOUND`, unless its death already played it.
     void play_death_sample(int64_t id, std::vector<ScriptEvent>& out);
+    /// `CCharacter::applyInstantEffect`'s hit sample: the slot of the damage
+    /// type (fire, ice, electric, poison; physical for the rest), dead or not.
+    void play_hit_sample(int64_t id, int damage_type, std::vector<ScriptEvent>& out);
     /// While set, a death leaves its sample to `play_death_sample` (the caller runs the
     /// death's procs first).
-    void set_defer_death_sample(bool defer) { defer_death_sample_ = defer; }
+    void set_defer_death_sample(bool defer) {
+        defer_death_sample_ = defer;
+        defer_death_broadcast_ = defer;
+    }
+    /// While set, a death's `Monster Killed` broadcast is owed, not made: `die` sends it
+    /// (`BroadcastEventFromObject`) after the treasure, which the caller runs.
+    void set_defer_death_broadcast(bool defer) { defer_death_broadcast_ = defer; }
+    /// The broadcast a deferred death owes, made now; nothing when none is owed.
+    void broadcast_owed_death(int64_t id, QuestState& quests, std::vector<ScriptEvent>& out);
+    /// A death deferred by `set_defer_death_sample`: its friends' `reactToAreaDamage`, which
+    /// `applyDamage` makes after `die` and the awards.
+    void react_after_death(QuestState& quests, std::vector<ScriptEvent>& out);
+    /// Whether the unit's death was a burst (`die`'s fourth argument), forgotten once asked.
+    bool take_burst_death(int64_t id) { return burst_deaths_.erase(id) != 0; }
     /// `CCharacter::die`'s `findRandomAnimation("DIE")` for a death that
-    /// neither flies nor bursts: the name, empty when the model has none.
-    std::string death_animation(int64_t id) const;
+    /// neither flies nor bursts: the name, empty when the model has none. Its length is the
+    /// body's time in state 5.
+    std::string death_animation(int64_t id);
     bool unit_is_dead(int64_t id) const;
+    /// `+0x70d` (X360 `+0x645`): the character's mesh hidden on purpose.
+    bool unit_mesh_hidden(int64_t id) const;
     /// Whether any unit of this machine is dead (`unit_is_dead` is false for every id if not).
     bool has_dead_units() const { return !dead_.empty(); }
 
@@ -1227,9 +1313,13 @@ public:
 
     /// `CPlayer::storeLevelSavedState`, one room layout's
     /// loop: this machine's logic nodes as `CLogicNodeState`s; `hierarchy` is the link
-    /// chain's hash.
+    /// chain's hash. With `only` (0 .. `store_descriptors()` - 1), only that kind;
+    /// `top_parent` is the parent a node at the file's top records (its `Layout Link`).
     void store_logic_states(uint32_t scene, int64_t hierarchy,
-                            std::vector<tl::formats::LogicNodeState>& out) const;
+                            std::vector<tl::formats::LogicNodeState>& out, int only = -1,
+                            int64_t top_parent = -1) const;
+    /// How many descriptor kinds the store walks, each over a room's every layout in turn.
+    static int store_descriptors();
 
     /// `CGameClient::restoreLevelState`, the
     /// same loop the other way.
@@ -1248,6 +1338,10 @@ public:
         float facing = 0.0f;
         float hp = 0.0f;  ///< `+0x414`
         int level = 0;    ///< `+0x100`
+        /// A `CHAMPION` unit's rolled name (`+0x4c0`), empty for none.
+        std::string champion_name;
+        /// Its master's node (`+0x5a4`), -1 for none; one in another machine counts too.
+        int64_t master = -1;
         /// What it holds in equip locations 0 and 1 (`CCharacter::fillSaveState`
         /// writes its inventory). `equipment` says
         /// the record carries them, for `apply_character_record`.
@@ -1258,9 +1352,8 @@ public:
         UnitStats::WeaponAttack left_weapon_attack;
     };
 
-    /// The characters `storeLevelSavedState` keeps: alive, not deleted, not
-    /// moved from outside (the pet). The original's second pass (units with a
-    /// master) finds nothing here: no monster in this engine has one.
+    /// The characters `storeLevelSavedState` keeps: alive, not deleted, not the
+    /// player's pets, in this machine's order; `master` says which pass takes each.
     std::vector<CharacterRecord> living_characters() const;
 
     /// `CCharacter::applySaveState` on a
@@ -1293,6 +1386,10 @@ public:
         std::string unit;
         std::string name;
         Vec3 position;
+        /// Where it stands in its own file (`getPosition(false)`), and the node it hangs
+        /// from there (0 for none).
+        Vec3 local_position;
+        int64_t parent = 0;
         bool enabled = true;
         /// A `Property Node`: its `TYPE`, `RADIUS`, `BOX WIDTH` and `BOX LENGTH`.
         std::string kind;
@@ -1306,6 +1403,8 @@ public:
         Vec3 forward{0.0f, 0.0f, 1.0f};
     };
     std::vector<NodeRecord> nodes_of_type(uint32_t type) const;
+    /// Every node's id, in the file's order.
+    std::vector<int64_t> node_order() const;
 
     /// The player has just been stood at `player`. DIVERGENCE, with
     /// `enable_proximity_unit_triggers()`: a `Unit Trigger` within reach counts as already
@@ -1413,6 +1512,8 @@ private:
         bool path_forward = true;         ///< +0x770
         bool path_loops = false;          ///< +0x771
         bool cannot_wander = false;       ///< +0x7f0 CANNOT WANDER
+        bool no_gold = false;             ///< NO GOLD: `CCharacter +0x63b` `m_bDontDropGold`
+        bool no_treasure = false;         ///< NO TREASURE: `+0x63c` `m_bDontDropTreasure`
         bool fire_all_hp_events = false;  ///< CMonsterDescriptor index 8 / +0x1d1
         // The player's path stand-in only (`path_follow` without a character).
         bool has_destination = false;
@@ -1636,6 +1737,11 @@ private:
     ///
     void broadcast(int64_t from, uint32_t output, QuestState& quests,
                    std::vector<ScriptEvent>& out);
+    /// A layout link's Particle Started / Stopped (script_layout.cpp): twice for a particle link.
+    void link_output(const Object& o, uint32_t output, QuestState& quests,
+                     std::vector<ScriptEvent>& out);
+    /// A Monster's input ending in `CQuestManager::calculateNPCIcon` (script_layout.cpp).
+    void monster_npc_icon(const Object& o);
 
     /// The target descriptor's `InputLogicEvent`.
     void input(int64_t to, uint32_t input, QuestState& quests, std::vector<ScriptEvent>& out);
@@ -1733,6 +1839,8 @@ private:
     void add_character_update_listener(int64_t id);
     void remove_character_update_listener(int64_t id);
     void flush_character_update_listeners();
+    /// Every machine's listeners after each machine's flush, the level's newest first.
+    std::vector<std::pair<LevelScript*, int64_t>> level_character_listeners();
     void character_updated_in_level(const UpdatedCharacter& who, float delta, QuestState& quests,
                                     std::vector<ScriptEvent>& out);
 
@@ -1741,7 +1849,7 @@ private:
     void damage_shape_update(Object& o, float delta, QuestState& quests,
                              std::vector<ScriptEvent>& out);
     void damage_shape_instant(Object& o, QuestState& quests, std::vector<ScriptEvent>& out);
-    void damage_shape_item_updated(int64_t id, const DamageShapeItem& item);
+    void damage_shape_item_updated(int64_t id, const DamageShapeItem& item, bool now = false);
     const LevelItems* level_items_ = nullptr;
     void damage_shape_character_updated(int64_t id, const UpdatedCharacter& who, float delta,
                                         QuestState& quests, std::vector<ScriptEvent>& out);
@@ -1828,6 +1936,8 @@ private:
     /// A node by id: the player for 0, this machine's character, else the first
     /// machine of the level's list that runs one.
     UnitRef resolve(int64_t node);
+    /// The unit that struck a blow (`damage_unit`'s attacker): none for the player.
+    UnitRef blow_attacker(int64_t attacker, LevelScript* attacker_machine);
     /// The level's list (`set_level_machines`), or this machine alone.
     MachineWalk level_machines() const;
     /// Stands in for the list when there is none; refreshed on every call, as a
@@ -1871,7 +1981,9 @@ private:
         /// (`CSkillEvent::unitSpawnedFromUnitSpawner`). Unset: the
         /// unit's `UnitStats` alignment.
         std::optional<UnitStats::Alignment> alignment;
-        MotionState motion;        ///< +0x84 (the sphere's centre), velocity, ground
+        MotionState motion;  ///< +0x84 (the sphere's centre), velocity, ground
+        /// `CLevel::addCharacter`'s `dropToGround` has run on it: once per add.
+        bool dropped = false;
         float facing = 0.0f;       ///< the yaw of +0xb4
         float home_facing = 0.0f;  ///< the yaw it was placed with
         bool face_home = false;    ///< turning back to it after a conversation
@@ -1920,6 +2032,15 @@ private:
         /// the flight).
         bool flying = false;
         bool flown = false;
+        /// The blow `die` was handed (`applyDamage`'s direction and force), and whether the
+        /// player dealt it.
+        bool has_killing_blow = false;
+        Vec3 killing_direction;
+        float killing_force = 0.0f;
+        bool killed_by_player = false;
+        /// `dyingAI`: what is left of the death animation; state 6 once it
+        /// has run (at once with none).
+        float dying_left = 0.0f;
         DeathFlight flight;
         float flight_distance = 0.0f;
         /// `+0x682`: a `Jump Down Area` let it jump (`setAllowJumpDown`)
@@ -1937,7 +2058,8 @@ private:
         float jump_idle_at = 0.0f;
         bool has_target = false;  ///< +0x340 set
         UnitRef target;           ///< +0x340
-        bool hunt_affix = false;  ///< `MONSTER_HUNT` added
+        /// X360 `+0x28c`, the breakable `setTargetItem` holds, by id; 0 none.
+        int64_t target_item = 0;
         /// `+0x708`: 1.0 when an own proc casts, run down by `update`;
         /// `applyDamage`'s struck procs wait
         /// for it.
@@ -1954,6 +2076,8 @@ private:
         /// gives every `ISA 0xa7` (`MIMIC`): asleep as a chest (unhurt, harmless, unfound, seeing
         /// only its motion radius) until its AI leaves idle or something strikes it.
         bool mimic_idle = false;
+        /// A `CHAMPION`'s name from `unitInit` (`+0x4c0`); empty for anything else.
+        std::string champion_name;
         /// `+0x710`, the pet stance (`set_unit_stance`): 1 from the constructor.
         int32_t stance = 1;
         /// `+0x664`, `CANMATCHSPEED` (`unitInit`).
@@ -2025,9 +2149,10 @@ private:
     /// `carried`: a character being re-made as another unit
     /// (`convert_character`), whose effects, side, place in its master's list
     /// and the like the new one keeps; null for a new character.
+    AIStatWatcherHooks stat_watcher_hooks(int64_t my_id);
     Character& make_character(const Object& o, const Vec3& at, float facing,
                               const UnitCreation* creation = nullptr,
-                              const Character* carried = nullptr);
+                              const Character* carried = nullptr, bool activate_effects = true);
     const UnitStats& stats_for(const std::string& unit) const;
     Vec3 position_of(const Object& o) const;
     std::string target_unit(const UnitRef& target) const;
@@ -2172,6 +2297,16 @@ private:
         Vec3 forward{0.0f, 0.0f, 1.0f};
     };
     ViewFrame skill_frame(const Character& c) const;
+    /// The target item's place (`getPosition(true)`); false with none.
+    bool target_item_at(const Character& c, Vec3& at) const;
+    /// Neither a character nor an item targeted.
+    static bool targets_nothing(const Character& c) { return !c.has_target && c.target_item == 0; }
+    /// With no target, `CLevel::findItemWithinView` on the skill's frame and
+    /// reach, and `setTargetItem` on what it finds; nothing while dying or dead.
+    void find_target_item(const Object& o, Character& c, const UnitSkill& s, float angle,
+                          float reach);
+    /// With no target, the target item as the target `getSkillCanBeExecuted` is asked about.
+    void aim_at_target_item(const Character& c, SkillCaster& caster) const;
     /// `CLevel::findCharacterWithinView` with the cone given.
     bool find_within_view(const ViewFrame& frame, const Object& o, int32_t alignment, float motion,
                           float view, float sight, bool nearest, const UnitSkill* skill,
@@ -2180,9 +2315,13 @@ private:
     ///
     static bool of_alignment(int32_t wanted, int32_t side, bool targetable);
     /// The near list (`CLevel +0x54`) in the order the level keeps it.
-    std::vector<UnitRef> near_list_order();
+    std::vector<UnitRef> near_list_order() const;
     /// `CCharacter::getEffectValue(type, 7)` on a level unit.
     float character_effect(const Character& c, int type) const;
+    /// `CBaseUnit::addAffix(L"MONSTER_HUNT", 1, -1.0f, unit)` on a character's own
+    /// manager, made when it has none; `deleteAffix` takes it off.
+    void add_hunt_affix(int64_t id);
+    void delete_hunt_affix(int64_t id);
     /// `CCharacter::sightRange`.
     float sight_range(const Object& o, const Character& c) const;
     /// `CCharacter::getTargetAlignment`: 3
@@ -2251,8 +2390,7 @@ private:
 public:
     /// `CCharacter::applyEffectOnUnit`, `FLEE EFFECT`
     /// (0x4f): `chance` is the effect's value, `duration` how long it is held, `source` where
-    /// it came from. True when the character turned to flee now (the caller plays
-    /// `FLEE_SOUND`, sample 0xe).
+    /// it came from; `FLEE_SOUND` is the unit's bank sample 0xe. True when the effect is copied in.
     bool apply_flee_effect(int64_t node, float chance, float duration, const Vec3* source,
                            QuestState& quests, std::vector<ScriptEvent>& out);
     /// A living character this machine runs, by node, and its unit name
@@ -2262,6 +2400,10 @@ public:
     /// machine's unit `node` (dead or alive) to `other`'s unit `other_node`; a
     /// null `other` is the player. False when either is missing.
     bool unit_is_enemy_of(int64_t node, LevelScript* other, int64_t other_node) const;
+    /// The owner gates of `CSkillEvent::getCharacterCanBeAffectedByDamageShape`
+    /// that pass every character: `BERSERK` (the AI manager's flag 1
+    /// with time left) or `alignment()` 4. False when the unit is missing.
+    bool unit_affects_anyone(int64_t node) const;
     /// Every `Damage Shape` node of this machine, in creation order.
     std::vector<int64_t> damage_shape_ids() const;
     /// The node-expansion cap of character `node`'s pathfinder (`+0x6c`), or
@@ -2379,19 +2521,38 @@ private:
                     std::vector<ScriptEvent>& out);
 
     LayoutFrame frame_;
+    void parent_axes(const Object& o, const Object*& parent, Vec3& r, Vec3& u, Vec3& f) const;
+    /// A node's own position (`getPosition(false)`, `+0x70`): relative to the node it hangs from.
+    Vec3 own_position(const Object& o) const;
+    /// The level's place of a node whose own position is `own`.
+    Vec3 position_from_own(const Object& o, const Vec3& own) const;
     const std::vector<LevelScript*>* level_ = nullptr;
     std::map<int64_t, Character> characters_;
     /// The same characters in the order they were made - the level list's
     /// order within this machine - so a search of the whole level walks
     /// characters rather than every node of every room.
     std::vector<int64_t> character_order_;
+    /// When each character joined, on a count the level's machines share: the level's near
+    /// list (`+0x54`) is one list, newest first, across every layout's machine.
+    std::unordered_map<int64_t, uint64_t> character_stamps_;
     /// This machine's characters ever given a master (`set_unit_master`), the only ones
     /// `pets_of` can find: it looks at these, not at every character.
     std::vector<int64_t> mastered_;
     void forget_character(int64_t id);
     std::set<int64_t> dead_;
     bool defer_death_sample_ = false;
+    bool defer_death_broadcast_ = false;
+    std::set<int64_t> owed_death_broadcasts_;
+    struct DeferredAreaReact {
+        int64_t attacker = 0;
+        LevelScript* attacker_machine = nullptr;
+        int64_t victim = 0;
+        Vec3 at;
+        float radius = 0.0f;
+    };
+    std::optional<DeferredAreaReact> deferred_area_react_;
     std::set<int64_t> death_sampled_;
+    std::set<int64_t> burst_deaths_;
     PassabilityMap* passability_ = nullptr;
     const StatBook* graphs_ = nullptr;
     int difficulty_ = difficulty::kHard;
@@ -2404,14 +2565,21 @@ private:
     CharacterEffects master_effects(const Character& c) const {
         return c.master_player ? player_effects_ : CharacterEffects{};
     }
+    /// `CCharacter::maxHP` of a level character: its own `PERCENT HP` and `MAX HP`, its
+    /// master's `PERCENT PET HEALTH`.
+    int character_max_hp(const Character& c) const;
     float player_radius_ = kDefaultCollisionRadius;
     std::function<std::vector<std::pair<std::string, float>>(const std::string&)>
         animation_catalog_;
     std::function<void(int64_t, std::vector<ScriptEvent>&)> link_activation_;
+    std::function<void(const std::string&)> npc_icon_;
     /// `CLevel +0xd0`: this machine's character-update listeners (its Damage
     /// Shapes), the newest first, and `+0x2d8`, the removals waiting for
     /// `flushCharacterUpdateListeners`.
     std::vector<int64_t> character_listeners_;
+    /// When each of `character_listeners_` was added, on a count the level's machines share:
+    /// the original keeps one list for the whole level.
+    std::vector<uint64_t> character_listener_stamps_;
     std::vector<int64_t> character_listener_removals_;
     /// Events for this machine's nodes raised while another machine ran,
     /// handed out at the start of this one's next `update`.
@@ -2429,6 +2597,7 @@ private:
     const SoundDataInformation* sound_data_ = nullptr;
     std::function<bool(const std::string& unit)> model_sounds_;
     std::function<bool()> audio_plays_;
+    std::function<Vec3()> listener_;
 
     std::vector<Object> objects_;
     /// Object id to its place in `objects_`; looked up, never walked.
@@ -2453,6 +2622,9 @@ private:
     /// A unit's own effects rolled as made (`graphs_` set), a skill one teaches constructed with `with`.
     void roll_own_effects(std::vector<Effect>& effects, EffectRolls& rolls,
                           SkillConstruction& with) const;
+    /// A made unit's own manager: its own effects, then its `[AFFIXES]` when `affixes`.
+    void make_unit_effects(UnitCreation& made, const UnitStats& stats, bool affixes, int fallback,
+                           const EffectRolls& rolls) const;
     std::vector<int64_t> made_order_;
     Vec3 activation_listener_;
     std::vector<int64_t> logic_groups_;
@@ -2488,6 +2660,13 @@ private:
     /// How many of `character_order_` the level held when the player joined
     /// (`CLevel::addCharacter` puts it at the head). Past the end: last.
     size_t player_joined_ = static_cast<size_t>(-1);
+    /// The player's place on that count; the newest of all until it joins.
+    uint64_t player_stamp_ = std::numeric_limits<uint64_t>::max();
+    // PORT: the count `character_stamps_` and `player_stamp_` take their places from.
+    static uint64_t next_level_stamp() {
+        static uint64_t count = 0;
+        return ++count;
+    }
 
     struct FloatyLine {
         int64_t node = 0;
@@ -2518,6 +2697,7 @@ private:
     bool level_is_town_ = false;
     bool game_playing_ = true;
     bool player_untargetable_ = false;
+    bool player_targetable_ = true;
     bool ui_cinematic_ = false;
     std::vector<int64_t> back_from_town_;
     bool player_enabled_ = true;

@@ -155,9 +155,12 @@ void World::restore_merchant(const tl::formats::CharacterSaveState& saved) {
     ensure_item_index();
     load_stat_graphs();
     for (const tl::formats::ItemSaveState& item : saved.inventory) {
-        const tl::core::ItemStats* data = items.find(item.name);
-        if (data == nullptr) continue;
-        tl::core::ItemStats copy = create_item(*data, true, true);
+        // `createUnit(guid, 1, true, false)` and the item's own `applySaveState`,
+        // as a level's saved inventory is remade: no `[EFFECT]`s, no
+        // enchant, `unitInit`'s scale roll, the record version's damage re-roll.
+        std::optional<tl::core::ItemStats> made = item_from_save(item);
+        if (!made) continue;
+        const tl::core::ItemStats& copy = *made;
         const int count = std::max(1, item.value);
         int landed = item.slot;
         if (item.slot < 0 || !state.inventory.pickup_into_slot(copy, count, item.slot)) {

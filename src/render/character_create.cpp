@@ -1436,53 +1436,10 @@ MenuAction CharacterCreate::update(const tl::core::InputState& input) {
         return MenuAction::None;
     }
 
-    // The pointer: over a window, the focus; a click, A on it; the right button, B.
-    pointer_.step(input);
-    const bool alt_back = pointer_.alt_pressed;
-
     if (console_mode_) {
-        bool clicked = false;
-        if (pointer_.acting()) {
-            const auto under = [&](const std::vector<Widget>& widgets) -> const Widget* {
-                for (const Widget& widget : widgets) {
-                    if (!widget.window.empty() && pointer_over(input, widget.panel)) return &widget;
-                }
-                return nullptr;
-            };
-            const Widget* hit = under(icons_);
-            if (hit == nullptr) hit = under(buttons_);
-            if (hit == nullptr) hit = under(console_frame_);
-            for (size_t row = 0; hit != nullptr && row < grid_.size(); ++row) {
-                for (size_t column = 0; column < grid_[row].size(); ++column) {
-                    if (grid_[row][column] != hit->window) continue;
-                    focus_.row = static_cast<int>(row);
-                    focus_.column = static_cast<int>(column);
-                    clicked = pointer_.pressed;
-                }
-            }
-        }
         return update_console({turn_edge ? (right ? 1 : -1) : 0, move_edge ? (down ? 1 : -1) : 0,
-                               confirm_edge || clicked, back_edge || alt_back});
+                               confirm_edge, back_edge});
     }
-
-    // The PC screen: a class's icon picks it; Back, OK and the two pets are its buttons.
-    if (pointer_.acting()) {
-        for (size_t i = 0; i < icons_.size(); ++i) {
-            if (!pointer_over(input, icons_[i].panel)) continue;
-            if (selected_ != static_cast<int>(i)) {
-                selected_ = static_cast<int>(i);
-                selection_changed_ = true;
-            }
-        }
-        for (size_t i = 0; pointer_.pressed && i < buttons_.size(); ++i) {
-            if (!pointer_over(input, buttons_[i].panel)) continue;
-            if (i == 0) action = MenuAction::Quit;
-            if (i == 1) action = MenuAction::NewGame;
-            if (i == 2) select_pet("Dog");
-            if (i == 3) select_pet("Cat");
-        }
-    }
-    if (alt_back) action = MenuAction::Quit;
 
     // The PC screen, on a pad: up and down walk the classes, left and right
     // choose the pet, A is OK and B is Back.

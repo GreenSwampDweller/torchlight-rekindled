@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffectorFactory.h
+index 8bf4de4..f5ec123 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseSineForceAffectorFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			SineForceAffectorFactory(void) {};
++	        // Torchlight: `SineForceAffectorFactory::~SineForceAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~SineForceAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `SineForceAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "SineForce";

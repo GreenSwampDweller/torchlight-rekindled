@@ -164,6 +164,10 @@ struct ViewFrame {
     OgreQuaternion orientation;
 };
 
+/// The frame `castSkill` hands `findItemWithinView`:
+/// `FromAxes(UNIT_Y x forward, UNIT_Y, forward)` at `at`.
+ViewFrame view_frame_along(const Vec3& at, const Vec3& forward);
+
 /// `CLevel::findItemWithinView`, the test on
 /// one candidate: through the inverse of the attacker's transform, the angle
 /// `atan2(x, z)` within `max_angle` degrees either side and the distance in

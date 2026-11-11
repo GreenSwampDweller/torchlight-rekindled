@@ -10,7 +10,6 @@
 #include "core/randomizer.h"
 #include "core/units.h"
 #include "formats/cegui.h"
-#include "render/menu_pointer.h"
 #include "render/renderer.h"
 
 #include <OgrePrerequisites.h>
@@ -165,6 +164,13 @@ public:
     /// One frame of input. `NewGame` when Done (or OK) was pressed, `Quit` for
     /// Back.
     MenuAction update(const tl::core::InputState& input);
+    /// `input` as the screen reads it under the mouse controls: the pointer's window of the
+    /// focus grid focused, a left click on one its A, a right click B. Unchanged without them.
+    tl::core::InputState with_pointer(tl::core::InputState input);
+    /// The layout window whose picture holds (x, y), 0 to 1 across and down the view.
+    std::string window_at(float x, float y) const;
+    /// `destroy()` for a headless run, after a pending pad script under the mouse controls.
+    void finish_headless();
 
     /// Open on a named class rather than the layout's default. Ignored when
     /// the name is not one of the offered classes, so a misspelling leaves the
@@ -326,6 +332,9 @@ private:
 
     /// Which window has the focus (`CNewGameMenu +0x20C`, `+0x210`).
     tl::core::NewGameFocus focus_;
+    /// Where the pointer last was: the focus follows it only when it moves.
+    float pointer_x_ = -1.0f;
+    float pointer_y_ = -1.0f;
     /// The grid it moves on: the console's, and the mods' classes on its top row.
     tl::core::NewGameGrid grid_;
     /// The mods' portraits' art; a deque, as each `Widget` points into it.
@@ -394,7 +403,6 @@ private:
     float scale_ = 1.0f;
     bool created_ = false;
     bool confirm_held_ = false;
-    MenuPointer pointer_;
     bool move_held_ = false;
     bool turn_held_ = false;
     bool skip_held_ = false;
@@ -422,6 +430,15 @@ public:
     /// which opens on the first button (`CMainMenu::vfunc_7`,
     /// focuses the head of its tab list), and A acts on it.
     MenuAction update(const tl::core::InputState& input);
+
+    /// `input` as the menu reads it under the mouse controls: the pointer's button focused,
+    /// a left click on a button its A, a right click B. Unchanged without them.
+    tl::core::InputState with_pointer(tl::core::InputState input);
+    /// The button under (x, y), 0 to 1 across and down the view; -1 for none.
+    int button_at(float x, float y) const;
+    /// `destroy()` for a headless run, after a pending pad script under the mouse controls.
+    void finish_headless();
+    void focus_button(int index);
 
     /// A frame under another screen (Options, Help): nothing acts, but which
     /// buttons are down is kept, so the press that closes that screen is not
@@ -700,6 +717,9 @@ private:
     std::vector<tl::core::DifficultyTab> difficulty_tabs_;
     /// Which of `buttons_` each window of the tab list is.
     std::vector<size_t> difficulty_button_;
+    /// Where the pointer last was: the focus follows it only when it moves.
+    float pointer_x_ = -1.0f;
+    float pointer_y_ = -1.0f;
     /// The windows from the layout's root down to the one holding the buttons,
     /// and down to the title.
     std::vector<const tl::formats::GuiWindow*> difficulty_column_path_;
@@ -770,9 +790,6 @@ private:
     /// Which button has the focus. The first, when a menu opens.
     int selected_ = 0;
     bool confirm_held_ = false;
-    MenuPointer pointer_;
-    /// The button under the pointer, -1 for none.
-    int button_under(const tl::core::InputState& input) const;
     bool quit_held_ = false;
     bool skip_held_ = false;
     bool nav_held_ = false;

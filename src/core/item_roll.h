@@ -130,6 +130,9 @@ struct ItemRollContext {
     /// The sound definitions, for what `CEquipment::unitInit` does to `g_Rand` when it fills the
     /// item's sound bank. Null: no sound data.
     const SoundDataInformation* sounds = nullptr;
+    /// `CBaseUnit::unitInit`'s `[SKILL]`s (`CSkill::CSkill`), each rolled as it
+    /// is made, after the own effects and affixes. Null: none made.
+    std::function<void(const ItemStats& item)> make_skills;
 };
 
 /// The item's own unit type id (`CBaseUnit +0x1ac`), from `UNITTYPE`.

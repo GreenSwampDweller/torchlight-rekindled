@@ -14,6 +14,24 @@
 
 namespace tl::core {
 
+/// The PC's keys that open and close things (`CGameUI::handleKeyPresses`),
+/// by their default bindings: read only under the mouse controls, as bits of
+/// `InputState::pc_keys`.
+namespace pc_key {
+inline constexpr std::uint32_t kStats = 1U << 0;       ///< `KEYMAP_STATS`, C
+inline constexpr std::uint32_t kSkills = 1U << 1;      ///< `KEYMAP_SKILLS`, S
+inline constexpr std::uint32_t kQuests = 1U << 2;      ///< `KEYMAP_QUESTS`, Q
+inline constexpr std::uint32_t kJournal = 1U << 3;     ///< `KEYMAP_JOURNAL`, J
+inline constexpr std::uint32_t kPet = 1U << 4;         ///< `KEYMAP_PET`, P
+inline constexpr std::uint32_t kWeaponSet = 1U << 5;   ///< `KEYMAP_WEAPONSET`, W
+inline constexpr std::uint32_t kAutomap = 1U << 6;     ///< `KEYMAP_AUTOMAP`, A
+inline constexpr std::uint32_t kCloseAll = 1U << 7;    ///< `KEYMAP_CLOSEALL`, Space
+inline constexpr std::uint32_t kZoomIn = 1U << 8;      ///< `KEYMAP_ZOOMIN`, =
+inline constexpr std::uint32_t kZoomOut = 1U << 9;     ///< `KEYMAP_ZOOMOUT`, -
+inline constexpr std::uint32_t kShowItems = 1U << 10;  ///< `KEYMAP_SHOWITEMS`, Alt
+inline constexpr std::uint32_t kInventory = 1U << 11;  ///< `KEYMAP_INVENTORY`, I
+}  // namespace pc_key
+
 /// What the player is asking for this frame.
 ///
 /// The move axes are screen-relative and already deadzoned and clamped to the
@@ -109,19 +127,30 @@ struct InputState {
     bool skills = false;
 
     /// DIVERGENCE (desktop keyboard): '1'..'4', the hotbar's four skill slots as they sit on the
-    /// screen from left to right - Y, LT, RT, B.
+    /// screen from left to right - Y, LT, RT, B. Not read under the mouse controls, whose own
+    /// number keys are `slot_keys`.
     bool hotbar_key[4] = {false, false, false, false};
 
-    /// DIVERGENCE (desktop mouse): the PC's pointer, which the console has not. `pointer` is
-    /// set while a mouse is over the game's window, at `pointer_x`, `pointer_y` (0 to 1 across
-    /// the window, from its top left). `click` is the left button held, `click_alt` the right.
-    /// The run loop turns them into the pad's own orders (render/renderer_mouse.cpp); the
-    /// wheel arrives as `zoom`, the right stick's.
+    /// The PC's pointer, read only under the mouse controls (`mouse_controls()`): whether
+    /// there is one over the game's view, where (0 to 1 across and down the view), and
+    /// its two buttons.
     bool pointer = false;
-    float pointer_x = 0.0f;
-    float pointer_y = 0.0f;
-    bool click = false;
-    bool click_alt = false;
+    float pointer_x = 0.5f;
+    float pointer_y = 0.5f;
+    bool pointer_left = false;
+    bool pointer_right = false;
+    bool pointer_middle = false;
+    /// The wheel turned since the last poll, in Windows' units (120 a notch, away from
+    /// the player positive).
+    int pointer_wheel = 0;
+    /// The hold-position key (`KEYMAP_HOLDPOS`): Shift.
+    bool hold_position = false;
+    /// Ctrl: with a left click on a hotbar slot, empties it.
+    bool control = false;
+    /// The hotbar's ten keys, 1 to 9 and 0, as bits 0 to 9.
+    std::uint16_t slot_keys = 0;
+    /// The PC's other keys held (`pc_key`).
+    std::uint32_t pc_keys = 0;
 
     /// Magnitude of the stick, 0 to 1. Torchlight's units author both a
     /// WALKINGSPEED and a RUNNINGSPEED, so a partly-pushed stick has somewhere
@@ -130,6 +159,12 @@ struct InputState {
 
     bool moving() const;
 };
+
+/// Whether the game is played with the PC's mouse and keyboard (`core/mouse_client.h`)
+/// in place of the pad: `config.txt`'s `mouse=1`, or `--mouse`. Off, nothing reads the
+/// pointer and the pad's path is the console's.
+void set_mouse_controls(bool on);
+bool mouse_controls();
 
 /// Read the current state of whatever the platform has. Call once per frame,
 /// after pump_events().
@@ -153,8 +188,17 @@ InputState poll_platform_input();
 /// released a few more. `text=<words>` queues an answer for the next
 /// `text_entry()`; `type=<chars>` types them into the window when the script
 /// reaches it (`take_typed_text`); `shot=<png>` saves the next frame drawn.
-/// Empty stops it.
+/// The pointer: `mouse=<x>:<y>` puts it there (0 to 1 across and down the view) and
+/// it stays; `mouse_on=<unit>` keeps it on that unit (`scripted_pointer_unit`); `lmb` and `rmb` click; `lmb_down`, `lmb_up`, `rmb_down`, `rmb_up`,
+/// `shift_down`, `shift_up`, `ctrl_down` and `ctrl_up` hold and let go across steps; `key1` to `key0`
+/// press a hotbar key; `wheel=<units>` turns the wheel once and `mmb` clicks the middle
+/// button; `pc_stats`, `pc_skills`, `pc_quests`, `pc_inventory`, `pc_pet`, `pc_automap`, `pc_closeall`, `pc_weaponset`,
+/// `pc_zoomin` and `pc_zoomout` press one of the PC's keys. `<press> x<N>` repeats a press N times. Empty stops it.
 void set_pad_script(const std::string& script);
+
+/// The unit a pad script's `mouse_on=<unit>` keeps the pointer on, or empty: the game
+/// puts the pointer where that unit is drawn.
+const std::string& scripted_pointer_unit();
 
 /// Whether a pad script is still running.
 bool pad_script_running();

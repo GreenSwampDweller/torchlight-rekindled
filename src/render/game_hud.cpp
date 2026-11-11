@@ -211,6 +211,7 @@ bool GameHud::load_art(const std::string& group) {
         if (!texture) continue;
         textures_.push_back(texture);
         materials_.push_back(build_menu_material("tl/hud/item_" + stored.name, texture));
+        apply_set_tint(materials_.back(), stored);
 
         for (const tl::formats::ImagesetImage& image : stored.images) {
             Sprite entry;
@@ -324,37 +325,7 @@ void GameHud::build(const tl::formats::UiObject& object, int parent, const std::
         }
         node.text = make("tl/hud/text" + name + "b", colour);
     } else {
-        std::string image = object.string_or("IMAGE", object.string_or("NORMAL", ""));
-#if defined(TL_PLATFORM_MACOS)
-        // DIVERGENCE (desktop keyboard): the skill slots' pad glyphs are the number keys that
-        // fire them, counted along the bar from the left: Y, LT, RT, B; the potions' bumper glyphs
-        // are their bracket keys.
-        {
-            const bool skill = node.skill_set >= 0;
-            const char* label = image == "left_bumper"              ? "["
-                                : skill && image == "y_button"      ? "1"
-                                : skill && image == "left_trigger"  ? "2"
-                                : skill && image == "right_trigger" ? "3"
-                                : skill && image == "b_button"      ? "4"
-                                : image == "right_bumper"           ? "]"
-                                                                    : nullptr;
-            if (label != nullptr) {
-                node.key_label = label;
-                node.points = font_points("Serif14");
-                node.h_text = 1;
-                node.v_text = 1;
-                auto* area = static_cast<Ogre::TextAreaOverlayElement*>(
-                    overlays.createOverlayElement("TextArea", "tl/hud/text" + name + "k"));
-                area->setMetricsMode(Ogre::GMM_RELATIVE);
-                area->setFontName(kFontName, Ogre::RGN_INTERNAL);
-                area->setColour(Ogre::ColourValue::White);
-                area->setAlignment(Ogre::TextAreaOverlayElement::Center);
-                text_root_->addChild(area);
-                node.text = area;
-                image.clear();
-            }
-        }
-#endif
+        const std::string image = object.string_or("IMAGE", object.string_or("NORMAL", ""));
         auto* panel = static_cast<Ogre::PanelOverlayElement*>(
             overlays.createOverlayElement("Panel", "tl/hud/panel" + name));
         panel->setMetricsMode(Ogre::GMM_RELATIVE);
@@ -445,6 +416,7 @@ bool GameHud::create(const std::string& group, unsigned width, unsigned height) 
         // has the HUD but not the pet HUD gets the HUD.
         pet_first_ = nodes_.size();
         add_layout(kPetLayout, group, "the pet panel");
+        label_keys();
 
         // Flat under one container, in draw order, each with its own render priority: OGRE sorts
         // equal-depth transparent renderables by `Pass` pointer (`DistanceSortDescendingLess`),
@@ -520,15 +492,30 @@ void GameHud::destroy() {
 }
 
 void GameHud::show() {
+    wanted_ = true;
     if (!built_ || visible_) return;
     visible_ = true;
-    if (overlay_ != nullptr) overlay_->show();
-    if (text_overlay_ != nullptr) text_overlay_->show();
     if (label_overlay_ != nullptr) label_overlay_->show();
     if (label_text_overlay_ != nullptr) label_text_overlay_->show();
+    if (layout_hidden_) return;
+    if (overlay_ != nullptr) overlay_->show();
+    if (text_overlay_ != nullptr) text_overlay_->show();
+}
+
+void GameHud::set_layout_hidden(bool hidden) {
+    layout_hidden_ = hidden;
+    if (!built_ || !visible_ || overlay_ == nullptr || text_overlay_ == nullptr) return;
+    if (hidden) {
+        overlay_->hide();
+        text_overlay_->hide();
+    } else {
+        overlay_->show();
+        text_overlay_->show();
+    }
 }
 
 void GameHud::hide() {
+    wanted_ = false;
     if (!built_) return;
     visible_ = false;
     if (overlay_ != nullptr) overlay_->hide();
@@ -616,18 +603,42 @@ void GameHud::layout() {
     apply_state();
 }
 
-int GameHud::hotbar_slot_at(float x, float y) const {
-    if (!built_ || !visible_) return -1;
-    for (const Node& node : nodes_) {
-        const int slot = hotbar_slot_of(node.widget, "SkillSlot");
-        if (slot < 2 || node.hidden || node.panel == nullptr) continue;
-        if (node.skill_set >= 0 && node.skill_set != state_.skill_set) continue;
-        if (x >= node.left && x < node.left + node.width && y >= node.top &&
-            y < node.top + node.height) {
-            return slot;
-        }
+// DIVERGENCE (desktop keyboard): on the Mac the skill slots' pad glyphs are the number keys
+// that fire them, counted along the bar from the left - Y, LT, RT, B - and the potions' bumper
+// glyphs their bracket keys. Nothing elsewhere.
+void GameHud::label_keys() {
+#if defined(TL_PLATFORM_MACOS)
+    auto& overlays = Ogre::OverlayManager::getSingleton();
+    for (size_t index = 0; index < nodes_.size(); ++index) {
+        Node& node = nodes_[index];
+        if (node.panel == nullptr || node.text != nullptr) continue;
+        const bool skill = node.skill_set >= 0;
+        const std::string image = lowered(node.image);
+        const char* label = image == "left_bumper"              ? "["
+                            : skill && image == "y_button"      ? "1"
+                            : skill && image == "left_trigger"  ? "2"
+                            : skill && image == "right_trigger" ? "3"
+                            : skill && image == "b_button"      ? "4"
+                            : image == "right_bumper"           ? "]"
+                                                                : nullptr;
+        if (label == nullptr) continue;
+        node.key_label = label;
+        node.points = font_points("Serif14");
+        node.h_text = 1;
+        node.v_text = 1;
+        auto* area = static_cast<Ogre::TextAreaOverlayElement*>(
+            overlays.createOverlayElement("TextArea", "tl/hud/keylabel" + std::to_string(index)));
+        area->setMetricsMode(Ogre::GMM_RELATIVE);
+        area->setFontName(kFontName, Ogre::RGN_INTERNAL);
+        area->setColour(Ogre::ColourValue::White);
+        area->setAlignment(Ogre::TextAreaOverlayElement::Center);
+        text_root_->addChild(area);
+        node.text = area;
+        // The glyph gives way to the key's name.
+        node.panel->setTransparent(true);
+        node.image.clear();
     }
-    return -1;
+#endif
 }
 
 void GameHud::set_uv(Node& node, float u0, float v0, float u1, float v1) const {
@@ -749,9 +760,8 @@ void GameHud::apply_state() {
         }
 
         if (node.text != nullptr) {
-            std::string caption;
-            if (!node.key_label.empty()) caption = node.key_label;
-            else if (node.widget == "LevelName") caption = state_.level_name;
+            std::string caption = node.key_label;
+            if (node.widget == "LevelName") caption = state_.level_name;
             else if (node.widget == "LargeMessageText") caption = state_.announce;
             else if (node.widget == "SmallMessageText") caption = state_.sub_announce;
             else if (node.widget == "POTIONCOUNT") caption = state_.slots[0].text;

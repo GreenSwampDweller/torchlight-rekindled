@@ -95,6 +95,7 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
         if (key == "vsync") config.vsync = on;
         if (key == "free_camera") config.free_camera = on;
         if (key == "mods_menu") config.mods_menu = on;
+        if (key == "mouse") config.mouse = on;
         if (key == "fps_limit") {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             if (number >= 0 && number <= 1000) config.fps_limit = static_cast<unsigned>(number);

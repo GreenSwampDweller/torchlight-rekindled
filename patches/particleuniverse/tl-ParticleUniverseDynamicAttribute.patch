@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttribute.h b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttribute.h
-index 0bdd5e7..299b58d 100644
+index 0bdd5e7..5e333a4 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttribute.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttribute.h
 @@ -30,6 +30,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -61,7 +61,19 @@ index 0bdd5e7..299b58d 100644
  
  			/** Todo
  			*/
-@@ -253,6 +268,36 @@ namespace ParticleUniverse
+@@ -217,6 +232,11 @@ namespace ParticleUniverse
+ 			*/
+ 			size_t getNumControlPoints(void) const;
+ 
++			/** Torchlight: a control point's x and y, left as they are when the index is
++				past the last point.
++			*/
++			void getControlPointValues(size_t index, Real& x, Real& y) const;
++
+ 			/** Todo
+ 			*/
+ 			void removeAllControlPoints(void);
+@@ -253,6 +273,36 @@ namespace ParticleUniverse
  			inline ControlPointList::iterator _getLastValidIterator(void);
  	};
  
@@ -98,7 +110,7 @@ index 0bdd5e7..299b58d 100644
  	/* This class generates values based on an oscillating functione (i.e. Sine).
  	*/
  	class _ParticleUniverseExport DynamicAttributeOscillate : public DynamicAttribute
-@@ -325,6 +370,11 @@ namespace ParticleUniverse
+@@ -325,6 +375,11 @@ namespace ParticleUniverse
  			/* Return the value of a DynamicAttribute, given te x value.
  			*/
  			Real calculate(DynamicAttribute* dyn, Real x, Real defaultValue = 0.0f);
@@ -111,7 +123,7 @@ index 0bdd5e7..299b58d 100644
  
  };
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseDynamicAttribute.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseDynamicAttribute.cpp
-index cec9f2f..d1c7766 100644
+index cec9f2f..720593f 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseDynamicAttribute.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseDynamicAttribute.cpp
 @@ -22,6 +22,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -122,11 +134,31 @@ index cec9f2f..d1c7766 100644
  
  #ifndef PARTICLE_UNIVERSE_EXPORTS
  #define PARTICLE_UNIVERSE_EXPORTS
-@@ -70,6 +71,12 @@ namespace ParticleUniverse
+@@ -30,6 +31,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ namespace ParticleUniverse
+ {
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttribute::DynamicAttribute`, `DynamicAttribute::~DynamicAttribute`,
++	// `DynamicAttribute::getType` and `DynamicAttribute::setType`
++	// (the type at +8) are the library's.
+ 	DynamicAttribute::DynamicAttribute (void) :
+ 		IElement()
+ 	{
+@@ -50,6 +54,9 @@ namespace ParticleUniverse
+ 	}
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeFixed::DynamicAttributeFixed`,
++	// `DynamicAttributeFixed::~DynamicAttributeFixed` and
++	// `DynamicAttributeFixed::setValue` (+0xc) are the library's.
+ 	DynamicAttributeFixed::DynamicAttributeFixed (void) : mValue(0)
+ 	{
+ 		mType = DynamicAttribute::DAT_FIXED;
+@@ -70,11 +77,19 @@ namespace ParticleUniverse
  		mValue = value;
  	}
  	//-----------------------------------------------------------------------
-+	// Torchlight: `DynamicAttributeFixed::getValue(Particle*, float)`.
++	// Torchlight: `DynamicAttributeFixed::getValue`, with a particle and a time.
 +	Real DynamicAttributeFixed::getValue (Particle* particle, Real x)
 +	{
 +		return mValue;
@@ -135,11 +167,30 @@ index cec9f2f..d1c7766 100644
  	Real DynamicAttributeFixed::getValue (Real x)
  	{
  		return mValue;
-@@ -127,6 +134,26 @@ namespace ParticleUniverse
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeFixed::copyAttributesTo` is the library's: into a fixed
++	// attribute (type 0) only.
+ 	void DynamicAttributeFixed::copyAttributesTo(DynamicAttribute* dynamicAttribute)
+ 	{
+ 		if (!dynamicAttribute || dynamicAttribute->getType() != DynamicAttribute::DAT_FIXED)
+@@ -85,6 +100,11 @@ namespace ParticleUniverse
+ 	}
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeRandom::DynamicAttributeRandom`,
++	// `DynamicAttributeRandom::~DynamicAttributeRandom`,
++	// `DynamicAttributeRandom::getMin`, `DynamicAttributeRandom::getMax`,
++	// `DynamicAttributeRandom::setMin`, `DynamicAttributeRandom::setMax` and
++	// `DynamicAttributeRandom::setMinMax` are the library's (minimum +0xc, maximum +0x10).
+ 	DynamicAttributeRandom::DynamicAttributeRandom (void) : mMin(0), mMax(0)
+ 	{
+ 		mType = DynamicAttribute::DAT_RANDOM;
+@@ -127,11 +147,33 @@ namespace ParticleUniverse
  		mMax = max;
  	}
  	//-----------------------------------------------------------------------
-+	// Torchlight: `DynamicAttributeRandom::getValue(Particle*, float)`.
++	// Torchlight: `DynamicAttributeRandom::getValue`, with a particle and a time.
 +	// With a particle, the draw is kept for that particle - but only while it lies
 +	// in (0, 1]; any other value is drawn again on every call and stored again. So a
 +	// random factor sticks for a particle's life and a random 30..50 does not. That
@@ -162,7 +213,14 @@ index cec9f2f..d1c7766 100644
  	Real DynamicAttributeRandom::getValue (Real x)
  	{
  		return Math::RangeRandom(mMin, mMax);
-@@ -150,6 +177,8 @@ namespace ParticleUniverse
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeRandom::copyAttributesTo` is the library's: into a random
++	// attribute (type 1) only.
+ 	void DynamicAttributeRandom::copyAttributesTo(DynamicAttribute* dynamicAttribute)
+ 	{
+ 		if (!dynamicAttribute || dynamicAttribute->getType() != DynamicAttribute::DAT_RANDOM)
+@@ -150,6 +192,8 @@ namespace ParticleUniverse
  		mType = DynamicAttribute::DAT_CURVED;
  	}
  	//-----------------------------------------------------------------------
@@ -171,7 +229,23 @@ index cec9f2f..d1c7766 100644
  	DynamicAttributeCurved::DynamicAttributeCurved (InterpolationType interpolationType) : 
  		mInterpolationType(interpolationType), 
  		mRange(0)
-@@ -194,6 +223,43 @@ namespace ParticleUniverse
+@@ -175,10 +219,15 @@ namespace ParticleUniverse
+ 		processControlPoints();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::~DynamicAttributeCurved` is the
++	// library's.
+ 	DynamicAttributeCurved::~DynamicAttributeCurved (void)
+ 	{
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::setInterpolationType` and
++	// `DynamicAttributeCurved::getInterpolationType` (+0x88) are the library's: a change of
++	// type empties the control points.
+ 	void DynamicAttributeCurved::setInterpolationType (InterpolationType interpolationType)
+ 	{
+ 		if (interpolationType != mInterpolationType)
+@@ -194,6 +243,43 @@ namespace ParticleUniverse
  		return mInterpolationType;
  	}
  	//-----------------------------------------------------------------------
@@ -215,7 +289,7 @@ index cec9f2f..d1c7766 100644
  	Real DynamicAttributeCurved::getValue (Real x)
  	{
  		switch (mInterpolationType)
-@@ -233,6 +299,7 @@ namespace ParticleUniverse
+@@ -233,6 +319,7 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -223,7 +297,46 @@ index cec9f2f..d1c7766 100644
  	void DynamicAttributeCurved::addControlPoint (Real x, Real y)
  	{
  		mControlPoints.push_back(Vector2(x, y));
-@@ -427,6 +494,160 @@ namespace ParticleUniverse
+@@ -261,6 +348,8 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::getNumControlPoints` and
++	// `DynamicAttributeCurved::removeAllControlPoints` are the library's.
+ 	size_t DynamicAttributeCurved::getNumControlPoints(void) const
+ 	{
+ 		return mControlPoints.size();
+@@ -271,6 +360,20 @@ namespace ParticleUniverse
+ 		mControlPoints.clear();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::getControlPointValues` (inlined on the console
++	// into `getArrayFromDynProp`, which does the same).
++	void DynamicAttributeCurved::getControlPointValues(size_t index, Real& x, Real& y) const
++	{
++		if ((unsigned int)index < mControlPoints.size())
++		{
++			x = mControlPoints[(unsigned int)index].x;
++			y = mControlPoints[(unsigned int)index].y;
++		}
++	}
++	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::_findNearestControlPointIterator`,
++	// `DynamicAttributeCurved::_getFirstValidIterator` and
++	// `DynamicAttributeCurved::_getLastValidIterator` are the library's.
+ 	DynamicAttributeCurved::ControlPointList::iterator DynamicAttributeCurved::_findNearestControlPointIterator(Real x)
+ 	{
+ 		// Assume that the ControlPointList is not empty
+@@ -301,6 +404,8 @@ namespace ParticleUniverse
+ 		return mControlPoints.end() - 1;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `DynamicAttributeCurved::copyAttributesTo` is the library's: into a curved
++	// attribute (type 2) only; the points are appended to the copy's and then processed.
+ 	void DynamicAttributeCurved::copyAttributesTo(DynamicAttribute* dynamicAttribute)
+ 	{
+ 		if (!dynamicAttribute || dynamicAttribute->getType() != DynamicAttribute::DAT_CURVED)
+@@ -427,6 +532,161 @@ namespace ParticleUniverse
  	//-----------------------------------------------------------------------
  	//-----------------------------------------------------------------------
  	//-----------------------------------------------------------------------
@@ -294,7 +407,7 @@ index cec9f2f..d1c7766 100644
 +		return std::fma(high - low, factor, low);
 +	}
 +	//-----------------------------------------------------------------------
-+	// `setInterpolationType`: a curve that changes type loses its points.
++	// `DynamicAttributeRandomCurved::setInterpolationType`: a curve that changes type loses its points.
 +	void DynamicAttributeRandomCurved::setInterpolationType (InterpolationType interpolationType)
 +	{
 +		if (!mMin || !mMax)
@@ -305,7 +418,7 @@ index cec9f2f..d1c7766 100644
 +			mMax->setInterpolationType(interpolationType);
 +	}
 +	//-----------------------------------------------------------------------
-+	// `getInterpolationType`.
++	// `DynamicAttributeRandomCurved::getInterpolationType`.
 +	InterpolationType DynamicAttributeRandomCurved::getInterpolationType (void) const
 +	{
 +		return mMin ? mMin->getInterpolationType() : IT_LINEAR;
@@ -321,24 +434,25 @@ index cec9f2f..d1c7766 100644
 +		mMax->addControlPoint(x, max <= min ? min : max);
 +	}
 +	//-----------------------------------------------------------------------
-+	// `DynamicAttributeRandomCurved::getControlPointValues`: the point's x and
-+	// both curves' values at it.
++	// `DynamicAttributeRandomCurved::getControlPointValues` (inlined on the console the same
++	// way): the point's x and
++	// both curves' values at it. The index is checked against the lower curve only, and x is
++	// written by both calls, so the upper curve's is the one left.
 +	void DynamicAttributeRandomCurved::getControlPointValues (size_t index, Real& x, Real& min, Real& max) const
 +	{
-+		if (!mMin || !mMax || index >= mMin->getNumControlPoints())
++		if (!mMin || !mMax || (unsigned int)index >= (unsigned int)mMin->getNumControlPoints())
 +			return;
-+		x = mMin->getControlPoints()[index].x;
-+		min = mMin->getControlPoints()[index].y;
-+		max = mMax->getControlPoints()[index].y;
++		mMin->getControlPointValues(index, x, min);
++		mMax->getControlPointValues(index, x, max);
 +	}
 +	//-----------------------------------------------------------------------
-+	// `getNumControlPoints`.
++	// `DynamicAttributeRandomCurved::getNumControlPoints`.
 +	size_t DynamicAttributeRandomCurved::getNumControlPoints (void) const
 +	{
 +		return (mMin && mMax) ? mMin->getNumControlPoints() : 0;
 +	}
 +	//-----------------------------------------------------------------------
-+	// `removeAllControlPoints`.
++	// `DynamicAttributeRandomCurved::removeAllControlPoints`.
 +	void DynamicAttributeRandomCurved::removeAllControlPoints (void)
 +	{
 +		if (!mMin || !mMax)
@@ -347,7 +461,7 @@ index cec9f2f..d1c7766 100644
 +		mMax->removeAllControlPoints();
 +	}
 +	//-----------------------------------------------------------------------
-+	// `processControlPoints`.
++	// `DynamicAttributeRandomCurved::processControlPoints`.
 +	void DynamicAttributeRandomCurved::processControlPoints (void)
 +	{
 +		if (!mMin || !mMax)
@@ -356,7 +470,7 @@ index cec9f2f..d1c7766 100644
 +		mMax->processControlPoints();
 +	}
 +	//-----------------------------------------------------------------------
-+	// `copyAttributesTo`: into another random curve only.
++	// `DynamicAttributeRandomCurved::copyAttributesTo`: into another random curve only.
 +	void DynamicAttributeRandomCurved::copyAttributesTo (DynamicAttribute* dynamicAttribute)
 +	{
 +		if (!dynamicAttribute || dynamicAttribute->getType() != DynamicAttribute::DAT_RANDOM_CURVED)

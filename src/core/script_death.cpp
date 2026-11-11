@@ -37,8 +37,13 @@ void LevelScript::kill_character(Object& o, Character& c, QuestState& quests,
         e.direction = blow->direction;
         e.force = blow->force;
     }
+    c.has_killing_blow = e.has_direction;
+    c.killing_direction = e.direction;
+    c.killing_force = e.force;
+    c.killed_by_player = by_player;
     e.burst = burst;
     e.on = by_player;
+    if (burst) burst_deaths_.insert(o.id);
     out.push_back(e);
     if (!defer_death_sample_) {
         play_unit_sample(o, static_cast<int>(SoundSlot::Death), out);
@@ -47,18 +52,58 @@ void LevelScript::kill_character(Object& o, Character& c, QuestState& quests,
     unit_killed(o.id, quests, out);
 }
 
-std::string LevelScript::death_animation(int64_t id) const {
+bool LevelScript::death_would_fly(int64_t id) const {
+    const Object* o = find(id);
+    const Character* c = character(id);
+    return o != nullptr && c != nullptr && c->has_killing_blow && 0.0f < c->killing_force &&
+           unit_animation_exists(o->unit, "DEATH_FLIGHT");
+}
+
+bool LevelScript::fly_killed_unit(int64_t id, std::vector<ScriptEvent>& out) {
+    if (!death_would_fly(id)) return false;
+    Character& c = *character(id);
+    DeathFlight flight;
+    if (!start_death_flight(id, c.killing_direction, c.killing_force, &flight)) return false;
+    const Object& o = *find(id);
+    ScriptEvent e;
+    e.action = ScriptAction::DeathFlight;
+    e.node_id = o.id;
+    e.name = o.name;
+    e.unit = o.unit;
+    e.position = flight.path.point(2);
+    e.rate = flight.path.length() / flight.speed;
+    e.loops = flight.falls;
+    e.on = c.killed_by_player;
+    e.force = c.killing_force;
+    out.push_back(e);
+    return true;
+}
+
+std::string LevelScript::death_animation(int64_t id) {
     const Object* o = find(id);
     if (o == nullptr) return std::string();
     std::string name;
     float length = 0.0f;
     find_random_animation(o->unit, "DIE", name, length);
+    if (Character* c = character(id)) c->dying_left = name.empty() ? 0.0f : length;
     return name;
 }
 
 void LevelScript::play_death_sample(int64_t id, std::vector<ScriptEvent>& out) {
     if (death_sampled_.erase(id) != 0) return;
     if (const Object* o = find(id)) play_unit_sample(*o, static_cast<int>(SoundSlot::Death), out);
+}
+
+void LevelScript::play_hit_sample(int64_t id, int damage_type, std::vector<ScriptEvent>& out) {
+    SoundSlot slot = SoundSlot::PhysicalHit;
+    switch (damage_type) {
+        case 2: slot = SoundSlot::FireHit; break;
+        case 3: slot = SoundSlot::IceHit; break;
+        case 4: slot = SoundSlot::ElectricHit; break;
+        case 5: slot = SoundSlot::PoisonHit; break;
+        default: break;
+    }
+    if (const Object* o = find(id)) play_unit_sample(*o, static_cast<int>(slot), out);
 }
 
 // `CCharacter::modifyHP` by `-HP`, then
@@ -95,13 +140,13 @@ void LevelScript::kill_pets(Object& o, QuestState& quests, std::vector<ScriptEve
     // `die` (vtable +0x330, no attacker). Quirk kept: `die` takes the pet out
     // of the very list being walked (`removePet` at its start) and the index
     // still steps on, so every other pet is passed over and lives.
-    const float heal = static_cast<float>(max_hp(master->combat));
+    const float heal = static_cast<float>(character_max_hp(*master));
     for (size_t i = 0; i < list.size(); ++i) {
         LevelScript& runs = *list[i].machine;
         Object* po = runs.find(list[i].node);
         Character* pc = runs.character(list[i].node);
         if (po != nullptr && pc != nullptr && runs.dead_.count(po->id) == 0) {
-            const float most = static_cast<float>(max_hp(pc->combat));
+            const float most = static_cast<float>(runs.character_max_hp(*pc));
             pc->combat.hp = std::min(pc->combat.hp + heal, most);
             runs.die_now(*po, *pc, quests, sink_for(list[i].machine, out));
         }

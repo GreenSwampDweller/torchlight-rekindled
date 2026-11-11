@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h b/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
-index 8d501a1..f8bd896 100644
+index 8d501a1..c2b100f 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseRenderer.h
 @@ -79,6 +79,7 @@ namespace ParticleUniverse
@@ -30,8 +30,8 @@ index 8d501a1..f8bd896 100644
  			/** The particle default size has changed */
  			virtual void _notifyDefaultDimensions(Real width, Real height, Real depth) = 0;
  
-+			/** Torchlight: the technique's sprite sheet changed (`ParticleRenderer::
-+				_notifyFlipbookWidthHeight` does nothing; the billboard renderer
++			/** Torchlight: the technique's sprite sheet changed
++				(`ParticleRenderer::_notifyFlipbookWidthHeight` does nothing; the billboard renderer
 +				overrides it). */
 +			virtual void _notifyFlipbookWidthHeight(int width, int height) {}
 +

@@ -114,8 +114,8 @@ void Renderer::Impl::retire_selected() {
 }
 
 bool Renderer::Impl::open_gem_socketing() {
-    // the gem in the player's or the first pet's inventory, then the
-    // dialog (`CGameUI +0x1894`). INVENTED: a live pet (`Pet::alive`) stands in for the list.
+    // a first pet in the player's list (`+0x5ac`, the port's one record), the
+    // gem in the player's or that pet's inventory, then the dialog (`CGameUI +0x1894`).
     const int slot = inventory_menu.selected_slot_index();
     if (slot < 0 || !player_inventory.occupied(static_cast<size_t>(slot)) || !pet.alive()) {
         return false;
@@ -244,50 +244,6 @@ void Renderer::Impl::handle_pet_commands(const tl::core::InputState& in,
     update_menu();
 }
 
-void Renderer::Impl::swap_bag_and_pet() {
-    // from the player's tray (tray, pet), then into
-    // the pet's inventory; from the pet's (ISA 0x57) into the player's.
-    if (!pet.alive()) return;
-    load_unit_types();
-    const bool from_pet = inventory_menu.pet_tray_focused();
-    tl::core::Inventory& from = from_pet ? pet.bag() : player_inventory;
-    tl::core::Inventory& to = from_pet ? player_inventory : pet.bag();
-    const int slot =
-        from_pet ? inventory_menu.selected_pet_slot() : inventory_menu.selected_slot_index();
-    if (slot < 0 || !from.occupied(static_cast<size_t>(slot))) return;
-    if (!from_pet &&
-        !tl::core::pet_takes_items(/*tray_owner_is_player=*/true, pet.alive(), pet.state())) {
-        return;
-    }
-    // DIVERGENCE: X refuses a worn item, as Drop does; takes it off and moves it.
-    if (tl::core::Inventory::is_equip_location(static_cast<size_t>(slot))) {
-        TL_LOG_INFO("%s: '%s' is equipped; unequip it first", from_pet ? "pet tray" : "pet bag",
-                    from.slots()[static_cast<size_t>(slot)].item.name.c_str());
-        return;
-    }
-    const tl::core::InventorySlot moved = from.slots()[static_cast<size_t>(slot)];
-    switch (tl::core::move_to_inventory(from, static_cast<size_t>(slot), to,
-                                        /*target_is_combiner=*/false, unit_types)) {
-        case tl::core::TrayMove::Nothing: return;
-        case tl::core::TrayMove::Refused:
-            play_ui(tl::core::InterfaceSound::Error);
-            TL_LOG_INFO("%s: '%s' does not fit", from_pet ? "bag" : "pet bag",
-                        moved.item.name.c_str());
-            break;
-        case tl::core::TrayMove::Moved:
-            play_ui(tl::core::InterfaceSound::ItemTake);
-            load_stat_graphs();
-            TL_LOG_INFO("%s: %d x %s, worth %d gold", from_pet ? "bag (from the pet)" : "pet bag",
-                        moved.count, moved.item.name.c_str(),
-                        tl::core::item_sell_price(moved.item, stat_graphs, moved.count));
-            break;
-    }
-    player_inventory.calculate_effect_values();
-    sync_equipped_weapon();
-    update_menu();
-    refresh_game_hud();
-}
-
 void Renderer::Impl::drop_selected_pet_item() {
     // on the pet's tray: not a quest item (ISA 0x67);
     // `removeEquipment`, `CLevel::addItem` at the owner's position, `drop`.
@@ -297,7 +253,9 @@ void Renderer::Impl::drop_selected_pet_item() {
     load_unit_types();
     const tl::core::InventorySlot held = pet.bag().slots()[static_cast<size_t>(slot)];
     if (unit_types.isa(held.item.unittype, tl::core::unit_type::kQuestItem)) {
-        // INVENTED: (the quest item's message) is not read; nothing happens.
+        // `Error` at the player, `VOICEIMPOSSIBLE` 0.1 s on.
+        play_ui(tl::core::InterfaceSound::Error);
+        play_voice(tl::core::SoundSlot::VoiceImpossible, 0.1f);
         return;
     }
     // DIVERGENCE: a worn item stays, as on the bag's tray (see swap_bag_and_pet).
@@ -460,54 +418,6 @@ tl::core::Inventory* Renderer::Impl::housing_inventory_of(VendorScreen screen) {
     }
 }
 
-void Renderer::Impl::swap_selected() {
-    tl::core::Inventory* housing = housing_inventory_for(inventory_menu.vendor());
-    if (housing == nullptr) return;
-    load_unit_types();
-    const bool combine = inventory_menu.vendor() == VendorScreen::Combine;
-    const char* const what = combine ? "transmute" : "stash";
-    if (inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor) {
-        // on the combiner's tray (ISA 0x86) or a stash's:
-        //
-        const int slot = inventory_menu.selected_vendor_slot();
-        if (slot < 0) return;
-        const std::string name = housing->slots()[static_cast<size_t>(slot)].item.name;
-        tl::core::InventorySlot dropped;
-        const tl::core::TrayReturn where =
-            tl::core::return_to_player(*housing, static_cast<size_t>(slot), player_inventory,
-                                       pet.alive() ? &pet.bag() : nullptr, unit_types, dropped);
-        switch (where) {
-            case tl::core::TrayReturn::None: return;
-            case tl::core::TrayReturn::Bag:
-            case tl::core::TrayReturn::PetBag: play_ui(tl::core::InterfaceSound::ItemTake); break;
-            case tl::core::TrayReturn::Dropped:
-                drop_item_near_player(dropped.item, dropped.count);
-                break;
-        }
-        TL_LOG_INFO("%s: '%s' back to the %s", what, name.c_str(),
-                    where == tl::core::TrayReturn::Bag      ? "bag"
-                    : where == tl::core::TrayReturn::PetBag ? "pet's bag"
-                                                            : "floor");
-    } else {
-        // on the bag: into the combiner's or the stash's.
-        const int slot = inventory_menu.selected_slot_index();
-        if (slot < 0 || !player_inventory.occupied(static_cast<size_t>(slot))) return;
-        const std::string name = player_inventory.slots()[static_cast<size_t>(slot)].item.name;
-        const tl::core::TrayMove moved = tl::core::move_to_inventory(
-            player_inventory, static_cast<size_t>(slot), *housing, combine, unit_types);
-        if (moved == tl::core::TrayMove::Nothing) return;
-        play_ui(moved == tl::core::TrayMove::Moved ? tl::core::InterfaceSound::ItemTake
-                                                   : tl::core::InterfaceSound::Error);
-        const char* const target = combine ? "transmuter" : "stash";
-        TL_LOG_INFO("%s: '%s' %s the %s", what, name.c_str(),
-                    moved == tl::core::TrayMove::Moved ? "put in" : "refused by", target);
-    }
-    sync_equipped_weapon();
-    update_menu();
-    update_character_preview(0.0f);
-    refresh_game_hud();
-}
-
 // PORT: where the camera's subject is, for the items' active range.
 ogre::Vector3 Renderer::Impl::item_view_point() const {
     if (scripted_camera.active) {
@@ -601,10 +511,10 @@ int Renderer::Impl::breakable_within_view(float max_angle, float max_distance) c
         const Ogre::Vector3 p = b.node->getPosition();
         const tl::core::Vec3 at{p.x, p.y, p.z};
         if (!tl::core::item_within_view(frame, at, max_angle, max_distance)) continue;
-        // `sightUnobstructed(from, to, false)`, both ends 5 up.
+        // `sightUnobstructed(from, to, false)`, both ends 5 up, the objects tested too.
         tl::core::CollisionHit hit;
-        if (collision.ray_collision({me.x, me.y + 5.0f, me.z}, {p.x, p.y + 5.0f, p.z}, false,
-                                    hit)) {
+        if (collision.ray_collision({me.x, me.y + 5.0f, me.z}, {p.x, p.y + 5.0f, p.z},
+                                    /*objects=*/true, hit)) {
             continue;
         }
         return static_cast<int>(i);
@@ -1881,12 +1791,10 @@ Renderer::Impl::UnitThemeSources Renderer::Impl::unit_theme_sources() {
 }
 
 bool Renderer::Impl::ui_in_cinematic() const {
-    // `CGameUI::getUIIsInCinematic`: `+0x10bc`, the
-    // cinematic menu open, or an interactive menu counted by `setInteractiveMenuVisible`
-    // (`CQuestDialogMenu::setOpen`).
-    // INVENTED: its other tests are not read; the boxed line stands in.
-    return tl::core::LevelScript::client_paused() || cinematic_open || 0 < interactive_menus ||
-           quest_dialog.visible() || script_dialog_open();
+    // `CGameUI::getUIIsInCinematic`, the interface's half:
+    // `+0x10bc`, the cinematic menu, or a menu `setInteractiveMenuVisible`
+    // counts, the quest window's among them. The level's half is LevelScript's.
+    return tl::core::LevelScript::client_paused() || cinematic_open || 0 < interactive_menus;
 }
 
 void Renderer::Impl::update_npc_icons() {
@@ -1922,10 +1830,10 @@ void Renderer::Impl::update_npc_icons() {
 void Renderer::Impl::step_ground_labels() {
     if (!game_hud.ready()) return;
     std::vector<tl::render::GroundLabel> labels;
-    // hides every label while a menu is up.
-    // INVENTED: its two client flags (`+0x1811`, `+0x1812`) are not decoded; play stands in.
-    const bool open = player_control && !inventory_menu.visible() && camera != nullptr &&
-                      subject_node != nullptr && !player_death.dying;
+    // no modal window or `m_PauseMode` (+0x1811, set under one),
+    // `m_bItemTextVisible` (+0x1812, the master menu shut), no full-screen menu.
+    const bool open = player_control && camera != nullptr && subject_node != nullptr &&
+                      !modal_dialog_open() && !inventory_menu.visible() && !full_screen_menu_up();
     if (!open) {
         game_hud.set_ground_labels(labels);
         return;
@@ -2381,7 +2289,7 @@ void Renderer::Impl::step_mimic_attack(float delta) {
         if (player_performing_skill()) return;
         if (!player.following()) {
             std::vector<tl::core::Vec3> route;
-            if (nav.ready()) route = nav.find_path(me, at);
+            if (nav.ready()) route = nav.find_path(me, at, passability);
             if (route.empty()) return let_go("no route");
             player.follow(std::move(route));
         }
@@ -2397,7 +2305,7 @@ void Renderer::Impl::step_mimic_attack(float delta) {
     // and no blow.
     if (ranged) {
         std::vector<tl::core::Vec3> route;
-        if (nav.ready()) route = nav.find_path(me, at);
+        if (nav.ready()) route = nav.find_path(me, at, passability);
         if (!route.empty()) player.follow(std::move(route));
         return;
     }
@@ -2512,7 +2420,7 @@ void Renderer::Impl::step_item_ai(float delta) {
         case Step::Walk: {
             // `setDestination(item)` and vtable +0x268; no route: `setTargetItem(nullptr)`.
             std::vector<tl::core::Vec3> route;
-            if (nav.ready()) route = nav.find_path(me.at, item.at);
+            if (nav.ready()) route = nav.find_path(me.at, item.at, passability);
             if (route.empty()) return let_go("no route");
             player.follow(std::move(route));
             return;

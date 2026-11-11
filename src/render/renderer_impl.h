@@ -7,6 +7,7 @@
 #include "core/layout_maths.h"
 #include "core/saved_orientation.h"
 #include "core/world.h"
+#include "render/player_item_target.h"
 
 #include "core/attack_button.h"
 #include "core/camera_shake.h"
@@ -236,12 +237,10 @@ class RenderBehindMaterials;  // the render-behind outline's materials, below
 
 using tl::core::kDefaultRimLight;
 
-/// The game's own data, kept out of the default group so its scripts are not parsed
-/// (mount_resources()).
+/// The game's own data, kept out of the default group so its scripts are not parsed.
 constexpr const char* kGameGroup = "Torchlight";
 
-/// Where place_mesh()'s increasing paint order for opaque layout meshes stops:
-/// every later one shares this priority.
+/// Where place_mesh()'s increasing paint order for opaque layout meshes stops; later ones share it.
 constexpr Ogre::ushort kLayoutDrawOrderCeiling = 90;
 
 /// Path tests via stat() rather than std::filesystem: console paths carry a device prefix
@@ -395,8 +394,9 @@ struct Renderer::Impl : tl::core::World {
     // PORT: `World::cast_prop_trap` (core/world.h) in OGRE's maths, for the renderer's callers.
     void cast_prop_trap(const std::string& unit, const std::string& name, uint32_t level,
                         const Ogre::Vector3& skill_at, const Ogre::Quaternion& facing,
-                        bool by_player) {
-        World::cast_prop_trap(unit, name, level, from_ogre(skill_at), from_ogre(facing), by_player);
+                        bool by_player, int64_t prop_id) {
+        World::cast_prop_trap(unit, name, level, from_ogre(skill_at), from_ogre(facing), by_player,
+                              prop_id);
     }
     using World::drop_item;
     // PORT: `World::drop_item` (core/world.h) in OGRE's maths, for the renderer's callers.
@@ -577,16 +577,18 @@ struct Renderer::Impl : tl::core::World {
     }
     // PORT: the hook (core/world.h) in OGRE's maths.
     bool play_sound(const std::string& name, const ogre::Vector3& at) override {
-        const auto r = play_sound(name, to_ogre(at));
-        return r;
+        return play_sound(name, to_ogre(at));
     }
     // PORT: the hook (core/world.h) in OGRE's maths.
     bool play_sound(const std::string& name, const ogre::Vector3& at, float volume_scale,
                     float radius_if_none, const std::string& voice_key,
                     bool volume_given) override {
-        const auto r =
-            play_sound(name, to_ogre(at), volume_scale, radius_if_none, voice_key, volume_given);
-        return r;
+        return play_sound(name, to_ogre(at), volume_scale, radius_if_none, voice_key, volume_given);
+    }
+    // PORT: the hook (core/world.h) in OGRE's maths.
+    bool play_recording(const std::string& name, const std::string& recording, float variation,
+                        const ogre::Vector3& at) override {
+        return play_sound_drawn(name, recording, variation, to_ogre(at));
     }
     // PORT: the archive hooks (core/world.h), answered by the archive the renderer mounts.
     std::vector<std::string> archive_paths_in_listing_order(const std::string& dir,
@@ -842,20 +844,9 @@ struct Renderer::Impl : tl::core::World {
     /// `COptionsMenu` on the Xbox `options_Xenon.layout`: Start in the game.
     LayoutScreen pause_screen;
     bool pause_stick_held = false;
-    MenuPointer pause_pointer;  ///< DIVERGENCE (desktop mouse)
-    MenuPointer dialog_pointer;  ///< the quest offer and the modal message
-    /// DIVERGENCE (desktop mouse): the master menu's pointer, the row a drag started on, and the
-    /// time since the last click, for a double click.
-    MenuPointer inventory_pointer;
-    InventoryMenu::PointerHit inventory_drag;
-    float inventory_click_age = 10.0f;
-    InventoryMenu::PointerHit last_inventory_click;
     /// `CSettingsMenuXenon` on `settingsmenu_xenon.layout`.
     LayoutScreen settings_screen;
     bool settings_stick_held = false;
-    MenuPointer settings_pointer;  ///< DIVERGENCE (desktop mouse)
-    /// The slider the pointer is dragging, `None` for none.
-    tl::core::SettingsControl settings_drag = tl::core::SettingsControl::None;
     bool settings_dpad_held = false;
     bool settings_y_held = false;
     /// Y on Options: Help once the close has been carried out.
@@ -993,6 +984,10 @@ struct Renderer::Impl : tl::core::World {
     void toggle_item_compare();
     void step_item_tooltips(float dt);
     void show_item_tooltips();
+    std::vector<tl::core::EquipmentTooltip> item_tooltips(const tl::core::Inventory& held_in,
+                                                          int slot,
+                                                          tl::core::EquipmentTooltipContext context,
+                                                          bool compare);
     tl::core::TrayCaptionContext tray_caption_context(const tl::core::ItemStats& item,
                                                       bool pet_tray);
     /// A on the pet's tray: with the pet as the owner.
@@ -1050,15 +1045,10 @@ struct Renderer::Impl : tl::core::World {
         bool lt_up = false;
         bool rt_up = false;
         bool y_up = false;
-        /// DIVERGENCE (desktop mouse): the right button on a skill, A on it.
-        bool mouse_a = false;
     };
     /// The pad on the skills tab: `CSkillMenuXenon`'s handler and
     /// its map sheet's; `core/skills_tab.*` decides.
     void handle_skills_tab(const tl::core::InputState& in, const SkillsTabPad& pad);
-    /// DIVERGENCE (desktop mouse): the skill under the skills tab's cursor onto the hotbar slot
-    /// the pointer was let go on - the skills tab's set rows or the HUD's.
-    void drop_dragged_skill(const tl::core::InputState& in);
     bool skill_stick_held = false;
     /// The master menu closed as its housing's `setOpen(false)`: `InventoryClose` (0x42)
     /// except the skills tab (`core::housing_plays_close_sound`); Stats points placed.
@@ -1101,15 +1091,10 @@ struct Renderer::Impl : tl::core::World {
     /// `in.attack` (X) read as the inventory screen's own X while it is open.
     bool action_x_held = false;
     bool pet_stance_held = false;
-    bool skills_key_held = false;
     bool pet_town_held = false;
     /// Hotbar buttons already down when the hotbar got the pad back (e.g. the B that closed
     /// a menu), ignored until let go. `hotbar_had_pad`: the hotbar read the pad last frame.
     std::array<bool, 7> hotbar_wait_release{};
-    /// DIVERGENCE (desktop keyboard): the number keys' last frame, for their presses.
-    std::array<bool, 4> hotbar_key_held{};
-    /// DIVERGENCE (desktop mouse): a skill picked up off the skills tab, to be let go on a slot.
-    bool skill_drag = false;
     bool hotbar_had_pad = false;
 
     /// Whether the next main menu offers `ContinueLast`.
@@ -1364,6 +1349,12 @@ struct Renderer::Impl : tl::core::World {
 
     /// The confirm button was down last frame: a dialog goes on the press, not the hold.
     bool confirm_held = false;
+    /// DIVERGENCE (desktop keyboard): 'K' last frame, and the number keys' last frame, down and
+    /// newly down (renderer_keyboard.cpp).
+    bool skills_key_held = false;
+    std::array<bool, 4> hotbar_key_held{}, hotbar_key_down{}, hotbar_key_edge{};
+    void step_keyboard_extras(const tl::core::InputState& in);
+    void add_hotbar_keys(std::array<bool, 7>& pressed, std::array<bool, 7>& held) const;
     bool attack_held = false;  ///< the pad's Attack (X), for its press edge
     /// The X button's share of the in-game dispatch.
     ///
@@ -1577,6 +1568,8 @@ struct Renderer::Impl : tl::core::World {
     /// `CParticle::Start` besides the systems:
     /// `CParticleCache::playSounds` and `playCameraShakes`.
     void cparticle_started(uint32_t id);
+    /// While a character's slot particle starts: its sounds are the core's.
+    bool slot_sounds_played = false;
     void play_particle_extras(const ParticleFileExtras& extras, const Ogre::Vector3& at,
                               const std::string& reference);
     /// Drop the placements none of whose systems is left.
@@ -1708,19 +1701,21 @@ struct Renderer::Impl : tl::core::World {
     void interact_targeted_trigger();
     /// The selection came from the console's second pick (`+0x1c4`).
     bool item_second_pick = false;
-    /// The target item as A sets it (`CCharacter::setTargetItem`, `+0x350`, AI state 7):
-    /// what `getItemAI` walks to and uses (`step_item_ai`).
-    struct PlayerItemTarget {
-        /// `Mimic`: a sleeping mimic as the target (`+0x340`) for `attackAI`.
-        enum class Kind { None, Dropped, Trigger, Portal, Mimic };
-        Kind kind = Kind::None;
-        Ogre::SceneNode* dropped = nullptr;  ///< the floor item's node
-        int machine = kNoMachine;            ///< a `Unit Trigger`'s (or mimic's) machine and node
-        int64_t node = 0;
-        std::string portal;  ///< an open portal's unit
-        Ogre::Vector3 portal_at = Ogre::Vector3::ZERO;
-    };
+    using PlayerItemTarget = tl::render::PlayerItemTarget;
     PlayerItemTarget player_item;
+    // The PC's mouse and keyboard (render/mouse_game.cpp), under `mouse_controls()`.
+    struct MouseGame;
+    struct MousePanes;
+    std::shared_ptr<MouseGame> mouse;
+    void drive_player_mouse(float delta, const tl::core::InputState& in);
+    void finish_player_frame(float delta, const tl::core::InputState& in,
+                             const tl::core::InputState& walk_in);
+    bool play_scripted_mouse(float seconds);
+    void sync_mouse_hud(float delta);
+    tl::core::InputState mouse_as_pad(tl::core::InputState in);
+    tl::core::InputState menu_pointer(tl::core::InputState in);
+    bool point_settings_row(float x, float y, bool take);
+    bool point_pause_row(float x, float y, bool take);
     /// A on the current item selection: `setTargetItem` with what it points at.
     void target_selected_item();
     /// `CCharacter::getItemAI` for the player, each frame.
@@ -1807,6 +1802,11 @@ struct Renderer::Impl : tl::core::World {
     /// `die`'s branches before the fall: the burst or the death flight.
     /// True when one took the death (no `DIE` animation).
     bool die_burst_or_flight(const tl::core::ScriptEvent& event, SceneUnit& unit, NodeMap& nodes);
+    void play_death_flight(const tl::core::ScriptEvent& event, SceneUnit& unit);
+    void strike_interrupt(const tl::core::ScriptEvent& event);
+    void strike_damage_effects(const tl::core::ScriptEvent& event);
+    void strike_glancing(const tl::core::ScriptEvent& event);
+    std::optional<std::string> unit_own_name(int64_t node);
 
     /// Destroy the subject and everything hanging off it.
     void clear_subject();
@@ -1905,6 +1905,11 @@ struct Renderer::Impl : tl::core::World {
     /// X on a vendor's screen: buy from the merchant's tray,
     /// sell from the bag.
     void trade_selected();
+    void trade_item(bool buying, int slot);
+    bool mouse_opens_storage(VendorScreen screen);
+    bool mouse_storage_open() const;
+    bool open_merchant_stock(const std::string& unit);
+    void drop_at_merchant(const tl::core::TradeOutcome& out);
 
     /// A on the bag on an enchanter's or a shrine's screen;
     /// true when the press is the tray's own A instead (an unidentified item).
@@ -1949,9 +1954,13 @@ struct Renderer::Impl : tl::core::World {
     /// X on a Transmuter's or a stash's screen: bag to their slots, their
     /// tray back.
     void swap_selected();
+    void move_housing_item(VendorScreen screen, bool from_housing, int slot);
+    bool take_from_housing(tl::core::Inventory& housing, int slot, const char* what);
+    bool put_in_housing(tl::core::Inventory& housing, int slot, bool combine);
     /// X on the bag's screen: the stack to the other tray
     /// (`core::move_to_inventory`); into the pet's only when allows.
     void swap_bag_and_pet();
+    void move_bag_and_pet(bool from_pet, int slot);
     /// Y on the pet's tray: the stack onto the level at the pet's feet.
     void drop_selected_pet_item();
     /// The inventory the vendor tray shows on a Transmuter's or a stash's
@@ -2034,6 +2043,8 @@ struct Renderer::Impl : tl::core::World {
     /// Every placed unit's particle keys this frame, and attached triggers on their bones
     /// (`updateBonePositions`).
     void step_unit_particle_keys();
+    void trigger_collision_key(const std::string& name, const SceneUnit& unit, bool enable);
+    void pose_collision_keys(const std::string& name, SceneUnit& unit);
 
     /// A placed unit's weapon element: `CEquipment::createParticles`
     /// under the hand's node (`attachToGivenLocation`),
@@ -2123,10 +2134,11 @@ struct Renderer::Impl : tl::core::World {
     /// Advance every hunting monster's swing and land those.
     void step_monster_swings(float delta);
 
-    /// A unit's animations in its manifest's order with their lengths; see
+    /// A unit's animation set (`animation_set_for`) with the lengths; see
     /// `LevelScript::set_animation_catalog`.
     std::vector<std::pair<std::string, float>> animation_catalog(const std::string& unit) override;
-    std::map<std::string, std::vector<std::pair<std::string, float>>> animation_catalogs;
+    /// The skeleton file a name of the model's animation set came from; empty for none.
+    std::string animation_set_path(const std::string& mesh_path, const std::string& animation);
 
     bool save_character(const std::string& path, bool force) override;
     void step_player_death(float delta);
@@ -2327,6 +2339,8 @@ struct Renderer::Impl : tl::core::World {
     Ogre::Entity* preview_weapon = nullptr;
     std::vector<Ogre::Entity*> preview_equipment;
     float preview_idle_time = 0.0f;
+    bool preview_shows_pet = false;
+    bool preview_of_pet() const { return inventory_menu.pet_tray_focused() || preview_shows_pet; }
 
     void init_character_preview();
     void update_character_preview(float delta) override;
@@ -2352,7 +2366,7 @@ struct Renderer::Impl : tl::core::World {
     // PORT: add_collision_mesh with OGRE's matrix, for the renderer's callers.
     void add_collision_mesh(const std::string& path, const Ogre::Matrix4& to_world,
                             int64_t group = 0) {
-        ogre::Matrix4 m;
+        ogre::Matrix4 m{};
         for (size_t r = 0; r < 4; ++r)
             for (size_t c = 0; c < 4; ++c) m[r][c] = to_world[r][c];
         add_collision_mesh(path, m, group, nullptr);
@@ -2429,51 +2443,14 @@ struct Renderer::Impl : tl::core::World {
     bool begin_spawn_animation(Ogre::Entity* entity, const std::string& mesh,
                                const tl::core::UnitStats& stats);
 
-    /// A `Unit Spawner` as the level sees it (core/unit_spawner.h): the renderer's half of
-    /// `CUnitSpawner` for one spawner; its outputs go back to its machine.
-    class SpawnerHost : public tl::core::UnitSpawnerHost {
-    public:
-        SpawnerHost(Impl& impl, tl::core::LevelScript* machine, int64_t node)
-            : impl_(impl), machine_(machine), node_(node) {}
-        int32_t level_monster_level() const override;
-        tl::core::Vec3 random_open_position(const tl::core::Vec3& at, float radius,
-                                            bool avoid_no_spawn) override;
-        bool ray_collision(const tl::core::Vec3& from, const tl::core::Vec3& to,
-                           tl::core::Vec3& normal) override;
-        float range_random(float lo, float hi) override;
-        tl::core::RunicRandom& volatile_random() override;
-        void create_particles(const std::string& file, const tl::core::Vec3& at,
-                              const tl::core::SpawnAxes& axes, uint32_t index) override;
-        void fire_missile(const std::string& resource, const tl::core::Vec3& at,
-                          const tl::core::SpawnAxes& axes) override;
-        tl::core::SpawnClassPick roll_spawn_class(const std::string& name, int32_t level) override;
-        tl::core::SpawnedUnitRef create_unit(const tl::core::SpawnRelease& release,
-                                             const std::string& name, bool enchant) override;
-        bool unit_exists(int64_t id) const override;
-        bool character_alive(int64_t id) const override;
-        void kill_character(int64_t id) override;
-        void hide_character(int64_t id, bool hide) override;
-        void run_particles(bool run) override;
-        void output(uint32_t event) override { outputs_.push_back(event); }
-        void unit_spawned(const tl::core::SpawnedUnitRef& unit) override;
-
-        /// Hand the outputs raised so far to the spawner's machine.
-        void deliver();
-
-    private:
-        Impl& impl_;
-        tl::core::LevelScript* machine_;
-        int64_t node_;
-        std::vector<uint32_t> outputs_;
-    };
-
-    /// An input reaching a spawner (`CUnitSpawnerDescriptor::InputLogicEvent`).
-    void spawner_input(const tl::core::ScriptEvent& event);
-    /// `CUnitSpawnerDescriptor::update` for every machine's spawners.
-    void step_spawners(float delta);
-    /// `CUnitSpawner::unitStateChange` for a released item:
-    /// 3 when picked up.
-    void spawned_item_state(int64_t id, int state) override;
+    void view_spawner_particles(int64_t spawner, const std::string& file,
+                                const tl::core::ogre::Vector3& at,
+                                const tl::core::ogre::Quaternion& facing, uint32_t index) override;
+    bool view_place_layout_bodied_unit(const std::string& unit,
+                                       const tl::core::ogre::Vector3& at) override {
+        return place_layout_bodied_unit(unit, to_ogre(at));
+    }
+    bool view_begin_spawn_entrance(int64_t id, Ogre::Entity* entity) override;
 
     /// Place a unit whose body is a particle layout, not a mesh (`LAYOUTFILE` and no
     /// `MESHFILE`, e.g. the phase beast's portal), which spawn_unit() cannot place.
@@ -2555,22 +2532,6 @@ struct Renderer::Impl : tl::core::World {
     void create_interface();
     void step_player(float delta, const tl::core::InputState& in) override;
     void drive_player(float delta);
-    /// DIVERGENCE (desktop mouse): what a click asked for, carried out over the frames that
-    /// follow - a walk to a point, a walk to something and A on it, or the attack on a hostile
-    /// unit while the button is held (render/renderer_mouse.cpp).
-    struct MouseGoal {
-        enum class Kind { None, Walk, Interact, Attack };
-        Kind kind = Kind::None;
-        Ogre::Vector3 at = Ogre::Vector3::ZERO;
-        Ogre::Entity* entity = nullptr;
-        float repath = 0.0f;  ///< seconds until the route is found again
-    };
-    MouseGoal mouse_goal;
-    bool mouse_click_held = false;
-    /// Where the pointer meets the level: the floor's collision, else the player's height.
-    bool mouse_ground(const tl::core::InputState& in, Ogre::Ray& ray, Ogre::Vector3& ground) const;
-    /// Rewrite this frame's pad input from the mouse: the stick, A and X the goal asks for.
-    void steer_by_mouse(tl::core::InputState& in, float delta);
     Ogre::Entity* place_mesh(const MeshPlacement& placement);
     /// `CLevel::bake`'s room-piece batching, once the level and its
     /// remembered state are in place.
@@ -3031,6 +2992,8 @@ void set_caching_particles();
 void restart_particle_system(ParticleSystem& system);
 void stop_particle_emission(ParticleSystem& system);
 using tl::core::kDefaultCameraDistance;
+using tl::core::kPlayerCamFar;
+using tl::core::kPlayerCamNear;
 
 Ogre::Vector3 default_camera_offset(float camera_mult);
 using tl::core::find_spawn;
@@ -3058,7 +3021,6 @@ using tl::core::kMissilePlayer;
 
 namespace renderer_detail {
 using tl::core::spawn_data_of;
-Ogre::Quaternion quaternion_from_axes(const tl::core::SpawnAxes& axes);
 /// `ProjectorCam` (`CGameClient::CGameClient`): orthographic,
 /// `setFrustumExtents(-24, 24, 24, -24)`, looking straight down, kept 100 above the focus
 /// (`CCameraControl::updateGameCamera`).

@@ -120,6 +120,16 @@ inline constexpr const char* kUiIconsImageset = "media/UI/uiicons.imageset";
 /// (set_mod_imagesets), on either pak.
 std::vector<const char*> pc_imagesets();
 
+/// The interface pack's own imagesets over the PC pak's textures (`media/UI/icons2/pcartN`):
+/// rectangles of the PC's art under the names the pack's layouts use, some tinted or mirrored.
+/// Searched before the PC's sets; none beside the Xbox 360 pak.
+void set_pack_imagesets(std::vector<std::string> paths);
+inline constexpr int kMaxPackImagesets = 24;
+std::string pack_imageset_path(int index);
+
+/// A set's `Tint` on the material built for it; nothing for an untinted set.
+void apply_set_tint(const Ogre::MaterialPtr& material, const tl::formats::Imageset& set);
+
 /// The imagesets the mounted mods bring under `media/UI/` (a class's portrait, its skill icons):
 /// the PC's interface loads every imageset it is given, a mod's among them.
 void set_mod_imagesets(std::vector<std::string> paths);

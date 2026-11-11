@@ -136,6 +136,7 @@ bool QuestDialogScreen::load_art(const std::string& group) {
         }
         textures_.push_back(texture);
         materials_.push_back(build_menu_material("tl/questdlg/" + stored.name, texture));
+        apply_set_tint(materials_.back(), stored);
 
         for (const tl::formats::ImagesetImage& image : stored.images) {
             Sprite entry;
@@ -487,15 +488,6 @@ void QuestDialogScreen::resize(unsigned width, unsigned height) {
 void QuestDialogScreen::toggle_rewards() {
     state_.rewards = !state_.rewards;
     apply_state();
-}
-
-bool QuestDialogScreen::pointed(const tl::core::InputState& in, const std::string& widget) const {
-    if (!visible_ || !in.pointer) return false;
-    const int index = find_widget(widget);
-    if (index < 0 || is_hidden(index)) return false;
-    const Node& node = nodes_[static_cast<size_t>(index)];
-    return in.pointer_x >= node.left && in.pointer_x < node.left + node.width &&
-           in.pointer_y >= node.top && in.pointer_y < node.top + node.height;
 }
 
 int QuestDialogScreen::find_widget(const std::string& name) const {

@@ -1,0 +1,12 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleUniverseEmitterFactory.h
+index 2be60cc..c4f88f6 100644
+--- a/Plugins/ParticleUniverse/include/ParticleUniverseEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleUniverseEmitterFactory.h
+@@ -50,6 +50,7 @@ namespace ParticleUniverse
+ 
+ 	public:
+ 			ParticleEmitterFactory(void) {};
++	        // Torchlight: `ParticleEmitterFactory::~ParticleEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~ParticleEmitterFactory(void) {};
+ 
+ 			/** Returns the type of the factory, which identifies the particle emitter type this factory creates. */

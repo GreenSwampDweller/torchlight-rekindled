@@ -81,9 +81,9 @@ int32_t get_max_depth(const TravelRecord& travel, const std::string& dungeon) {
 
 // CPlayer::getDungeonRank
 int32_t get_dungeon_rank(const TravelRecord& travel, const std::string& dungeon) {
-    const std::string name = upper_ascii(dungeon);
+    // The name as given, case and all: unlike getMaxDepth, no StringUpper first.
     for (const tl::formats::DungeonTrackerSave& tracker : travel.trackers) {
-        if (tracker.name == name) return tracker.player_level;
+        if (tracker.name == dungeon) return tracker.player_level;
     }
     return 0;
 }

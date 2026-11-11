@@ -24,7 +24,7 @@ index 11571a8..50d06d7 100644
  			const Real getFrequencyMin(void) const;
  			void setFrequencyMin(const Real frequencyMin);
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
-index 389b7b6..2b0ea87 100644
+index 389b7b6..fdf229e 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseSineForceAffector.cpp
 @@ -28,23 +28,28 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

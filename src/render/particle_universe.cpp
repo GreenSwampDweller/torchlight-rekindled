@@ -1,11 +1,13 @@
 #include "render/particle_universe.h"
 
 #include "core/log.h"
+#include "core/random.h"
 
 #if defined(TL_HAVE_PARTICLEUNIVERSE)
 
 #include <OgreBillboardSet.h>
 #include <OgreMaterialManager.h>
+#include <OgreMath.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 #include <OgreShaderGenerator.h>
@@ -25,6 +27,16 @@
 namespace tl::render {
 
 namespace {
+
+// `Ogre::Math::UnitRandom`: the game thread's `rand()` times 1/32767, the stream the game's own
+// `rand()` draws share, so ParticleUniverse's and the ribbon trails' draws move it as on the console.
+class CrtUnitRandom : public Ogre::Math::RandomValueProvider {
+public:
+    Ogre::Real getRandomUnit() override {
+        return static_cast<float>(tl::core::crt_random().next()) * 3.0518509e-05f;
+    }
+};
+CrtUnitRandom g_crt_unit_random;
 
 constexpr const char* kSmokeName = "tl/pu_smoke";
 
@@ -69,6 +81,7 @@ bool ParticleUniverseHost::start() {
     // initialise() creates the ParticleSystemManager and every factory.
     auto* root = new ParticleUniverse::ParticleUniverseRoot();
     root->initialise();
+    Ogre::Math::SetRandomValueProvider(&g_crt_unit_random);
     // `CGame::setup`: the manager's store of
     // visual particles goes to 20000, and the falloff to the
     // `PARTICLE_FALLOFF` setting, whose default is 130 (`CSettings::CSettings`).
@@ -94,6 +107,7 @@ void ParticleUniverseHost::stop() {
         ParticleUniverse::ParticleUniverseRoot::getSingletonPtr();
     root->shutdown();
     delete root;
+    Ogre::Math::SetRandomValueProvider(nullptr);
     ParticleUniverse::EntityRenderer::setMaterialCloneReleaser(nullptr);
     running_ = false;
 }

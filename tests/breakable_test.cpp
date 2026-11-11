@@ -241,6 +241,18 @@ TL_TEST(breakable_item_within_view) {
     TL_CHECK(!tl::core::item_within_view(frame, Vec3{0.0f, 0.0f, 2.0f}, 60.0f, 2.5f));
 }
 
+/// `castSkill`'s frame for `findItemWithinView`: turned along the final target direction.
+TL_TEST(breakable_view_frame_along_a_direction) {
+    const tl::core::ViewFrame ahead =
+        tl::core::view_frame_along(Vec3{1.0f, 0.0f, 1.0f}, Vec3{0.0f, 0.0f, 1.0f});
+    TL_CHECK(std::fabs(ahead.orientation.w - 1.0f) < 1e-6f);
+    TL_CHECK(tl::core::item_within_view(ahead, Vec3{1.0f, 0.0f, 3.0f}, 60.0f, 2.5f));
+    const tl::core::ViewFrame east =
+        tl::core::view_frame_along(Vec3{0.0f, 0.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f});
+    TL_CHECK(tl::core::item_within_view(east, Vec3{2.0f, 0.0f, 0.0f}, 60.0f, 2.5f));
+    TL_CHECK(!tl::core::item_within_view(east, Vec3{0.0f, 0.0f, 2.0f}, 60.0f, 2.5f));
+}
+
 /// `(scale * REACH_BONUS + 0.2 + strike range) * RANGE_MULTIPLIER + 1`.
 TL_TEST(breakable_attack_view_reach) {
     TL_CHECK(near(tl::core::attack_view_reach(1.0f, 0.75f, 0.6f, 1.0f), 2.55f));

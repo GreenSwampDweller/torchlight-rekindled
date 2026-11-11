@@ -663,9 +663,8 @@ std::string Renderer::menu_layout_for(const std::string& dungeon_name, int32_t d
     if (tl::core::Dungeon* dungeon = seed.current_dungeon) {
         const tl::core::LevelTemplate* found = dungeon->get_level_template_for_depth(
             static_cast<uint32_t>(std::max(0, depth)), files, rng);
-        // INVENTED: a template that names no `MAINMENURULES` - none ships
-        // without one that a save can stand on - keeps the town's.
-        if (found != nullptr && !found->main_menu_rules.empty()) rules = found->main_menu_rules;
+        // A template's `MAINMENURULES` (X360 +0x824) is taken as it stands, empty or not.
+        if (found != nullptr) rules = found->main_menu_rules;
     }
 
     // `CLevel::loadRoomLayout(rules, 0, 3)`: the rules' own template, and the
@@ -755,11 +754,6 @@ bool Renderer::enable_player_control() {
         // focus itself; a captured town frame's view matrix agrees.
         m.camera_look_offset = Ogre::Vector3::ZERO;
 
-        // Clip planes sized for the framing, as aim_camera() does.
-        const float distance = m.camera_offset.length();
-        m.camera->setNearClipDistance(std::max(0.05f, distance * 0.02f));
-        m.camera->setFarClipDistance(std::max(200.0f, distance * 20.0f));
-
         TL_LOG_INFO(
             "  this layout authors no camera; using the engine default "
             "(heading %.1f deg, distance %.1f x CAMERAMULT %.2f) "
@@ -767,6 +761,11 @@ bool Renderer::enable_player_control() {
             static_cast<double>(Ogre::Radian(m.camera_yaw).valueDegrees()),
             static_cast<double>(kDefaultCameraDistance), static_cast<double>(m.camera_mult));
     }
+    // CGame::createCamera: `PlayerCam` clips at 1 and 90
+    // (45 under the PC's netbook mode, which the console does not have). The near plane sets
+    // how far a particle's `DEPTH BIAS` reaches towards the eye.
+    m.camera->setNearClipDistance(kPlayerCamNear);
+    m.camera->setFarClipDistance(kPlayerCamFar);
     m.camera_follows = true;
     m.follow_subject();
 
@@ -872,9 +871,10 @@ void Renderer::Impl::view_place_one_mesh(const MeshPlacement& from_layout, size_
     MeshPlacement placement = from_layout;
     Ogre::Entity* entity = place_mesh(placement);
 
-    // INVENTED: a skinned prop with no ANIMATION plays its idle (the mesh having a
-    // skeleton is the instruction). Gated on hasSkeleton(), so the scan is rare.
-    if (entity != nullptr && placement.animation.empty() && entity->hasSkeleton()) {
+    // CRoomPiece::setMeshFilePath: a piece whose model has
+    // any animation plays IDLE, looped, at 1.0. Gated on hasSkeleton(), so the lookup is rare.
+    if (entity != nullptr && placement.room_piece && placement.animation.empty() &&
+        entity->hasSkeleton()) {
         placement.animation = kUnitIdleAnimation;
         placement.idle_fallback = true;
         placement.loops = true;

@@ -12,18 +12,84 @@ many of them from parts (`ItemTray` + n).
 """
 from PIL import Image
 
+import ui_pack_art as art
 from build_ui_pack import (BLUE, GOLD, GOLD_TEXT, INK, INK_DIM, PANEL, PANEL_DARK, RED, Canvas,
-                           at, frame_pieces, full, header, obj, over, plate, socket)
+                           at, full, header, obj, over, plate, socket)
+from ui_pack_art import PANEL_TEX, PC, UIICONS
 
 GREEN = (92, 176, 72, 255)
 TEAL = (64, 190, 200, 255)
 PURPLE = (150, 92, 210, 255)
 ORANGE = (230, 130, 40, 255)
 YELLOW = (230, 210, 60, 255)
-COL_BG = (16, 19, 25, 250)
-COL_BG_LIT = (22, 27, 36, 252)
-COL_BG_SHOP = (28, 22, 16, 250)
-COL_BG_SHOP_LIT = (36, 29, 20, 252)
+COL_BG = (27, 23, 19, 252)
+COL_BG_LIT = (36, 30, 24, 253)
+COL_BG_SHOP = (34, 26, 16, 252)
+COL_BG_SHOP_LIT = (44, 34, 20, 253)
+
+# The PC's panels (`media/UI/models/<pane>/<pane>_top.dds`, drawn there on a mesh at half size):
+# the character sheet's plates and bars, the journal's iron frame, the pet sheet's stat boxes.
+CHARACTER = PANEL_TEX.format("character", "top")
+JOURNAL = PANEL_TEX.format("journal", "top")
+JOURNAL_FOOT = PANEL_TEX.format("journal", "bottom")
+PET = PANEL_TEX.format("pet", "top")
+NAME_PLATE = (86, 134, 556, 58)       # the long chamfered plate under the header
+PLATE = (98, 378, 252, 62)            # one of the two short plates
+BAR_WITH_RING = (96, 226, 536, 64)    # the experience bar, its level ring on the left
+STAT_ROW = (54, 468, 512, 118)        # icon, a thin bar, two plates; four rows 134 apart
+PET_STATS = (122, 748, 400, 128)      # four small icon-and-plate pairs
+FRAME_FOOT = (314, 908, 710, 116)     # the frame's bottom rail and its two corner knots
+FRAME_BAND = (314, 800, 710, 60)      # both side rails and the dark between them
+KNOT = 140                            # how far a corner knot of the foot reaches along it
+TRANSPARENT = (0, 0, 0, 0)
+# The PC's hanging sign (`dropdown.dds`): a torn parchment page on a dark ground.
+DROPDOWN = "media/UI/models/dropdown/dropdown.dds"
+PAGE = (76, 196, 244, 282)
+DARK_INK = "FF30200E"                 # words written on the parchment itself
+
+
+def plate_frame(prefix):
+    """A nine-slice `<prefix>topleft` .. `<prefix>middle` cut from the PC's
+    short plate: the `LineFrame` look."""
+    # Less its outermost pixels, where the parchment it lies on shows.
+    x, y, w, h = PLATE[0] + 3, PLATE[1] + 3, PLATE[2] - 6, PLATE[3] - 6
+    c = h // 2
+    cuts = {"topleft": (x, y, c, c), "topright": (x + w - c, y, c, c),
+            "bottomleft": (x, y + c, c, c), "bottomright": (x + w - c, y + c, c, c),
+            "topedge": (x + 52, y, 150, c), "bottomedge": (x + 52, y + c, 150, c),
+            "leftedge": (x, y + c - 2, c, 4), "rightedge": (x + w - c, y + c - 2, c, 4),
+            "middle": (x + 52, y + 22, 150, 18)}
+    return {prefix + name: PC(CHARACTER, *rect) for name, rect in cuts.items()}
+
+
+def iron_frame(w, h, fill=True):
+    """The PC journal's iron frame around a panel `w` x `h`: the foot with its
+    corner knots, the same turned over for the top, and between them the side
+    rails - with the dark inside them, or without it over the 3D model. The
+    knots keep their size whatever the width; the rails between them stretch."""
+    k = 303.0 / FRAME_FOOT[2]
+    cap, knot, rail = round(FRAME_FOOT[3] * k), round(KNOT * k), round(36 * k)
+    tall = h - 2 * cap + 2
+    if fill:
+        middle = [obj("Image", "iron left", IMAGE="pk_frame_left", **at(0, cap - 1, rail, tall)),
+                  obj("Image", "iron dark", IMAGE="pk_frame_dark",
+                      **at(rail, cap - 1, w - 2 * rail, tall)),
+                  obj("Image", "iron right", IMAGE="pk_frame_right",
+                      **at(w - rail, cap - 1, rail, tall))]
+    else:
+        middle = [obj("Image", "iron left", IMAGE="pk_frame_left", **at(0, cap - 1, rail, tall)),
+                  obj("Image", "iron right", IMAGE="pk_frame_right",
+                      **at(w - rail, cap - 1, rail, tall))]
+    caps = []
+    for name, y in (("top", 0), ("foot", h - cap)):
+        caps += [obj("Image", f"iron {name} left", IMAGE=f"pk_frame_{name}_l", **at(0, y, knot, cap)),
+                 obj("Image", f"iron {name} rail", IMAGE=f"pk_frame_{name}_m",
+                     **at(knot, y, w - 2 * knot, cap)),
+                 obj("Image", f"iron {name} right", IMAGE=f"pk_frame_{name}_r",
+                     **at(w - knot, y, knot, cap))]
+    return middle + caps
+
+
 LABEL = "FFE6DCC4"
 BRIGHT_GOLD = "FFF2B040"
 
@@ -152,11 +218,11 @@ def glyph(c, kind, x0, y0, s, ink):
 
 
 def tab(w, h, kind, lit, colour=INK):
+    base = art.box(w, h, radius=14, top=art.LEATHER_LIT if lit else art.INSET,
+                   edge=art.BRASS if lit else art.IRON_DARK, edge_width=2.4)
     c = Canvas(w, h)
-    c.rrect(1.5, 1.5, w - 1.5, h - 1.5, 7, fill=(34, 40, 52, 235) if lit else PANEL_DARK,
-            outline=GOLD if lit else INK_DIM, width=2 if lit else 1.4)
     glyph(c, kind, w * 0.18, h * 0.16, min(w, h) * 0.66, colour if lit else INK_DIM)
-    return c.done()
+    return over(base, c.done())
 
 
 def icon(n, kind, colour, ring=True):
@@ -178,10 +244,10 @@ def sheet_with_window(w, h, hole):
     """The character sheet's panel: the menu draws the 3D model behind it, so
     the panel leaves `hole` = (x0, y0, x1, y1) open, with a faint rim."""
     c = Canvas(w, h)
-    c.rrect(0.5, 0.5, w - 0.5, h - 0.5, 8, fill=COL_BG, outline=INK_DIM, width=1.4)
+    c.rrect(0.5, 0.5, w - 0.5, h - 0.5, 4, fill=COL_BG)
     x0, y0, x1, y1 = hole
     c.rrect(x0, y0, x1, y1, 10, fill=(0, 0, 0, 0))
-    c.rrect(x0, y0, x1, y1, 10, outline=INK_DIM[:3] + (110,), width=1)
+    c.rrect(x0, y0, x1, y1, 10, outline=art.IRON_DARK[:3] + (160,), width=1.2)
     return c.done()
 
 
@@ -303,10 +369,10 @@ def menu_sprites():
     # The skills tab.
     out.update({
         "backroundbase_skillsa": flat_tile(COL_BG),
-        "backroundbase_skillsb": flat_tile((24, 28, 38, 160)),
-        "backroundbase_skillsc": flat_tile((20, 26, 40, 150)),
-        "backroundbase_skillsd": flat_tile((30, 34, 46, 150)),
-        "backroundbase_spells": flat_tile((26, 26, 30, 170)),
+        "backroundbase_skillsb": flat_tile((44, 36, 26, 120)),
+        "backroundbase_skillsc": flat_tile((58, 46, 30, 90)),
+        "backroundbase_skillsd": flat_tile((8, 6, 4, 110)),
+        "backroundbase_spells": flat_tile((8, 6, 4, 130)),
         "skills_window_active": outline_box(72 * r, 72 * r, INK_DIM, fill=PANEL_DARK, radius=14,
                                             width=2.4),
         "skills_window_active_rollover": outline_box(72 * r, 72 * r, GOLD, fill=(40, 36, 24, 240),
@@ -338,7 +404,94 @@ def menu_sprites():
                                                 radius=12, width=3.6)
     # The `LineFrame` look, fitted at 22: the PC has none like it. The item tooltips' two frames
     # (`itemtooltip*`, `itemtooltip2*`) are the PC's `GuiLook` ones, found by name.
-    out.update(frame_pieces("frame", 22, fill=(10, 11, 16, 245), inner=INK_DIM))
+    out.update(plate_frame("frame"))
+    out.update(pc_menu_sprites())
+    return out
+
+
+def pc_menu_sprites():
+    """What the menu draws in the PC's own art, and the pack's drawings redone
+    to sit beside it."""
+    r = 2
+    blank = Image.new("RGBA", (8, 8), TRANSPARENT)
+    row = lambda lit, edge: art.box(273, 89, radius=9, top=art.LEATHER_LIT if lit else art.LEATHER,
+                                    edge=edge)
+    out = {
+        # The columns' frame is the PC journal's, laid over them by `iron_frame`; these two are
+        # what the code swaps for the column in hand.
+        "framea": blank,
+        "framea_rollover": art.glow_outline(303, 629, (7, 7, 296, 622), radius=5, width=1.6),
+        "pk_frame_left": PC(JOURNAL_FOOT, FRAME_BAND[0], FRAME_BAND[1], 36, FRAME_BAND[3]),
+        "pk_frame_right": PC(JOURNAL_FOOT, FRAME_BAND[0] + FRAME_BAND[2] - 36, FRAME_BAND[1], 36,
+                             FRAME_BAND[3]),
+        "pk_frame_dark": PC(JOURNAL_FOOT, FRAME_BAND[0] + 60, FRAME_BAND[1], FRAME_BAND[2] - 120,
+                            FRAME_BAND[3]),
+        **{f"pk_frame_{name}_{part}": PC(JOURNAL_FOOT, FRAME_FOOT[0] + x, FRAME_FOOT[1], w,
+                                         FRAME_FOOT[3], vflip=name == "top")
+           for name in ("top", "foot")
+           for part, x, w in (("l", 0, KNOT), ("m", KNOT + 40, FRAME_FOOT[2] - 2 * KNOT - 80),
+                              ("r", FRAME_FOOT[2] - KNOT, KNOT))},
+        # The menu's top bar: the journal's header band, its corners and a run of its plank.
+        "menu_frame_top": blank,
+        "character_background": blank,
+        "pk_page": PC(DROPDOWN, *PAGE),
+        # The same page in four parts, around the window the 3D model shows through.
+        "pk_page_top": PC(DROPDOWN, PAGE[0], PAGE[1], PAGE[2], 96),
+        "pk_page_foot": PC(DROPDOWN, PAGE[0], PAGE[1] + PAGE[3] - 96, PAGE[2], 96),
+        "pk_page_left": PC(DROPDOWN, PAGE[0], PAGE[1] + 100, 10, 60),
+        "pk_page_right": PC(DROPDOWN, PAGE[0] + PAGE[2] - 10, PAGE[1] + 100, 10, 60),
+        "pk_plate_pair": PC(CHARACTER, 98, 378, 522, 62),
+        "pk_bar_cap_l": PC(JOURNAL, 318, 10, 102, 120),
+        "pk_bar_cap_r": PC(JOURNAL, 920, 10, 102, 120),
+        "pk_bar_plank": PC(JOURNAL, 596, 10, 52, 120),
+        "menu_frame_bottom": PC(JOURNAL_FOOT, 480, 930, 200, 92),
+        "menu_frame_left": blank,
+        "menu_frame_right": blank,
+        "button_window": blank,
+        "menu_textwindow": PC(CHARACTER, *NAME_PLATE),
+        "panel_header": PC(CHARACTER, *NAME_PLATE),
+        "facet_panel_top": PC(CHARACTER, *PLATE),
+        "textwindow360": PC(CHARACTER, *PLATE),
+        "level_tab": PC(CHARACTER, *PLATE),
+        "resistance_score_window": PC(CHARACTER, 356, 378, 264, 62),
+        "exp_fame_window": PC(CHARACTER, *BAR_WITH_RING),
+        "character_stats": PC(PET, *PET_STATS),
+        "decor_arrow_left": art.arrowhead(22 * r, 30 * r, False),
+        "decor_arrow_right": art.arrowhead(22 * r, 30 * r, True),
+        "start_button": art.pill_button(28 * r, 22 * r, "right"),
+        "dpad_leftright": art.dpad(24 * r, "lr"),
+        "dpad_updown": art.dpad(35 * r, "ud"),
+        "submenu_tray_rollover": art.box(291, 104, radius=10, top=art.INSET, edge=art.IRON_DARK),
+        "item_tray": row(False, art.IRON_DARK),
+        "item_tray_equipped": row(True, art.BRASS_DARK),
+        "load_chartext_window_selected": row(False, art.IRON_DARK),
+        "load_chartext_window_rollover": row(True, art.BRASS),
+        "facet": art.glow_outline(314, 124, (14, 16, 291, 109)),
+        "statwindow_facet": art.glow_outline(314, 124, (10, 5, 304, 119)),
+        "score_modifier": art.box(150, 64, radius=10, top=art.INSET, edge=art.BRASS),
+        "statwindow_base": blank,
+        "statwindow_base_rollover": blank,
+        "menu_arrow_up": art.chevron(38 * r, 23 * r, True),
+        "menu_arrow_down": art.chevron(38 * r, 23 * r, False),
+        "arrow_transmute": art.chevron(58 * r, 25 * r, False, art.BRASS),
+        "tab_hilite": art.glow_outline(33 * r, 38 * r, (5, 5, 33 * r - 5, 38 * r - 5), radius=12),
+        "skills_window_active_rollover": art.box(72 * r, 72 * r, radius=14, top=art.LEATHER_LIT,
+                                                 edge=art.BRASS, edge_width=3.6),
+        "skills_window_passive_rollover": art.box(72 * r, 72 * r, radius=36, top=art.LEATHER_LIT,
+                                                  edge=art.BRASS, edge_width=3.6),
+        "skills_window_active_lg": art.box(64 * r, 64 * r, radius=12, top=art.INSET,
+                                           edge=art.BRASS, edge_width=2.4),
+        "spells_windowb_rollover": art.box(72 * r, 72 * r, radius=36, top=art.LEATHER_LIT,
+                                           edge=art.BRASS, edge_width=3.6),
+        "spells_window_rollover": art.box(48 * r, 48 * r, radius=12, top=art.LEATHER_LIT,
+                                          edge=art.BRASS, edge_width=3.6),
+    }
+    for index, name in enumerate(("strength", "dexterity", "magic", "defense")):
+        x, y, w, h = STAT_ROW
+        out[f"pk_stat_{name}"] = PC(CHARACTER, x, y + 134 * index, w, h)
+    # The rarities the PC has no glow for: its white one, tinted.
+    for name, tint in (("purple", "B070F0"), ("yellow", "F0E060"), ("orange", "F09038")):
+        out[f"traycolor_{name}"] = PC(UIICONS, 0, 236, 66, 94, tint=tint)
     return out
 
 
@@ -398,6 +551,9 @@ def master_layout():
         window("parent", [
             window("frame", [
                 image("top bar", "menu_frame_top", [
+                    image("cap left", "pk_bar_cap_l", **at(0, 0, 44, 52)),
+                    image("plank", "pk_bar_plank", **at(44, 0, 832, 52)),
+                    image("cap right", "pk_bar_cap_r", **at(876, 0, 44, 52)),
                     trigger("lefttrigger", "lefttriggerbutton", "left_trigger", "decor_arrow_left",
                             60, False),
                     text("left", "INVENTORY", "MenuLeft", "Serif14", "FFC8B48C", "CENTER",
@@ -410,64 +566,73 @@ def master_layout():
                          **at(585, 16, 170, 24)),
                     trigger("righttrigger", "righttriggerbutton", "right_trigger",
                             "decor_arrow_right", 780, True),
-                ], **at(0, 0, 920, 52, ha="CENTER")),
+                ], **at(0, 39, 920, 52, ha="CENTER")),
                 image("bottom bar", "menu_frame_bottom", [
                     line_frame("pet commands", [
                         image("glyph", "start_button", **at(-6, 1, 28, 22)),
                         text("words", "pet commands", font="SerifBig", **at(28, -1, 200, 26)),
-                    ], widget="PetCommands", **at(40, -2, 230, 24)),
+                    ], widget="PetCommands", **at(40, 22, 230, 24)),
                     line_frame("compare", [
                         image("glyph", "dpad_leftright", **at(-8, 0, 24, 24)),
                         text("words", "item comparison: off", "itemcomparetext", "SerifBig",
                              **at(22, -1, 236, 26)),
-                    ], widget="ToggleItemCompare", **at(330, -2, 256, 24)),
+                    ], widget="ToggleItemCompare", **at(330, 22, 256, 24)),
                     line_frame("close", [
                         image("glyph", "b_button", **at(46, 1, 21, 21)),
                         text("words", "Close", font="SerifBig", **at(74, -1, 120, 26)),
-                    ], **at(660, -2, 200, 24)),
-                ], **at(0, 6, 920, 24, "CENTER", "BOTTOM")),
+                    ], **at(660, 22, 200, 24)),
+                ], **at(0, 0, 920, 66, "CENTER", "BOTTOM")),
                 window("columns", widget="ContainerFrame", **at(0, 19, 902, 630, "CENTER",
                                                                  "CENTER")),
             ], **full()),
             image("left rule", "menu_frame_left", **at(0, 6, 10, 600, va="CENTER")),
             image("right rule", "menu_frame_right", **at(0, 6, 8, 600, "RIGHT", "CENTER")),
-        ], **at(0, 0, 920, 690, "CENTER", "CENTER")),
+        ], **at(0, 0, 920, 768, "CENTER", "CENTER")),
     ]
 
 
 def character_layout():
+    # The model shows through the sheet between y 202 and 462, x 16 and 286.
+    page = [
+        image("page top", "pk_page_top", **at(9, 9, 285, 193)),
+        image("page foot", "pk_page_foot", **at(9, 462, 285, 158)),
+        image("page left", "pk_page_left", **at(9, 202, 7, 260)),
+        image("page right", "pk_page_right", **at(286, 202, 8, 260)),
+    ]
     return [
-        image("sheet", "character_background", [
+        image("sheet", "character_background", page + iron_frame(303, 629, fill=False) + [
             window("name and title", [
+                image("plate", "panel_header", **at(-4, -4, 258, 31)),
                 text("name", "Name", "characterName", "SerifBig", BRIGHT_GOLD, "CENTER",
                      **at(0, 0, 250, 25)),
-                text("title", "", "CharacterTitle", None, "FFB4A88C", "CENTER",
-                     **at(0, 28, 250, 17)),
-            ], **at(26, 22, 250, 46)),
+                text("title", "", "CharacterTitle", None, DARK_INK, "CENTER",
+                     **at(0, 30, 250, 17)),
+            ], **at(26, 24, 250, 48)),
             window("experience and fame", [
-                text("label", "Level", colour=GOLD_TEXT, align="CENTER", **at(0, -6, 263, 16)),
+                text("label", "Level", colour=DARK_INK, align="CENTER", **at(0, -6, 263, 16)),
                 image("experience box", "exp_fame_window", **at(0, 12, 263, 30)),
                 image("fame box", "exp_fame_window", **at(0, 46, 263, 30)),
-                text("level", "0", "Level", "Serif14", align="CENTER", **at(4, 16, 26, 22)),
+                text("level", "0", "Level", "Serif14", align="CENTER", **at(3, 16, 26, 22)),
                 text("experience", "XP: 0", "XP", "Serif14", **at(44, 16, 200, 22)),
                 text("fame level", "0", "FameLevel", "Serif14", align="CENTER",
-                     **at(4, 50, 26, 22)),
+                     **at(3, 50, 26, 22)),
                 text("fame", "Fame: 0", "Fame", "Serif14", **at(44, 50, 200, 22)),
-            ], **at(20, 84, 263, 80)),
+            ], **at(20, 86, 263, 80)),
             window("model", widget="CharacterViewport", **at(16, 168, 270, 410)),
             window("health and mana", [
-                text("hp label", "HP", font="Serif14", colour=LABEL, **at(0, 6, 38, 24)),
-                text("hp", "0", "HP", "Serif14", align="RIGHT", **at(30, 6, 60, 24)),
-                text("mp label", "MP", font="Serif14", colour=LABEL, **at(140, 6, 38, 24)),
-                text("mp", "0", "Mana", "Serif14", align="RIGHT", **at(164, 6, 60, 24)),
-            ], **at(30, 170, 240, 26)),
+                image("plates", "pk_plate_pair", **at(0, 0, 263, 31)),
+                text("hp label", "HP", font="Serif14", colour=LABEL, **at(14, 5, 38, 24)),
+                text("hp", "0", "HP", "Serif14", align="RIGHT", **at(46, 5, 66, 24)),
+                text("mp label", "MP", font="Serif14", colour=LABEL, **at(146, 5, 38, 24)),
+                text("mp", "0", "Mana", "Serif14", align="RIGHT", **at(180, 5, 66, 24)),
+            ], **at(20, 168, 263, 31)),
             window("attributes", [
-                text("label", "Stats", colour=GOLD_TEXT, align="CENTER", **at(50, 0, 165, 18)),
+                text("label", "Stats", colour=DARK_INK, align="CENTER", **at(50, 2, 165, 18)),
                 image("boxes", "character_stats", **at(12, 22, 241, 70)),
-                text("strength", "0", "strPts", "Serif14", align="CENTER", **at(54, 28, 60, 24)),
-                text("magic", "0", "magicPts", "Serif14", align="CENTER", **at(184, 28, 60, 24)),
-                text("dexterity", "0", "dexPts", "Serif14", align="CENTER", **at(54, 62, 60, 24)),
-                text("defense", "0", "defPts", "Serif14", align="CENTER", **at(184, 62, 60, 24)),
+                text("strength", "0", "strPts", "Serif14", align="CENTER", **at(55, 28, 60, 24)),
+                text("magic", "0", "magicPts", "Serif14", align="CENTER", **at(193, 28, 60, 24)),
+                text("dexterity", "0", "dexPts", "Serif14", align="CENTER", **at(55, 62, 60, 24)),
+                text("defense", "0", "defPts", "Serif14", align="CENTER", **at(193, 62, 60, 24)),
             ], **at(18, 470, 265, 100)),
         ], widget="TopFrame", **at(0, 0, 303, 629)),
     ]
@@ -508,7 +673,7 @@ def bag_layout():
             ("potions", "potionHi"), ("spells", "scrollHi"), ("fish", "fishHi")]
     return [
         image("bag", "backroundbase_inventory_rollover", [
-            image("frame", "framea_rollover", [
+            image("frame", "framea_rollover", iron_frame(303, 629) + [
                 window("rows", [row(n, 92 * n) for n in range(5)] + [
                     image("selection", "facet", [
                         image("buttons", "facet_panel_bottom", [
@@ -590,14 +755,16 @@ def stats_layout():
         ], widget=widget, **at(326, y, 250, 48))
 
     def stat(widget, label, pts, added, value_label, value, y, picture):
+        # The PC sheet's row, 280 x 65 at (4, 26): its icon, the thin bar the names lie on, and
+        # the two plates under it.
         return image(widget, "statwindow_base", [
-            text("label", label, align="CENTER", colour=LABEL, **at(16, 14, 100, 17)),
-            image("icon", picture, **at(14, 38, 44, 46)),
-            text("points", "0", pts, "SerifBig", align="CENTER", **at(64, 48, 55, 27)),
-            text("added", "+0", added, align="RIGHT", **at(64, 70, 55, 17)),
-            text("value label", value_label, align="CENTER", colour=LABEL,
-                 **at(166, 14, 100, 17)),
-            text("value", "0-0", value, "SerifBig", align="CENTER", **at(161, 48, 112, 27)),
+            image("row", f"pk_stat_{widget}", **at(4, 26, 280, 65)),
+            text("label", label, colour=LABEL, **at(80, 29, 100, 17)),
+            text("points", "0", pts, "SerifBig", align="CENTER", **at(73, 55, 71, 27)),
+            text("added", "+0", added, align="RIGHT", **at(88, 72, 52, 17)),
+            text("value label", value_label, align="RIGHT", colour=LABEL,
+                 **at(170, 29, 104, 17)),
+            text("value", "0-0", value, "SerifBig", align="CENTER", **at(181, 55, 103, 27)),
         ], widget=widget, **at(0, y, 288, 110, ha="CENTER"))
 
     def resistance(name, widget, picture, x, y):
@@ -618,7 +785,8 @@ def stats_layout():
         help_box("MagicHelp", 368, "Magic improves damage dealt with magic weapons."),
         help_box("DefHelp", 486, "Defense improves the damage absorption of your armor."),
         image("page", "backroundbase_stats", [
-            image("frame", "framea_rollover", [
+            image("frame", "framea_rollover", iron_frame(303, 629) + [
+                image("page", "pk_page", **at(9, 9, 285, 611)),
                 image("header", "panel_header", [
                     text("title", "Stats", font="SerifBig", colour=BRIGHT_GOLD, align="CENTER",
                          **at(0, 9, 247, 26, ha="CENTER")),
@@ -642,7 +810,7 @@ def stats_layout():
                     text("points", "0", "ptsToSpend", "Serif14", align="RIGHT",
                          **at(106, 2, 80, 23)),
                 ], **at(0, -100, 196, 30, "CENTER", "BOTTOM")),
-                text("resistances", "Resistances", font="Serif14", colour=GOLD_TEXT,
+                text("resistances", "Resistances", font="Serif14", colour=DARK_INK,
                      align="CENTER", **at(73, 529, 156, 21)),
                 resistance("poison", "poisonRes", "icon_poison", 34, -44),
                 resistance("fire", "fireRes", "icon_fire", 155, -44),
@@ -656,7 +824,7 @@ def stats_layout():
 def journal_layout():
     return [
         image("page", "backroundbase_stats", [
-            image("frame", "framea", [
+            image("frame", "framea", iron_frame(303, 629) + [
                 image("header", "panel_header", [
                     text("title", "Journal", font="SerifBig", colour=BRIGHT_GOLD, align="CENTER",
                          **at(0, 9, 247, 26, ha="CENTER")),
@@ -695,7 +863,8 @@ def quest_layout():
 
     return [
         image("log", "backroundbase_quests", [
-            image("list frame", "framea", [
+            window("description frame", iron_frame(600, 629), **at(0, 0, 600, 629)),
+            image("list frame", "framea", iron_frame(300, 629) + [
                 image("header", "menu_textwindow", [
                     text("title", "Quests", font="SerifBig", colour="FFFFCA04", align="CENTER",
                          valign="CENTER", **at(0, 0, 0, -10, "CENTER", "CENTER"),
@@ -713,12 +882,10 @@ def quest_layout():
                 ], widget="moveframe", **at(-16, -26, 314, 124), **TOP),
             ], **at(607, 59, 282, 533)),
             window("title", [
-                image("bar", "black", [
+                image("bar", "menu_textwindow", [
                     text("title", "", "questtitle", "SerifBig", "FFFFCA04", "CENTER", "CENTER",
                          **full()),
-                    image("top rule", "frameb_top", **at(0, 0, 587, 6)),
-                    image("bottom rule", "frameb_bottom", **at(0, 40, 587, 6)),
-                ], **at(8, 6, 587, 46)),
+                ], **at(14, 9, 572, 40)),
             ], widget="questdescription", **at(0, 0, 600, 629)),
             window("details", [
                 text("description", "", "questdetails", "Serif14", wrap=True,
@@ -736,12 +903,6 @@ def quest_layout():
                           **at(407, 11, 54, 76), **TOP),
                 ], widget="rewards", **at(2, 526, 595, 102)),
             ], widget="questdetailswin", **at(0, 0, 603, 627)),
-            window("rules", [
-                image("right", "frame_skill_right", **at(0, -41, 19, 470, "RIGHT", "CENTER")),
-                image("top", "frame_skill_top", **at(0, 0, 600, 38)),
-                image("left", "frame_skill_left", **at(0, -41, 20, 470, va="CENTER")),
-                image("bottom", "frame_skill_bottom", **at(0, 0, 600, 121, va="BOTTOM")),
-            ], **at(0, 0, 600, 629)),
         ], widget="TopFrame", **at(0, 0, 901, 629)),
         window("abandon", [
             image("dim", "black", ALPHA=0.5, **full()),
@@ -759,7 +920,7 @@ def quest_layout():
                             text("words", "Cancel", font="SerifBig", **at(25, -1, 170, 25)),
                         ], **at(-80, 0, 21, 21, ha="RIGHT")),
                     ], **at(0, 0, 0, 73, "CENTER", "BOTTOM"), **{"SCALE WIDTH": 0.4}),
-                ], **{"LOOK N FEEL": "ceguiWidget/ItemText"}, **at(0, 0, 0, -21),
+                ], **{"LOOK N FEEL": "ceguiWidget/LineFrame"}, **at(0, 0, 0, -21),
                     **{"SCALE WIDTH": 1, "SCALE HEIGHT": 1}),
             ], **at(0, -65, 0, 250, "CENTER", "CENTER"), **{"SCALE WIDTH": 0.9}),
         ], widget="QuestAbandonConfirm", VISIBLE=False, **at(0, 0, 400, 300, "CENTER", "CENTER"),
@@ -891,12 +1052,7 @@ def skills_layout():
     return [
         window("tab", [
             image("background", "backroundbase_skillsa", [
-                window("panes frame", [
-                    image("left", "frame_skill_left", **at(0, -41, 20, 470, va="CENTER")),
-                    image("right", "frame_skill_right", **at(0, -41, 19, 470, "RIGHT",
-                                                                 "CENTER")),
-                    image("top", "frame_skill_top", **at(0, 0, 600, 38)),
-                    image("bottom", "frame_skill_bottom", **at(0, 0, 600, 121, va="BOTTOM")),
+                window("panes frame", iron_frame(601, 629) + [
                     window("panes", [
                         stripes,
                         pane(0, 8),
@@ -922,7 +1078,7 @@ def skills_layout():
                         ], **at(0, 0, 598, 105, va="BOTTOM")),
                     ], **at(0, 0, 600, 629)),
                 ], **at(300, 0, 600, 629)),
-                image("description frame", "framea", [
+                image("description frame", "framea", iron_frame(300, 629) + [
                     image("points", "textwindow360", [
                         obj("Text", "label", [
                             text("value", "0", "skillPointsValue", align="CENTER",
@@ -965,7 +1121,7 @@ def skill_map_layout():
                              **at(14, 6, -28, 23), **{"SCALE WIDTH": 1}),
                     ], **at(0, -17, 271, 36, ha="CENTER")),
                 ], **at(1, -72, 602, 276, "CENTER", "CENTER")),
-            ], **{"LOOK N FEEL": "ceguiWidget/ItemText"}, **full()),
+            ], **{"LOOK N FEEL": "ceguiWidget/LineFrame"}, **full()),
         ], widget="MapSkillDialog", **full()),
     ]
 
@@ -1096,7 +1252,7 @@ def pet_commands_layout():
                 image("glyph", "b_button", **at(-24, 0, 21, 21)),
             ], TEXT="Close", FONT="Serif14", COLOR="FFBAC6BE", **at(200, -8, 100, 24,
                                                                     "CENTER", "BOTTOM")),
-        ], widget="FrameB", **{"LOOK N FEEL": "ceguiWidget/ItemText"},
+        ], widget="FrameB", **{"LOOK N FEEL": "ceguiWidget/LineFrame"},
             **at(0, 162, 500, 262, ha="CENTER")),
     ]
 

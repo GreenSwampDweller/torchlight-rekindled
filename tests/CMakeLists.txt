@@ -82,6 +82,8 @@ add_executable(tl_tests
     skill_cast_test.cpp
     skill_animation_test.cpp
     attack_button_test.cpp
+    mouse_client_test.cpp
+    mouse_pick_test.cpp
     attack_hands_test.cpp
     animation_manifest_test.cpp
     skill_text_test.cpp

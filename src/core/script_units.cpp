@@ -6,6 +6,7 @@
 
 #include "core/ai_clock.h"
 #include "core/attack_button.h"
+#include "core/breakable.h"
 #include "core/character.h"
 #include "core/character_effects.h"
 #include "core/death.h"
@@ -41,6 +42,25 @@ float distance_xz_fused(const Vec3& a, const Vec3& b) {
     const float dx = b.x - a.x;
     const float dz = b.z - a.z;
     return std::sqrt(std::fma(dz, dz, dx * dx));
+}
+
+/// The champion's name, drawn before `makeChampion` (on `g_Rand`); empty for a `BOSS_CHAMPION`, and
+/// for a `UNIQUENAME` unit, which keeps its own though the draw is made.
+std::string champion_name_roll(const UnitStats& stats, const RandomNames* names, RunicRandom& rng) {
+    if (!stats.champion || names == nullptr) return {};
+    std::string name = names->generate_name(true, rng);
+    return stats.unique_name ? std::string() : name;
+}
+
+/// What a strike event carries of `rollAttack`'s blow; it interrupts only with damage.
+void blow_into_event(const Blow& blow, ScriptEvent& e) {
+    e.amount = static_cast<float>(blow.damage);
+    e.critical = blow.critical;
+    e.blocked = blow.blocked;
+    e.interrupts = blow.interrupts && 0 < blow.damage;
+    e.glancing = blow.glancing;
+    e.by_type = blow.by_type;
+    e.parts = blow.parts;
 }
 
 std::string upper(std::string text) {
@@ -137,6 +157,27 @@ void LevelScript::roll_own_effects(std::vector<Effect>& effects, EffectRolls& ro
 }
 
 // `CBaseUnit::unitInit`, the scale, then
+// The unit's own manager (`unitInit`): its own effects, then each affix of
+// `reapplyAffixes(false)` through `CBaseUnit::addAffix(name, LEVEL, this, -1)`.
+void LevelScript::make_unit_effects(UnitCreation& made, const UnitStats& stats, bool affixes,
+                                    int fallback, const EffectRolls& rolls) const {
+    const bool any_affix = affixes && !stats.authored_affixes.empty() && affix_book_ != nullptr;
+    if (!has_unit_effect_tables_ || graphs_ == nullptr) return;
+    if (made.own_effects.empty() && !any_affix) return;
+    made.effects = std::make_shared<EffectManager>();
+    EffectManager::Context context = unit_effect_tables_;
+    context.owner = rolls.owner;
+    made.effects->set_context(context);
+    for (const Effect& effect : made.own_effects) made.effects->add_effect(effect);
+    if (!any_affix) return;
+    const uint32_t at = static_cast<uint32_t>(stats.level_authored ? stats.level : fallback);
+    for (const std::string& name : stats.authored_affixes) {
+        std::optional<Affix> affix = new_affix_by_name(*affix_book_, upper(name), at, rolls);
+        if (!affix) continue;
+        made.effects->add_affix(*affix, at, -1.0f, std::string(), fallback, rolls);
+    }
+}
+
 // `CCharacter::unitInit` and its
 // `setLevel(LEVEL, true)`.
 LevelScript::UnitCreation LevelScript::roll_unit_creation(const std::string& unit,
@@ -153,7 +194,9 @@ LevelScript::UnitCreation LevelScript::roll_unit_creation(const std::string& uni
     // `CBaseUnit::unitInit` then `reapplyEffects(false)`:
     // `CEffectManager::createEffects` rolls each own `[EFFECT]` on `g_RandVolatile`
     // at the level it was made with (`LEVEL` is read after).
-    made.own_effects = stats.own_effects;
+    // A unit made from a save skips `reapplyEffects`: its effects come
+    // back from the record.
+    if (default_equipment) made.own_effects = stats.own_effects;
     EffectRolls rolls;
     rolls.graphs = graphs_;
     rolls.rng = &volatile_random();
@@ -182,26 +225,13 @@ LevelScript::UnitCreation LevelScript::roll_unit_creation(const std::string& uni
     // The unit's own manager: own effects (the values just rolled), then
     // `reapplyAffixes(false)` (after the `[SKILL]`s): each
     // affix through `CBaseUnit::addAffix(name, LEVEL, this, -1)`. Activations wait for the
-    // character (`load_own_effects`, `load_unit_skills`).
-    if (has_unit_effect_tables_ && graphs_ != nullptr &&
-        (!made.own_effects.empty() ||
-         (!stats.authored_affixes.empty() && affix_book_ != nullptr))) {
-        made.effects = std::make_shared<EffectManager>();
-        EffectManager::Context context = unit_effect_tables_;
-        context.owner = rolls.owner;
-        made.effects->set_context(context);
-        for (const Effect& effect : made.own_effects) made.effects->add_effect(effect);
-        if (affix_book_ != nullptr) {
-            const uint32_t at =
-                static_cast<uint32_t>(stats.level_authored ? stats.level : fallback);
-            for (const std::string& name : stats.authored_affixes) {
-                std::optional<Affix> affix =
-                    new_affix_by_name(*affix_book_, upper(name), at, rolls);
-                if (!affix) continue;
-                made.effects->add_affix(*affix, at, -1.0f, std::string(), fallback, rolls);
-            }
-        }
-    }
+    // character (`load_own_effects`, `load_unit_skills`). A unit made from a save skips
+    // `reapplyAffixes` unless it is a `SOCKETABLE`: its affixes'
+    // effects come back from the record.
+    const bool reapplies_affixes =
+        default_equipment ||
+        (unit_types_ != nullptr && unit_types_->isa(stats.unittype, unit_type::kSocketable));
+    make_unit_effects(made, stats, reapplies_affixes, fallback, rolls);
     const int level = stats.level_authored ? stats.level : fallback;
     static const StatBook kNoGraphs;
     made.combat = set_level(stats, level, difficulty_, graphs_ != nullptr ? *graphs_ : kNoGraphs,
@@ -281,11 +311,10 @@ LevelScript::UnitCreation LevelScript::roll_unit_creation(const std::string& uni
     // `BOSS_CHAMPION` keeps its name, no theme. `makeChampion` adds 0.2 to
     // the scale.
     if (stats.champion || stats.boss_champion) {
-        if (stats.champion && random_names_ != nullptr) {
-            made.champion_name = random_names_->generate_name(true, game_random());
-        }
+        std::string name = champion_name_roll(stats, random_names_, game_random());
         if (make_champion(made.combat, stats, difficulty_,
                           graphs_ != nullptr ? *graphs_ : kNoGraphs, volatile_random())) {
+            made.champion_name = std::move(name);
             made.scale = made.scale + 0.2f;
         }
     }
@@ -317,7 +346,8 @@ float LevelScript::unit_scale(int64_t id) const {
 // `roll_unit_creation` says.
 LevelScript::Character& LevelScript::make_character(const Object& o, const Vec3& at, float facing,
                                                     const UnitCreation* creation,
-                                                    const Character* carried) {
+                                                    const Character* carried,
+                                                    bool activate_effects) {
     Character fresh;
     fresh.node = o.id;
     fresh.unit = o.unit;
@@ -353,6 +383,7 @@ LevelScript::Character& LevelScript::make_character(const Object& o, const Vec3&
     fresh.left_hand = made.left_hand;
     fresh.weapon_attack = made.weapon_attack;
     fresh.left_weapon_attack = made.left_weapon_attack;
+    fresh.champion_name = made.champion_name;
     if (made.inventory) {
         fresh.own_inventory = made.inventory;
         fresh.inventory = made.inventory.get();
@@ -399,107 +430,7 @@ LevelScript::Character& LevelScript::make_character(const Object& o, const Vec3&
     // CAIManager::initalize: build watchers
     // from parsed [AI] [STAT] groups.
     for (const auto& def : stats.ai_watchers) {
-        AIStatWatcherHooks watcher_hooks;
-        watcher_hooks.owner_id = [my_id]() { return my_id; };
-        watcher_hooks.hp = [this, my_id]() -> int32_t {
-            if (const Character* self = character(my_id)) {
-                return static_cast<int32_t>(std::floor(self->combat.hp));
-            }
-            return 0;
-        };
-        watcher_hooks.max_hp = [this, my_id]() -> int32_t {
-            if (const Character* self = character(my_id)) {
-                return max_hp(self->combat);
-            }
-            return 1;
-        };
-        // INVENTED: monsters have no mana model in the port today.
-        //
-        watcher_hooks.mana = []() -> int32_t { return 0; };
-        watcher_hooks.max_mana = []() -> int32_t { return 1; };
-        watcher_hooks.alive = [this, my_id]() -> bool {
-            if (const Character* self = character(my_id)) {
-                return self->combat.hp > 0.0f && dead_.count(my_id) == 0;
-            }
-            return false;
-        };
-        watcher_hooks.has_level = [this]() -> bool { return !level_machines().empty(); };
-        watcher_hooks.formation_units = [this, my_id]() -> std::vector<int64_t> {
-            if (const Character* self = character(my_id)) {
-                return self->ai_flags.formation_units();
-            }
-            return {};
-        };
-        watcher_hooks.find_flags_by_id = [this](int64_t id) -> AIFlags* {
-            for (LevelScript* m : level_machines()) {
-                if (Character* other = m->character(id)) {
-                    return &other->ai_flags;
-                }
-            }
-            return nullptr;
-        };
-        watcher_hooks.active_units_count = [this, my_id](uint32_t unittype, uint32_t alignment,
-                                                         float radius, bool include_living,
-                                                         bool include_dead) -> float {
-            if (const Character* self = character(my_id)) {
-                std::vector<int64_t> out;
-                get_active_characters_at_position(self->motion.position, unittype, alignment,
-                                                  radius, include_living, include_dead, out);
-                return static_cast<float>(out.size());
-            }
-            return 0.0f;
-        };
-        // `getTargets`' area cases walk the level's character list (`level_machines()` in order)
-        // with the distance and, for `AREAUNITTYPES`, `ISA` only.
-        watcher_hooks.area_targets = [this, my_id](float radius,
-                                                   uint32_t unittype) -> std::vector<int64_t> {
-            if (const Character* self = character(my_id)) {
-                std::vector<int64_t> out;
-                get_active_characters_at_position(self->motion.position, unittype, 3, radius, true,
-                                                  true, out);
-                return out;
-            }
-            return {};
-        };
-        watcher_hooks.area_formation_targets = [this, my_id](float radius) -> std::vector<int64_t> {
-            std::vector<int64_t> out;
-            if (const Character* self = character(my_id)) {
-                const Vec3& my_pos = self->motion.position;
-                for (int64_t peer_id : self->ai_flags.formation_units()) {
-                    for (LevelScript* m : level_machines()) {
-                        if (const Character* peer = m->character(peer_id)) {
-                            const float dx = my_pos.x - peer->motion.position.x;
-                            const float dy = my_pos.y - peer->motion.position.y;
-                            const float dz = my_pos.z - peer->motion.position.z;
-                            if (std::sqrt(dx * dx + dy * dy + dz * dz) <= radius) {
-                                out.push_back(peer_id);
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            return out;
-        };
-        // CAIManager::addAISkill
-        watcher_hooks.add_ai_skill = [this, my_id](AISkill* skill, float duration) {
-            if (Character* self = character(my_id)) self->ai_skills.add(skill, duration);
-        };
-        // CAIManager::hasAISkill
-        watcher_hooks.has_ai_skill = [this, my_id](AISkill* skill) -> bool {
-            if (Character* self = character(my_id)) return self->ai_skills.has(skill);
-            return false;
-        };
-        // CAIManager::removeAISkill
-        watcher_hooks.remove_ai_skill = [this, my_id](AISkill* skill) {
-            if (Character* self = character(my_id)) self->ai_skills.remove(skill);
-        };
-        // INVENTED: CCharacter::setAIPlayAnimation
-        // is not transcribed; animation hook
-        // is empty.
-        watcher_hooks.play_animation = [](int64_t, const std::string&) {};
-
-        fresh.ai_watchers.emplace_back(def, std::move(watcher_hooks));
+        fresh.ai_watchers.emplace_back(def, stat_watcher_hooks(my_id));
     }
 
     if (carried != nullptr) {
@@ -521,17 +452,25 @@ LevelScript::Character& LevelScript::make_character(const Object& o, const Vec3&
         fresh.stance = carried->stance;
         fresh.town_timer = carried->town_timer;
     }
-    if (characters_.count(o.id) == 0) character_order_.push_back(o.id);
+    if (characters_.count(o.id) == 0) {
+        character_order_.push_back(o.id);
+        character_stamps_[o.id] = next_level_stamp();
+    }
     Character& character = characters_[o.id] = std::move(fresh);
     // `CBaseUnit::unitInit`: `reapplyEffects(false)` as the
     // unit is made, when the hooks are in (else on its first update).
-    load_own_effects(character);
+    if (activate_effects) load_own_effects(character);
     return character;
+}
+
+void LevelScript::activate_own_effects(int64_t id) {
+    if (Character* c = character(id)) load_own_effects(*c);
 }
 
 // PORT: a unit's record dropped from the machine.
 void LevelScript::forget_character(int64_t id) {
     characters_.erase(id);
+    character_stamps_.erase(id);
     character_order_.erase(std::remove(character_order_.begin(), character_order_.end(), id),
                            character_order_.end());
 }
@@ -552,8 +491,17 @@ bool LevelScript::unit_health(int64_t id, float& hp, float& max) const {
     const Character* c = character(id);
     if (c == nullptr) return false;
     hp = c->combat.hp;
-    max = static_cast<float>(max_hp(c->combat));
+    max = static_cast<float>(character_max_hp(*c));
     return true;
+}
+
+// `CCharacter::maxHP`.
+int LevelScript::character_max_hp(const Character& c) const {
+    const CharacterEffects own(c.effects.get());
+    const CharacterEffects master = master_effects(c);
+    const float pet = master ? master.effect_value(kEffectTypePercentPetHealth) : 0.0f;
+    return max_hp_formula(c.combat.base_max_hp, own ? own.effect_value(kEffectTypePercentHp) : 0.0f,
+                          master ? &pet : nullptr, own ? own.effect_value(kEffectTypeMaxHp) : 0.0f);
 }
 
 // PORT: the level machine's own bookkeeping: an accessor of its unit records.
@@ -562,6 +510,11 @@ bool LevelScript::unit_raw_defense(int64_t id, std::array<int, kDamageTypeCount>
     if (c == nullptr) return false;
     out = c->combat.damage_defense;
     return true;
+}
+
+const UnitCombat* LevelScript::unit_combat(int64_t id) const {
+    const Character* c = character(id);
+    return c != nullptr ? &c->combat : nullptr;
 }
 
 bool LevelScript::unit_defender(int64_t id, Defender& out) const {
@@ -576,7 +529,7 @@ bool LevelScript::unit_defender(int64_t id, Defender& out) const {
     // a skeleton's shield) is not carried by the level machine, so its
     // inventory's armour (`+0x3e8 -> +0x08`) is 0 here.
     out.armor = armor_class(c->combat, defense, c->effects.get(), master_effects(*c), 0);
-    out.max_hp = max_hp(c->combat);
+    out.max_hp = character_max_hp(*c);
     // `getBlockChance()` and `INTERRUPT RESISTANCE` (0x88), off its
     // own effects.
     out.block_chance = block_chance(CharacterEffects(c->effects.get()));
@@ -643,7 +596,7 @@ void LevelScript::award_pet_experience(int amount, std::vector<int64_t>& levelle
                 // then the hit points and the mana at their new maxima.
                 c->combat = set_level(stats_for(o.unit), c->combat.level + 1, difficulty_, *graphs_,
                                       volatile_random());
-                c->combat.hp = static_cast<float>(max_hp(c->combat));
+                c->combat.hp = static_cast<float>(character_max_hp(*c));
                 if (c->casting.loaded) {
                     // `CCharacter::calculateMaxMana`:
                     // the level times 5,
@@ -665,6 +618,14 @@ bool LevelScript::unit_position(int64_t id, Vec3& at) const {
     const Character* c = character(id);
     if (c == nullptr) return false;
     at = feet_of(*c);
+    return true;
+}
+
+// PORT: the level machine's own bookkeeping: an accessor of its unit records.
+bool LevelScript::unit_centre(int64_t id, Vec3& at) const {
+    const Character* c = character(id);
+    if (c == nullptr) return false;
+    at = c->motion.position;
     return true;
 }
 
@@ -943,7 +904,7 @@ bool LevelScript::modify_unit_hp(int64_t id, float amount) {
     if (c == nullptr || !(0.0f <= amount)) return false;
     // A mimic holding `MIMICIDLE` is not touched.
     if (c->mimic_idle) return false;
-    const float max = static_cast<float>(max_hp(c->combat));
+    const float max = static_cast<float>(character_max_hp(*c));
     const float before = c->combat.hp;
     // A body takes only the whole of `maxHP()`.
     if (before <= 0.0f && 0.0f < amount && amount < max) return false;
@@ -1320,6 +1281,37 @@ bool LevelScript::unit_is_enemy_of(int64_t node, LevelScript* other, int64_t oth
     return is_enemy(*o, UnitRef{other, other_node});
 }
 
+bool LevelScript::unit_no_gold(int64_t id) const {
+    const Object* o = find(id);
+    return o != nullptr && o->no_gold;
+}
+
+bool LevelScript::unit_no_treasure(int64_t id) const {
+    const Object* o = find(id);
+    return o != nullptr && o->no_treasure;
+}
+
+// PORT: the level machine's own bookkeeping: an accessor of its unit records.
+int32_t LevelScript::unit_console_alignment(int64_t id) const {
+    const Object* o = find(id);
+    return o != nullptr && character(id) != nullptr ? console_alignment(*o) : -1;
+}
+
+// PORT: the level machine's own bookkeeping: an accessor of its unit records.
+std::string LevelScript::unit_champion_name(int64_t id) const {
+    const Character* c = character(id);
+    return c != nullptr ? c->champion_name : std::string();
+}
+
+// `CSkillEvent::getCharacterCanBeAffectedByDamageShape`, its owner gates.
+bool LevelScript::unit_affects_anyone(int64_t node) const {
+    const Object* o = find(node);
+    if (o == nullptr) return false;
+    const Character* c = character(o->id);
+    if (c != nullptr && c->ai_flags.has(AIFlag::Berserk)) return true;
+    return console_alignment(*o) == 4;
+}
+
 // `CCharacter::isFriend(CCharacter*)`: a `NEUTRAL` target
 // is a friend; `BERSERK` or side `4` has none; else the sides match. PORT: a missing
 // target answers as a neutral one.
@@ -1344,6 +1336,8 @@ void LevelScript::set_target(Object& o, Character& c, bool has, const UnitRef& t
     const bool changed = c.has_target != has || (has && c.target != target);
     c.has_target = has;
     c.target = has ? target : UnitRef{};
+    // A character for the target lets the target item go; none leaves it.
+    if (has) c.target_item = 0;
     if (trace_on_) {
         // As the original's trace writes every `setTarget` call.
         const std::string whom = !has              ? std::string("none")
@@ -1451,16 +1445,43 @@ const LevelScript::Character* LevelScript::candidate(const Object& other) const 
 }
 
 // `CCharacter::getEffectValue(type, 7)`: own manager and inventory.
-// `MONSTER_HUNT` is a flag here (`hunt_affix`), its passive effects added while held:
-// 0x29 100, 0xe 360, 0x2c 200. INVENTED: its `DEFENSE` effect is not carried.
 float LevelScript::character_effect(const Character& c, int type) const {
-    float value = CharacterEffects(c.effects.get(), c.inventory).effect_value(type, kDamageTypeAny);
-    if (c.hunt_affix) {
-        if (type == 0x29) value += 100.0f;
-        if (type == 0xe) value += 360.0f;
-        if (type == 0x2c) value += 200.0f;
-    }
-    return value;
+    return CharacterEffects(c.effects.get(), c.inventory).effect_value(type, kDamageTypeAny);
+}
+
+// `CBaseUnit::addAffix(const std::wstring&, unsigned, float, CBaseUnit*)`:
+// the manager made when the unit has none, then `CEffectManager::addAffix` by name
+// at level 1, the unit its owner; each effect rolled on `g_RandVolatile`.
+void LevelScript::add_hunt_affix(int64_t id) {
+    Character* c = character(id);
+    if (c == nullptr || !has_unit_effect_tables_ || affix_book_ == nullptr) return;
+    EffectRolls rolls;
+    rolls.graphs = graphs_;
+    rolls.rng = &volatile_random();
+    rolls.owner.present = true;
+    rolls.owner.level = static_cast<uint32_t>(c->combat.level);
+    EffectManager::Context context = unit_effect_tables_;
+    context.owner = rolls.owner;
+    EffectManager* effects = ensure_unit_effects(id, context);
+    if (effects != nullptr)
+        effects->add_affix_by_name("MONSTER_HUNT", 1, affix_book_, -1.0f, rolls);
+}
+
+// `CCharacter::spawn`: `calculateActiveRange` against the
+// camera's `m_LastFocalPoint` (+0x2c) first, then the entrance only when the unit
+// is visible (+0x6d) and in active range (+0x161); the rest of the function returns without it.
+bool LevelScript::spawn_in_active_range(int64_t id, std::vector<ScriptEvent>& out) {
+    Object* o = find(id);
+    Character* c = character(id);
+    if (o == nullptr || c == nullptr) return false;
+    calculate_active_range(*o, *c, level_camera_look_at(), out);
+    return o->visible && c->active;
+}
+
+// `CEffectManager::deleteAffix(L"MONSTER_HUNT")` on the unit's manager, if any.
+void LevelScript::delete_hunt_affix(int64_t id) {
+    Character* c = character(id);
+    if (c != nullptr && c->effects) c->effects->delete_affix("MONSTER_HUNT");
 }
 
 // `CCharacter::sightRange`: `SIGHT_RADIUS` (with the attention bonus,
@@ -1557,30 +1578,27 @@ bool LevelScript::of_alignment(int32_t wanted, int32_t side, bool targetable) {
     return true;
 }
 
-// `CLevel::+0x54`, the near list, newest first (`CLList::add`); the player
-// after those made before it (`player_joined_`).
-// INVENTED: across layouts, machines in `set_level_machines` order, each newest first.
-std::vector<LevelScript::UnitRef> LevelScript::near_list_order() {
-    std::vector<UnitRef> out;
-    bool player_placed = false;
+// `CLevel::+0x54`, the near list, newest first (`CLList::add`) across the
+// level's machines; the player after those made before it joined (the first machine's join).
+std::vector<LevelScript::UnitRef> LevelScript::near_list_order() const {
+    std::vector<std::pair<uint64_t, UnitRef>> all;
+    uint64_t player_stamp = std::numeric_limits<uint64_t>::max();
     bool first = true;
     for (LevelScript* machine : level_machines()) {
-        const std::vector<int64_t>& order = machine->character_order_;
-        const size_t joined = std::min(machine->player_joined_, order.size());
-        for (size_t k = order.size(); k-- > 0;) {
-            if (first && !player_placed && k < joined) {
-                out.push_back(UnitRef{});
-                player_placed = true;
-            }
-            out.push_back(UnitRef{machine, order[k]});
-        }
-        if (first && !player_placed) {
-            out.push_back(UnitRef{});
-            player_placed = true;
-        }
+        if (first) player_stamp = machine->player_stamp_;
         first = false;
+        for (int64_t id : machine->character_order_) {
+            const auto stamp = machine->character_stamps_.find(id);
+            all.emplace_back(stamp != machine->character_stamps_.end() ? stamp->second : 0,
+                             UnitRef{machine, id});
+        }
     }
-    if (!player_placed) out.push_back(UnitRef{});
+    all.emplace_back(player_stamp, UnitRef{});
+    std::stable_sort(all.begin(), all.end(),
+                     [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::vector<UnitRef> out;
+    out.reserve(all.size());
+    for (const auto& entry : all) out.push_back(entry.second);
     return out;
 }
 
@@ -1691,7 +1709,12 @@ bool LevelScript::unit_skill_target_valid(const Object& o, const Character& c, c
         }
         return false;
     };
-    // `TARGET_UNITTYPE` is unauthored, so every unit matches.
+    // `TARGET_UNITTYPE` (property +0x74): `ISA`, an id of 0 for none.
+    const uint32_t want_type =
+        property != nullptr && !property->target_unit_type.empty() && unit_types_ != nullptr
+            ? unit_types_->id_of(property->target_unit_type)
+            : 0;
+    LevelScript* const self = const_cast<LevelScript*>(this);
     // alive is `fctiwz(floor(hp)) > 0` (`floor`): under
     // one hit point counts as dead; NaN is not alive.
     const auto whole_hp = [](float hp) { return std::floor(hp) >= 1.0f; };
@@ -1699,6 +1722,7 @@ bool LevelScript::unit_skill_target_valid(const Object& o, const Character& c, c
     owner.alive = whole_hp(c.combat.hp);
     owner.is_owner = true;
     owner.specific_unit = specific(o.unit, false);
+    owner.unit_type_matches = want_type == 0 || self->character_isa(o.id, want_type);
     SkillTargetFacts& t = query.candidate;
     if (who.player()) {
         t.alive = whole_hp(player_hp_);
@@ -1710,6 +1734,8 @@ bool LevelScript::unit_skill_target_valid(const Object& o, const Character& c, c
     if (who.player()) {
         t.is_owners_master = c.master_player;
         t.specific_unit = specific(std::string(), true);
+        // INVENTED: the player's own type is its class; `Player`, which every class ISAs.
+        t.unit_type_matches = want_type == 0 || unit_types_->isa(unit_type::kPlayer, want_type);
     } else {
         t.is_owner = who.machine == this && who.node == o.id;
         const Character* them = target_character(who);
@@ -1718,6 +1744,8 @@ bool LevelScript::unit_skill_target_valid(const Object& o, const Character& c, c
                             them->master == UnitRef{const_cast<LevelScript*>(this), o.id};
         t.is_owners_master = c.has_master && !c.master_player && c.master == who;
         t.specific_unit = specific(target_unit(who), false);
+        t.unit_type_matches = want_type == 0 || (who.machine != nullptr &&
+                                                 who.machine->character_isa(who.node, want_type));
     }
     return skill_target_is_valid(query);
 }
@@ -1883,29 +1911,12 @@ bool LevelScript::in_attack_range(Character& c, const UnitStats& stats) {
                                      centre, target_radius(c.target), ranged, bonus, &hands);
 }
 
-// `CCharacter::validLineOfSight(CLevel&, flags)`: true
-// under `NO LINE OF SIGHT` or with no target. The ray goes from the centre
-// 1.5 up to the target's centre, the rise held each way to a fifth of the world
-// coordinates' length (`fmuls`/`fmadds`); a NaN takes the limit.
-bool LevelScript::valid_line_of_sight(const Character& c) const {
-    if (c.ai_flags.has(AIFlag::NoLineOfSight)) return true;
-    Vec3 centre;
-    if (!c.has_target || !target_centre_at(c.target, centre)) return true;
-    const Vec3& self = c.motion.position;
-    const Vec3 from{self.x + 0.0f, (0.0f + self.y) + 1.5f, self.z + 0.0f};
-    Vec3 to{centre.x, (centre.y - self.y) + from.y, centre.z};
-    const float rise = to.y - from.y;
-    const float limit =
-        std::sqrt(std::fma(from.y, from.y, std::fma(to.z, to.z, to.x * to.x))) * 0.2f;
-    const float held = rise < limit ? rise : limit;
-    to.y = (-limit < held ? held : -limit) + from.y;
-    return sight_unobstructed(from, to);
-}
-
 // `CLevel::getActiveCharactersAtPosition`: every
-// near-list character of the type and alignment (3 any) within `radius` (3D, inclusive)
-// passing `alive == include_living || !alive == include_dead` (both off: the living pass).
-// INVENTED: the player first, then the machines' characters.
+// character of the level that `ISA`s the type (none without a hierarchy) and has the alignment
+// (3 any), passing `alive == include_living || !alive == include_dead` with alive meaning
+// `+0x278` neither 5 nor 6, within `radius` of `getPosition(true)`: the squares summed z, x, y
+// with `fmadds`, and only farther than `radius` refused (a NaN passes). The near list
+// (`+0x54`), newest first.
 void LevelScript::get_active_characters_at_position(const Vec3& pos, uint32_t unittype,
                                                     uint32_t alignment, float radius,
                                                     bool include_living, bool include_dead,
@@ -1913,51 +1924,40 @@ void LevelScript::get_active_characters_at_position(const Vec3& pos, uint32_t un
     const auto passes_life = [&](bool alive) {
         return alive == include_living || !alive == include_dead;
     };
-    if (level_player_enabled()) {
-        const bool alive = player_alive_;
-        if (passes_life(alive)) {
-            if (alignment == 3 || alignment == 1) {
-                if (unittype == 0) {
-                    const float dx = pos.x - player_at_.x;
-                    const float dy = pos.y - player_at_.y;
-                    const float dz = pos.z - player_at_.z;
-                    if (std::sqrt(dx * dx + dy * dy + dz * dz) <= radius) {
-                        out.push_back(0);
-                    }
-                }
+    const auto within = [&](const Vec3& at) {
+        const float dz = at.z - pos.z;
+        const float dx = at.x - pos.x;
+        const float dy = at.y - pos.y;
+        return !(std::sqrt(std::fma(dy, dy, std::fma(dx, dx, dz * dz))) > radius);
+    };
+    for (const UnitRef& who : near_list_order()) {
+        if (who.player()) {
+            if (level_player_enabled() && unit_types_ != nullptr &&
+                // INVENTED: the player's own type is its class; `Player`, which every class ISAs.
+                unit_types_->isa(unit_type::kPlayer, unittype) &&
+                (alignment == 3 || alignment == 1) && passes_life(player_alive_) &&
+                within({player_at_.x, player_at_.y + player_radius_, player_at_.z})) {
+                out.push_back(0);
             }
+            continue;
         }
-    }
-
-    for (LevelScript* machine : level_machines()) {
-        for (int64_t id : machine->character_order_) {
-            const Character* c = machine->character(id);
-            if (c == nullptr) continue;
-            const Object* obj = machine->find(id);
-            if (obj == nullptr) continue;
-
-            const bool alive = machine->dead_.count(id) == 0 && c->combat.hp > 0.0f;
-            if (!passes_life(alive)) continue;
-
-            if (alignment != 3) {
-                const UnitStats::Alignment side = machine->alignment_of(*obj);
-                uint32_t unit_align = 0;
-                if (side == UnitStats::Alignment::Hostile) unit_align = 2;
-                else if (side == UnitStats::Alignment::Friendly) unit_align = 1;
-                if (unit_align != alignment) continue;
-            }
-
-            // INVENTED: unittype hierarchy check omitted as live units carry no hierarchy in LevelScript;
-            // all shipped watchers author ANY.
-            (void)unittype;
-
-            const float dx = pos.x - c->motion.position.x;
-            const float dy = pos.y - c->motion.position.y;
-            const float dz = pos.z - c->motion.position.z;
-            if (std::sqrt(dx * dx + dy * dy + dz * dz) <= radius) {
-                out.push_back(id);
-            }
+        LevelScript* machine = who.machine;
+        const int64_t id = who.node;
+        const Character* c = machine->character(id);
+        if (c == nullptr) continue;
+        const Object* obj = machine->find(id);
+        if (obj == nullptr) continue;
+        if (!machine->unit_isa(machine->updated_character(id), unittype)) continue;
+        if (alignment != 3) {
+            const UnitStats::Alignment side = machine->alignment_of(*obj);
+            uint32_t unit_align = 0;
+            if (side == UnitStats::Alignment::Hostile) unit_align = 2;
+            else if (side == UnitStats::Alignment::Friendly) unit_align = 1;
+            if (unit_align != alignment) continue;
         }
+        const bool alive = obj->ai != ai_state::kDying && obj->ai != ai_state::kDead;
+        if (!passes_life(alive)) continue;
+        if (within(c->motion.position)) out.push_back(id);
     }
 }
 
@@ -2191,12 +2191,8 @@ void LevelScript::perform_attack(Object& o, Character& c, QuestState& quests,
     e.target_node = victim.node;
     e.target_machine = victim.machine;
     e.text = victim.player() ? std::string("the player") : target_unit(victim);
-    e.amount = static_cast<float>(blow.damage);
-    e.critical = blow.critical;
-    e.blocked = blow.blocked;
+    blow_into_event(blow, e);
     e.absorbed = absorbed;
-    e.by_type = blow.by_type;
-    e.parts = blow.parts;
     // What `rollAttack` hands `applyDamage`: the attacker-to-target direction,
     // turned by the jitter, and the knock-back force.
     e.has_direction = true;
@@ -2219,6 +2215,12 @@ void LevelScript::attack_hit(int64_t id, QuestState& quests, std::vector<ScriptE
 // ---------------------------------------------------------------------------
 // Damage (`CCharacter::applyDamage`, `modifyHP`, `CMonster::reactToDamage`)
 // ---------------------------------------------------------------------------
+
+// The unit that struck a blow: none for the player (0), on its own machine when it named one.
+LevelScript::UnitRef LevelScript::blow_attacker(int64_t attacker, LevelScript* attacker_machine) {
+    if (attacker == 0) return UnitRef{};
+    return attacker_machine != nullptr ? UnitRef{attacker_machine, attacker} : resolve(attacker);
+}
 
 bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestState& quests,
                               std::vector<ScriptEvent>& out, LevelScript* attacker_machine,
@@ -2248,9 +2250,7 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
         int64_t target_node = 0;
         bool has_target = false;
         if (attacker != kNoAttacker) {
-            const UnitRef by = attacker == 0                 ? UnitRef{}
-                               : attacker_machine != nullptr ? UnitRef{attacker_machine, attacker}
-                                                             : resolve(attacker);
+            const UnitRef by = blow_attacker(attacker, attacker_machine);
             if (attacker == 0 || by.machine != nullptr) {
                 target_machine = attacker == 0 ? nullptr : by.machine;
                 target_node = attacker == 0 ? 0 : by.node;
@@ -2278,9 +2278,7 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
             o = find(id);
             c = character(id);
             if (o == nullptr || c == nullptr) return false;
-            const UnitRef by = attacker == 0                 ? UnitRef{}
-                               : attacker_machine != nullptr ? UnitRef{attacker_machine, attacker}
-                                                             : resolve(attacker);
+            const UnitRef by = blow_attacker(attacker, attacker_machine);
             react_to_damage(*o, *c, by, true, quests, out);
         }
         if (!c->has_target) c->ai_flags.add(AIFlag::Aware, 3.0f);
@@ -2301,7 +2299,7 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
         }
     }
     float hp = before - amount;
-    const float max = static_cast<float>(max_hp(c->combat));
+    const float max = static_cast<float>(character_max_hp(*c));
     if (max < hp) hp = max;
     if ((stats.invincible_flag || o->invulnerable) && hp < 1.0f) hp = 1.0f;
     if (hp < 0.0f) {
@@ -2320,11 +2318,16 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
         // then, with an attacker and a blow that struck, its friends
         // near it react (`CLevel::reactToAreaDamage`); itself, with no HP, not.
         if (attacker != kNoAttacker && struck) {
-            react_to_area_damage(attacker, attacker_machine, this, id, feet_of(*c),
-                                 c->motion.radius, quests, out);
-            o = find(id);
-            c = character(id);
-            if (o == nullptr || c == nullptr) return true;
+            if (defer_death_sample_) {
+                deferred_area_react_ = DeferredAreaReact{attacker, attacker_machine, id,
+                                                         feet_of(*c), c->motion.radius};
+            } else {
+                react_to_area_damage(attacker, attacker_machine, this, id, feet_of(*c),
+                                     c->motion.radius, quests, out);
+                o = find(id);
+                c = character(id);
+                if (o == nullptr || c == nullptr) return true;
+            }
         }
         // The death branch (`die`, then the awards) rejoins at the
         // `AWARE` add below, so a unit killed while untargeted still
@@ -2341,9 +2344,7 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
         o = find(id);
         c = character(id);
         if (o == nullptr || c == nullptr) return false;
-        const UnitRef by = attacker == 0                 ? UnitRef{}
-                           : attacker_machine != nullptr ? UnitRef{attacker_machine, attacker}
-                                                         : resolve(attacker);
+        const UnitRef by = blow_attacker(attacker, attacker_machine);
         react_to_damage(*o, *c, by, true, quests, out);
     }
     // `CCharacter::applyDamage`,
@@ -2353,6 +2354,14 @@ bool LevelScript::damage_unit(int64_t id, float amount, int64_t attacker, QuestS
         c->ai_flags.add(AIFlag::Aware, 3.0f);
     }
     return false;
+}
+
+void LevelScript::react_after_death(QuestState& quests, std::vector<ScriptEvent>& out) {
+    if (!deferred_area_react_) return;
+    const DeferredAreaReact r = *deferred_area_react_;
+    deferred_area_react_.reset();
+    react_to_area_damage(r.attacker, r.attacker_machine, this, r.victim, r.at, r.radius, quests,
+                         out);
 }
 
 // `CCharacter::getBravery`: `+0x5c4`, which `makeChampion`
@@ -2368,8 +2377,7 @@ static float character_bravery(const UnitStats& stats, const UnitCombat& combat,
 
 // `CLevel::reactToAreaDamage(CCharacter*, CCharacter*)`,
 // `CCharacter::inDamageReactRange` inlined; the player is passed over
-// (empty `reactToDamage`). DIVERGENCE: the machines' lists in turn, so the
-// friends' order (and volatile rolls) can differ.
+// (empty `reactToDamage`). The level's near list (`+0x54`), newest first.
 void LevelScript::react_to_area_damage(int64_t attacker, LevelScript* attacker_machine,
                                        LevelScript* victim_machine, int64_t victim,
                                        const Vec3& victim_at, float victim_radius,
@@ -2378,30 +2386,26 @@ void LevelScript::react_to_area_damage(int64_t attacker, LevelScript* attacker_m
     const UnitRef by = attacker == 0                 ? UnitRef{}
                        : attacker_machine != nullptr ? UnitRef{attacker_machine, attacker}
                                                      : resolve(attacker);
-    for (LevelScript* machine : level_machines()) {
-        std::vector<int64_t> ids;
-        for (const Object& o : machine->objects_) {
-            if (machine->character(o.id) != nullptr) ids.push_back(o.id);
-        }
-        for (int64_t id : ids) {
-            if (machine == victim_machine && id == victim) continue;
-            Object* o = machine->find(id);
-            Character* c = machine->character(id);
-            if (o == nullptr || c == nullptr) continue;
-            // `+0x278` 5 and 6: dying and dead.
-            if (o->ai == ai_state::kDying || o->ai == ai_state::kDead) continue;
-            if (machine->dead_.count(id) != 0) continue;
-            if (!machine->is_friend(*o, struck)) continue;
-            // across the ground, `fmadds` for the sum of the
-            // squares, less both radii (`+0x15c`), against `+0x2a8`.
-            const Vec3 here = machine->feet_of(*c);
-            const float dx = victim_at.x - here.x;
-            const float dz = victim_at.z - here.z;
-            const float apart =
-                std::sqrt(std::fma(dz, dz, dx * dx)) - c->motion.radius - victim_radius;
-            if (machine->stats_for(o->unit).damage_react_radius < apart) continue;
-            machine->react_to_damage(*o, *c, by, false, quests, sink_for(machine, out));
-        }
+    for (const UnitRef& who : near_list_order()) {
+        LevelScript* machine = who.machine;
+        const int64_t id = who.node;
+        if (machine == nullptr) continue;
+        if (machine == victim_machine && id == victim) continue;
+        Object* o = machine->find(id);
+        Character* c = machine->character(id);
+        if (o == nullptr || c == nullptr) continue;
+        // `+0x278` 5 and 6: dying and dead.
+        if (o->ai == ai_state::kDying || o->ai == ai_state::kDead) continue;
+        if (machine->dead_.count(id) != 0) continue;
+        if (!machine->is_friend(*o, struck)) continue;
+        // across the ground, `fmadds` for the sum of the
+        // squares, less both radii (`+0x15c`), against `+0x2a8`.
+        const Vec3 here = machine->feet_of(*c);
+        const float dx = victim_at.x - here.x;
+        const float dz = victim_at.z - here.z;
+        const float apart = std::sqrt(std::fma(dz, dz, dx * dx)) - c->motion.radius - victim_radius;
+        if (machine->stats_for(o->unit).damage_react_radius < apart) continue;
+        machine->react_to_damage(*o, *c, by, false, quests, sink_for(machine, out));
     }
 }
 
@@ -2428,7 +2432,7 @@ void LevelScript::react_to_damage(Object& o, Character& c, const UnitRef& attack
 
     const UnitStats& stats = stats_for(o.unit);
     const float bravery = character_bravery(stats, c.combat, c.ai_flags);
-    const float max = static_cast<float>(max_hp(c.combat));
+    const float max = static_cast<float>(character_max_hp(c));
     const float hp = std::min(std::floor(c.combat.hp), max);
     // Stance +0x710 (1 from the constructor): a Passive pet struck directly
     // always runs.
@@ -2437,9 +2441,12 @@ void LevelScript::react_to_damage(Object& o, Character& c, const UnitRef& attack
                                           0x31 < volatile_random().integer_between(0, 100)));
     if (brave) {
         if (!target_alive(attacker) || !is_enemy(o, attacker)) return;
+        // The attacker's `+0x511`, the player's too.
         if (!attacker.player()) {
             const Object* them = target_object(attacker);
             if (them == nullptr || !them->targetable) return;
+        } else if (!player_targetable_) {
+            return;
         }
         const int roll = volatile_random().integer_between(0, 100);
         if (roll < 10 && (!c.has_target || attacker != c.target) && o.ai != ai_state::kFlee) {
@@ -2451,10 +2458,13 @@ void LevelScript::react_to_damage(Object& o, Character& c, const UnitRef& attack
             stop_pathing(c);
             set_ai_state(o, ai_state::kHunt, quests, out);
             set_target(o, c, true, attacker, out);
+            // `ROAR_SOUND`.
+            play_unit_sample(o, static_cast<int>(SoundSlot::Roar), out);
         }
         return;
     }
     // Afraid: run 3 to 5 away from the attacker.
+    interrupt(o, c, true, quests, out);
     set_ai_state(o, ai_state::kFlee, quests, out);
     Vec3 them;
     if (!target_at(attacker, them)) return;
@@ -2482,6 +2492,7 @@ std::string LevelScript::living_unit(int64_t node) const {
 // in state 0x28.
 bool LevelScript::apply_flee_effect(int64_t node, float chance, float duration, const Vec3* source,
                                     QuestState& quests, std::vector<ScriptEvent>& out) {
+    // `CCharacter::applyEffectOnUnit`, case 0x4f `FLEE EFFECT`.
     Object* o = find(node);
     Character* found = character(node);
     if (o == nullptr || found == nullptr || dead_.count(node) != 0) return false;
@@ -2492,30 +2503,26 @@ bool LevelScript::apply_flee_effect(int64_t node, float chance, float duration, 
     // `getEffectValue(0x79 FLEE RESIST, 7)`, off the unit's own manager.
     const float resist = c.effects ? c.effects->effect_value(0x79) : 0.0f;
     if (!(resist < roll)) return false;
-    bool turned = false;
-    // Already fleeing and only just set on its way (`+0x278 <= 0.5`): the copy
-    // is taken and nothing else happens.
+    // The flee sound (`CSoundBank::playSample`, bank +0x224, sample 0xe) before
+    // anything moves, unless already fleeing.
+    if (o->ai != ai_state::kFlee) play_unit_sample(*o, static_cast<int>(SoundSlot::Flee), out);
+    // Already fleeing and only just set on its way (`+0x208 <= 0.5`): only the copy.
     if (!(o->ai == ai_state::kFlee && c.since_route <= 0.5f)) {
-        turned = o->ai != ai_state::kFlee;
         interrupt(*o, c, true, quests, out);
         set_ai_state(*o, ai_state::kFlee, quests, out);
         if (source != nullptr) {
-            // 3 to 5 away from where the effect came from, on the ground plane.
+            // 3 to 5 away from the effect's owner, along the whole offset normalised.
             const Vec3 here = c.motion.position;
-            float dx = here.x - source->x;
-            float dz = here.z - source->z;
-            const float length = std::sqrt(dx * dx + 0.0f + dz * dz);
-            if (1e-08f < length) {
-                dx = dx / length;
-                dz = dz / length;
-            }
+            const Vec3 away_from =
+                ogre_normalised({here.x - source->x, here.y - source->y, here.z - source->z});
             const float away = volatile_random().between(3.0f, 5.0f);
-            set_destination(c, stats_for(o->unit), away * dx + here.x, away * dz + here.z);
+            const float dx = away * away_from.x;
+            const float dz = away * away_from.z;
+            set_destination(c, stats_for(o->unit), here.x + dx, here.z + dz);
         }
     }
-    // `copyEffect` (the shared tail).
     c.flee_effect_left = std::max(c.flee_effect_left, duration);
-    return turned;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2657,6 +2664,8 @@ bool LevelScript::unit_skill_blow(int64_t caster, LevelScript* victim_machine, i
     e.amount = static_cast<float>(blow.damage);
     e.critical = blow.critical;
     e.blocked = blow.blocked;
+    e.interrupts = blow.interrupts && 0 < blow.damage;
+    e.glancing = blow.glancing;
     e.by_type = blow.by_type;
     e.parts = blow.parts;
     // `rollAttack`'s direction and force for `applyDamage`, as a swing's.
@@ -2837,13 +2846,23 @@ bool LevelScript::has_defensive_skill(const Character& c) const {
 // `CCharacter::inSkillRange(long long)`: 0 in range, 1
 // nearer than `RANGEMIN` (always tested on the console), 2 out of range or nothing.
 int LevelScript::in_skill_range(Character& c) {
-    if (!c.has_target) return 2;
+    if (targets_nothing(c)) return 2;
     reselect_active_by_guid(c);
     const int active = c.casting.active;
     if (active < 0 || active >= static_cast<int>(c.casting.skills.size())) return 2;
     const UnitSkill& s = c.casting.skills[static_cast<size_t>(active)];
     const int32_t type = unit_skill_target_type(s);
     if (type == 3 || type == 10 || type == 9) return 0;
+    // with no target, the target item's distance less its radius
+    // (`CBaseUnit::CBaseUnit`'s, a breakable reading none) and the unit's: in range or out,
+    // no `RANGEMIN`.
+    if (!c.has_target) {
+        Vec3 item;
+        if (!target_item_at(c, item)) return 0;
+        const float me = std::max(0.0f, c.motion.radius);
+        const float gap = (distance_xz_fused(feet_of(c), item) - kBreakableRadius) - me;
+        return unit_skill_range(s) < gap ? 2 : 0;
+    }
     Vec3 at;
     if (!target_at(c.target, at)) return 2;
     // the ground distance (`fmuls`, `fmadds`), less
@@ -2908,7 +2927,10 @@ bool LevelScript::can_cast_current_skill(Object& o, Character& c, bool skip_rang
     SkillCaster caster = unit_skills_.caster(*this, o.id, machine, node, c.has_target);
     caster.target_position = c.destination;
     caster.skip_range = skip_range;
-    return c.casting.runner.can_be_executed(s->known, s->known.effective, caster);
+    // no character targeted, the target item is.
+    aim_at_target_item(c, caster);
+    return c.casting.runner.can_be_executed(s->known, s->known.effective, caster,
+                                            SkillActivation::Normal);
 }
 
 // `CCharacter::castSkill(long long)`, the
@@ -2940,7 +2962,7 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
     // an enemy - and looks among the `EVIL` (`getTargetAlignment`'s 6 made 2).
     const int32_t alignment = s->known.def != nullptr ? s->known.def->target_alignment : 2;
     int32_t look_among = target_alignment_of(o, c);
-    bool search = !c.has_target;
+    bool search = targets_nothing(c);
     if (unit_skill_target_type(*s) == 2 && c.has_target) {
         if (alignment == 2) {
             if (is_friend(o, c.target)) set_target(o, c, false, UnitRef{}, out);
@@ -2952,9 +2974,9 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
         }
     }
     // No target, no target item, `FINDTARGETANGLE` above 0: `findCharacterWithinView`
-    // with the reach-scaled range, and `setTarget` on what it found.
-    // INVENTED: with nothing found, `findItemWithinView` is not asked for a
-    // monster, and a position skill's walk to a pathable point is not run.
+    // with the reach-scaled range, and `setTarget` on what it found; with nothing
+    // found, `findItemWithinView` on the same frame and reach, and
+    // `setTargetItem` on the breakable.
     if (search) {
         const SkillProperty* property = unit_skill_property(*s);
         const float angle = property != nullptr ? property->find_target_angle : 0.0f;
@@ -2974,6 +2996,7 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
                             found.player() ? "the player" : target_unit(found).c_str(),
                             target_alive(found) ? "" : " (a body)");
             }
+            find_target_item(o, c, *s, angle, reach);
         }
     }
     // a skill aimed at a place (`POSITION` 1, 0xb,
@@ -3001,8 +3024,10 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
                     aim.forward = {std::sin(them->facing), 0.0f, std::cos(them->facing)};
                 }
                 point = {aim.centre.x, aim.centre.y + aim.radius * -1.0f, aim.centre.z};
-            } else {
-                // the forward (vtable +0x98) times
+            } else if (!target_item_at(c, point)) {
+                // take the item's position, its height less a radius the
+                // console reads from absolute address 0x15c (INVENTED: 0 stands in for it).
+                // Else: the forward (vtable +0x98) times
                 // `RANGE`, added to the centre, the height less the radius.
                 const float fx = owner.forward.x * range;
                 const float fy = owner.forward.y * range;
@@ -3015,9 +3040,9 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
                     *property, point, &owner, aimed ? &aim : nullptr, volatile_random())) {
                 c.destination = *at;
             }
-            // the target let go (and the target item, which a
-            // level unit never has).
+            // the target let go, and the target item.
             set_target(o, c, false, UnitRef{}, out);
+            c.target_item = 0;
             // on the ground from the centre, and no
             // further than `RANGE` (`fmuls z*z`, `fmadds 0*0 + that`, `fmadds
             // x*x + that`).
@@ -3048,9 +3073,14 @@ bool LevelScript::cast_skill(Object& o, Character& c, QuestState& quests,
     LevelScript* machine = c.has_target ? c.target.machine : nullptr;
     const int64_t node = c.has_target ? (c.target.player() ? -1 : c.target.node) : 0;
     SkillCaster caster = unit_skills_.caster(*this, o.id, machine, node, c.has_target);
-    // `getSkillCanBeExecuted(skill, this, 3, +0x1c0, target, 0)`.
+    // `getSkillCanBeExecuted(skill, this, 3, +0x1c0, target, 0)`: the target, else
+    // the target item.
     caster.target_position = c.destination;
-    if (!c.casting.runner.can_be_executed(s->known, s->known.effective, caster)) return false;
+    aim_at_target_item(c, caster);
+    if (!c.casting.runner.can_be_executed(s->known, s->known.effective, caster,
+                                          SkillActivation::Normal)) {
+        return false;
+    }
     const std::string name = s->known.entry.name;
     if (!unit_skills_.cast(*this, o.id, machine, node, c.has_target)) return false;
     // `startSkill`: the level property's
@@ -3269,13 +3299,19 @@ void LevelScript::skill_approach_ai(Object& o, Character& c, float delta, QuestS
         set_ai_state(o, ai_state::kNone, quests, out);
         set_target(o, c, false, UnitRef{}, out);
     };
-    // no target, one dying or dead, or either a
-    // pet near death: a friend. State 0, no target.
-    if (!c.has_target || !target_alive(c.target) || pet_near_death(o, c) ||
-        (!c.target.player() && c.target.machine != nullptr &&
-         c.target.machine->unit_near_death(c.target.node)) ||
-        is_friend(o, c.target)) {
+    // no target and no target item, or a target dying or dead, or
+    // either a pet near death: state 0, no target.: a friend, the same
+    // and the target item let go. A breakable target item alone (`ISA` 0x1d) is approached.
+    if (targets_nothing(c) ||
+        (c.has_target && (!target_alive(c.target) || pet_near_death(o, c) ||
+                          (!c.target.player() && c.target.machine != nullptr &&
+                           c.target.machine->unit_near_death(c.target.node))))) {
         drop();
+        return;
+    }
+    if (c.has_target && is_friend(o, c.target)) {
+        drop();
+        c.target_item = 0;
         return;
     }
     if (active_unit_skill(c) == nullptr) return;
@@ -3286,18 +3322,24 @@ void LevelScript::skill_approach_ai(Object& o, Character& c, float delta, QuestS
         monster_update_ai(o, c, 0.0f, quests, out, true);
         return;
     }
+    // the target's place, else the target item's.
     Vec3 at;
-    target_at(c.target, at);
+    if (c.has_target) {
+        target_at(c.target, at);
+    } else {
+        target_item_at(c, at);
+    }
     const UnitStats& stats = stats_for(o.unit);
     // centre to centre on the ground (`fmuls dx*dx`,
     // `fmadds dz*dz + that`); running from the near-walk radius (+0x298) on.
     const float d = distance_xz_fused(feet_of(c), at);
     c.run = d >= stats.near_walk_radius;
     // out of the follow radius (+0x2a4) a unit whose
-    // master is not the player gives up: stopped, state 0, no target.
+    // master is not the player gives up: stopped, state 0, no target, no target item.
     if (!c.master_player && !(d < stats.follow_radius)) {
         stop_pathing(c);
         drop();
+        if (o.ai != ai_state::kDying && o.ai != ai_state::kDead) c.target_item = 0;
         return;
     }
     // a `SELF` (3), `SELFANDPETS` (10) or `PETS` (9)
@@ -3333,7 +3375,7 @@ void LevelScript::skill_approach_ai(Object& o, Character& c, float delta, QuestS
                 return;
             }
             follow = true;
-        } else {
+        } else if (c.has_target) {
             const float fx = at.x - c.destination.x;
             const float fz = at.z - c.destination.z;
             if (!(std::sqrt(std::fma(fz, fz, fx * fx)) < 4.0f)) {
@@ -3345,9 +3387,15 @@ void LevelScript::skill_approach_ai(Object& o, Character& c, float delta, QuestS
                 follow = true;
             }
         }
-        if (follow) follow_character(o, c, c.target, out);
+        // with no target, a walk to the target item.
+        if (follow && c.has_target) {
+            follow_character(o, c, c.target, out);
+        } else if (follow) {
+            set_destination(c, stats, at.x, at.z);
+        }
         if (!c.pathing) {
             set_target(o, c, false, UnitRef{}, out);
+            c.target_item = 0;
             set_ai_state(o, ai_state::kNone, quests, out);
             return;
         }
@@ -3545,9 +3593,11 @@ std::vector<LevelScript::BankInstance> LevelScript::unit_bank_samples(const Obje
 // `CSoundBank::playSample(slot, ...)`, its draws in order: a slot whose
 // chance is not below 0 rolls `randomIntegerBetweenVolatile(1, 100)`, playing
 // when the chance is above it; then the instance, `randomIntegerBetweenVolatile(0, count -
-// 1)`; then `CSoundManager::playSound` draws the volume
-// variation only once the sound started (`audio_plays`). Played as drawn
-// (`ScriptEvent::on`).
+// 1)`; then `CSoundManager::playSound` culls a play at volume 0
+// and draws the volume variation only for one that gets a channel. The unit's play
+// hands its node, volume and radius 0 - the slot's own (`CCharacter::spawn`) - so
+// its volume is the slot's (+0x6c, the last added's) times the falloff from the listener over the
+// slot's radius (`configureVolumeScale`). Played as drawn (`ScriptEvent::on`).
 void LevelScript::play_unit_sample(const Object& o, int slot, std::vector<ScriptEvent>& out) const {
     bool drawn = false;
     std::string sample;
@@ -3571,10 +3621,14 @@ void LevelScript::play_unit_sample(const Object& o, int slot, std::vector<Script
         // Which instance - which recording - of the slot.
         const BankInstance& chosen = samples[static_cast<size_t>(
             rolls.integer_between(0, static_cast<int>(samples.size()) - 1))];
-        // The slot's volume (+0x6c) is the last added's.
-        if (samples.back().data->volume > 0.0f && audio_plays_ && audio_plays_()) {
-            variation = rolls.between(0.0f, chosen.data->volume_variation);
-        }
+        const SoundData& slot_data = *samples.back().data;
+        const Character* c = character(o.id);
+        const Vec3 at = c != nullptr ? c->motion.position : o.position;
+        const float heard =
+            slot_data.volume *
+            configure_volume_scale(slot_data.radius, listener_ ? listener_() : Vec3{}, at);
+        const bool plays = audio_plays_ ? slot_data.volume > 0.0f && audio_plays_() : 0.0f < heard;
+        if (plays) variation = rolls.between(0.0f, chosen.data->volume_variation);
         sample = chosen.data->name;
         recording = chosen.data->files[chosen.file];
         drawn = true;
@@ -3654,110 +3708,6 @@ bool LevelScript::idle_ai_open_attack(Object& o, Character& c, const UnitRef& fo
     return true;
 }
 
-// `CMonster::idleAIRangedDefender(float, CLevel&, bool)`.
-//
-bool LevelScript::idle_ai_ranged_defender(Object& o, Character& c, QuestState& quests,
-                                          std::vector<ScriptEvent>& out) {
-    c.run = false;
-    bool gated = false;
-    UnitRef found;
-    if (!idle_ai_sight(o, c, true, gated, found)) {
-        // No one to act on: a defensive skill made ready, if none is.
-        if (!gated && c.casting.active < 0) select_defensive_skill(c);
-        return false;
-    }
-    set_target(o, c, true, found, out);
-    if (idle_ai_open_attack(o, c, found, quests, out)) return true;
-    select_defensive_skill(c);
-    // `canCastCurrentSkill(null, false, false)`: of the target, and
-    // `castSkill(-1)`.
-    if (active_unit_skill(c) != nullptr && can_cast_current_skill(o, c, false, false, out)) {
-        cast_skill(o, c, quests, out);
-        return true;
-    }
-    if (9 < volatile_random().integer_between(0, 100)) return false;
-    set_ai_state(o, ai_state::kFlee, quests, out);
-    return true;
-}
-
-// `CMonster::idleAIRangedCaster(float, CLevel&, bool)`.
-//
-bool LevelScript::idle_ai_ranged_caster(Object& o, Character& c, float delta, QuestState& quests,
-                                        std::vector<ScriptEvent>& out) {
-    c.run = false;
-    // Defensive on a 35% draw when one is held, offensive otherwise.
-    const auto pick = [&]() {
-        if (!has_defensive_skill(c) || 0x22 < volatile_random().integer_between(0, 100)) {
-            select_offensive_skill(o, c, false, quests, out);
-        } else {
-            select_defensive_skill(c);
-        }
-    };
-    bool gated = false;
-    UnitRef found;
-    if (!idle_ai_sight(o, c, false, gated, found)) {
-        if (!gated && c.casting.active < 0) pick();
-        return false;
-    }
-    set_target(o, c, true, found, out);
-    if (idle_ai_open_attack(o, c, found, quests, out)) return true;
-    pick();
-    if (active_unit_skill(c) != nullptr && can_cast_current_skill_on(o, c, found, out)) {
-        set_target(o, c, true, found, out);
-        set_ai_state(o, ai_state::kSkill, quests, out);
-        stop_pathing(c);
-        monster_update_ai(o, c, delta, quests, out, true);
-        return true;
-    }
-    if (9 < volatile_random().integer_between(0, 100)) return false;
-    set_ai_state(o, ai_state::kFlee, quests, out);
-    return true;
-}
-
-// `CMonster::idleAICircler(float, CLevel&, bool)`.
-//
-bool LevelScript::idle_ai_circler(Object& o, Character& c, float delta, QuestState& quests,
-                                  std::vector<ScriptEvent>& out) {
-    c.run = false;
-    // Defensive on a 10% draw when one is held, offensive otherwise.
-    const auto pick = [&]() {
-        if (!has_defensive_skill(c) || 9 < volatile_random().integer_between(0, 100)) {
-            select_offensive_skill(o, c, false, quests, out);
-        } else {
-            select_defensive_skill(c);
-        }
-    };
-    bool gated = false;
-    UnitRef found;
-    if (!idle_ai_sight(o, c, false, gated, found)) {
-        if (!gated && c.casting.active < 0) pick();
-        return false;
-    }
-    set_target(o, c, true, found, out);
-    if (idle_ai_open_attack(o, c, found, quests, out)) return true;
-    pick();
-    if (active_unit_skill(c) != nullptr && can_cast_current_skill_on(o, c, found, out)) {
-        set_target(o, c, true, found, out);
-        set_ai_state(o, ai_state::kSkill, quests, out);
-        stop_pathing(c);
-        monster_update_ai(o, c, delta, quests, out, true);
-        return true;
-    }
-    // The hunt either way - and it stays the state when the draw
-    // below fails and the handler answers that it did nothing.
-    set_ai_state(o, ai_state::kHunt, quests, out);
-    if (0x13 < volatile_random().integer_between(0, 100)) return false;
-    // State 0xb (`getRangeAI`), to a point within 3 of the unit found: z drawn
-    // first, then x.
-    set_ai_state(o, 0xb, quests, out);
-    Vec3 at;
-    target_at(found, at);
-    const float z = volatile_random().between(at.z - 3.0f, at.z + 3.0f);
-    const float x = volatile_random().between(at.x - 3.0f, at.x + 3.0f);
-    set_destination(c, stats_for(o.unit), x, z);
-    return true;
-}
-
 // `CCharacter::addPet(player, c)` ending in `setMaster`:
 // master the player, side `GOOD`, AI reset unless dying
 // or dead, `setTarget(null)`.
@@ -3810,6 +3760,21 @@ bool LevelScript::unit_has_master(int64_t id) const {
     return c != nullptr && has_master(*c);
 }
 
+// PORT: the level machine's own bookkeeping: an accessor of its unit records.
+int64_t LevelScript::unit_target_item(int64_t id) const {
+    const Character* c = character(id);
+    return c != nullptr ? c->target_item : 0;
+}
+
+// PORT: the level machine's own bookkeeping: an accessor of its unit records.
+bool LevelScript::unit_master(int64_t id, LevelScript*& machine, int64_t& node) const {
+    const Character* c = character(id);
+    if (c == nullptr || !c->has_master || c->master.machine == nullptr) return false;
+    machine = c->master.machine;
+    node = c->master.node;
+    return true;
+}
+
 // `CCharacter::update` on a body: only the fade, the
 // range, `CCharacter::characterShouldFadeOut`, the deletion and the camera test.
 void LevelScript::body_update(Object& o, Character& c, float delta, std::vector<ScriptEvent>& out) {
@@ -3835,6 +3800,10 @@ void LevelScript::body_update(Object& o, Character& c, float delta, std::vector<
             e.on = !c.flight.falls;
             out.push_back(e);
         }
+    } else if (!c.flying && o.ai == ai_state::kDying) {
+        // Not flying: `completeDeath` once the death animation stops playing.
+        c.dying_left -= delta;
+        if (c.dying_left <= 0.0f) o.ai = ai_state::kDead;
     }
     // `characterShouldFadeOut`: a body that is not a player's, under `DESTROY
     // DEAD CORPSE`.
@@ -4229,7 +4198,7 @@ void LevelScript::update_in_town_timer(Object& o, Character& c, float delta, Que
         if (!(0.0f < c.town_timer)) c.town_timer = 0.1f;
         return;
     }
-    c.combat.hp = static_cast<float>(max_hp(c.combat));
+    c.combat.hp = static_cast<float>(character_max_hp(c));
     c.town_timer = 0.0f;
     set_ai_state(o, ai_state::kNone, quests, out);
     if (c.master_player) {
@@ -4332,9 +4301,10 @@ void LevelScript::load_own_effects(Character& c) {
     }
     if (!c.effects || c.own_effects.empty()) return;
     c.own_effects_loaded = true;
-    // The manager `roll_unit_creation` made holds them already; each one's
-    // `activateEffect` now that the character is there to learn from it.
-    for (Effect effect : c.own_effects) activate_unit_effect(c.node, effect);
+    // The manager `roll_unit_creation` made holds them already, their skills constructed as
+    // they were rolled; each one's `activateEffect` now that the character is there to learn
+    // from it, without a second construction.
+    for (Effect effect : c.own_effects) activate_unit_effect(c.node, effect, /*construct=*/false);
     c.effects->calculate_effect_values();
 }
 
@@ -4368,7 +4338,7 @@ SkillCopies unit_known_list(const LevelScript::UnitCasting& casting, bool one_pe
 }  // namespace
 
 // `CBaseUnit::activateEffect(CEffect*)` on a level unit.
-void LevelScript::activate_unit_effect(int64_t node, Effect& effect) {
+void LevelScript::activate_unit_effect(int64_t node, Effect& effect, bool construct) {
     if (!effect_teaches_skill(effect.type)) return;
     UnitCasting* k = unit_casting(node);
     if (k == nullptr || graphs_ == nullptr || !unit_skills_.skill_files || !unit_skills_.skill_def)
@@ -4390,6 +4360,28 @@ void LevelScript::activate_unit_effect(int64_t node, Effect& effect) {
         if (upper(copy.name) == key) made = &copy;
     }
     if (made == nullptr) return;
+    const SkillDef* def = unit_skills_.skill_def(key);
+    // Every activation's copy is a new `CSkill::CSkill`: its effects roll
+    // as made, whether or not the port keeps the copy. An own effect's copy was made as the
+    // effect was rolled (`roll_own_effects`): the console's `createEffect` activates it there,
+    // once (MAIN:23's load counted its event files twice before 2026-11-10).
+    if (construct && def != nullptr && has_unit_effect_tables_ &&
+        unit_effect_tables_.types != nullptr) {
+        SkillConstruction with;
+        with.types = unit_effect_tables_.types;
+        with.unit_types = unit_types_;
+        with.affixes = affix_book_;
+        with.rolls.graphs = graphs_;
+        with.rolls.rng = &volatile_random();
+        if (const Character* c = character(node)) {
+            with.rolls.owner.present = true;
+            with.rolls.owner.level = static_cast<uint32_t>(c->combat.level);
+        }
+        with.game_rng = &game_random();
+        with.layout_adds_sample = unit_skills_.layout_adds_sample;
+        with.load_event_file = unit_skills_.load_event_file;
+        roll_skill_construction(*def, with);
+    }
     // `CSkillManager::setSkillLevel`
     // re-levels every copy of the name.
     for (UnitSkill& held : k->skills) {
@@ -4401,7 +4393,6 @@ void LevelScript::activate_unit_effect(int64_t node, Effect& effect) {
     // The new copy is `CSkill::CSkill` of the
     // template: enabled, `+0x118` 100, `+0x11c` 0, its charges as
     // `activateEffect` set them.
-    const SkillDef* def = unit_skills_.skill_def(key);
     if (def == nullptr) return;
     UnitSkill skill;
     skill.known.def = def;
@@ -4591,6 +4582,10 @@ bool LevelScript::set_unit_inventory(int64_t id, const Inventory* inventory) {
     return true;
 }
 
+void LevelScript::ensure_unit_skills(int64_t id) {
+    if (Character* c = character(id)) load_unit_skills(*c);
+}
+
 // PORT: a unit's mana, its skills loaded first.
 bool LevelScript::unit_mana(int64_t id, float& mana, float& max) {
     Character* c = character(id);
@@ -4657,7 +4652,7 @@ bool LevelScript::pet_near_death(const Object& o, const Character& c) const {
     if (!has_master(c) || !stats_for(o.unit).invincible_flag) return false;
     const int hp = static_cast<int>(c.combat.hp);
     if (hp < 2) return true;
-    const int max = max_hp(c.combat);
+    const int max = character_max_hp(c);
     if (static_cast<float>(hp) <= static_cast<float>(max) * 0.15f) return o.ai == ai_state::kFlee;
     return false;
 }

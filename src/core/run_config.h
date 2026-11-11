@@ -19,6 +19,8 @@
 //   width=1280, height=720   the window's size, or the screen's in fullscreen
 //   fullscreen=0             1: fullscreen at that resolution
 //   vsync=1                  0: frames as fast as the machine draws them
+//   mouse=0                  1: the PC's mouse and keyboard controls (core/mouse_client.h)
+//                            in place of the pad's; `--mouse` does the same for one run
 //
 // A device makes the file with these defaults where its game files are (the
 // Switch's `sdmc:/switch/torchlight/`, the folder the Android launcher was
@@ -53,6 +55,8 @@ struct RunConfig {
 #endif
     /// Where `kModsPage`: false skips the page and starts with no mods at all.
     bool mods_menu = true;
+    /// The PC's mouse and keyboard controls in place of the pad's.
+    bool mouse = false;
 };
 
 /// The text a new `config.txt` holds: `defaults` written out, with a line

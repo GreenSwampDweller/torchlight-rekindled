@@ -1426,7 +1426,7 @@ float dmg_to_reflect_from_missile(float chance, const EffectManager* own, bool h
                                   const std::array<const EffectManager*, 12>& worn,
                                   RunicRandom& rolls) {
     // `CCharacter::getDmgToReflectFromMissile`. Both the
-    // "no" exits return 0.
+    // "no" exits return 0; a NaN chance is refused (`ble` branches unless greater).
     if (!(0.0f < chance)) return 0.0f;
     if (chance < rolls.between(0.0f, 100.0f)) return 0.0f;
     // The character's own (X360 `+0x17c`), its third and fourth numbers

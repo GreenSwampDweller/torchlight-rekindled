@@ -199,7 +199,7 @@ TL_TEST(procs_a_worn_item_casts_from_its_own_manager) {
     };
     item.set_context(context);
     item.add_effect(cast_effect(tl::core::kEffectCastSkillOnTarget, "GOBLIN FIRE BALL", 100.0f, 1,
-                                EffectActivation::Transfer));
+                                EffectActivation::Dynamic));
     std::array<ProcHolder, 12> worn{};
     worn[3] = ProcHolder{&item, &item_skills};
     // Location 5 holds the same effects but no skill manager: passed by.
@@ -214,6 +214,19 @@ TL_TEST(procs_a_worn_item_casts_from_its_own_manager) {
     TL_CHECK_EQ(casts[0].location, 3);
     TL_CHECK(!casts[0].lockout);
     TL_CHECK(!casts[0].from_target);
+
+    // The gate is `hasEffect`, the passive and dynamic lists only: an item whose cast
+    // effect sits on the transfer list alone casts nothing, though the roll walks all three.
+    EffectManager transfer_only;
+    transfer_only.set_context(context);
+    transfer_only.add_effect(cast_effect(tl::core::kEffectCastSkillOnTarget, "GOBLIN FIRE BALL",
+                                         100.0f, 1, EffectActivation::Transfer));
+    std::array<ProcHolder, 12> held{};
+    held[3] = ProcHolder{&transfer_only, &item_skills};
+    casts.clear();
+    tl::core::execute_procs(tl::core::kEffectCastSkillOnTarget, ProcHolder{&own, &none}, held,
+                            graphs, rolls, [&](const ProcCast& c) { casts.push_back(c); });
+    TL_CHECK_EQ(casts.size(), 0u);
 }
 
 // a weapon's own `[EFFECT]`s teach first, then its `[SKILL]`s, then

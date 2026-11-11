@@ -93,6 +93,29 @@ void on_command(android_app* glue, int32_t command) {
             // otherwise stay held.
             release_pad();
             break;
+        case APP_CMD_WINDOW_RESIZED:
+        case APP_CMD_CONTENT_RECT_CHANGED: {
+            // The same window at another size (a desktop mode's window maximised or
+            // dragged): the surface is remade on it as it is after a fold, which lays the
+            // viewports and the camera out for the new size. Measuring puts the window's
+            // buffers back to its own size, so when nothing changed the size OGRE set for
+            // them (the render scale) is put back at once.
+            ANativeWindow* window = glue->window;
+            if (window == nullptr || !g_started || g_in_background) break;
+            const int old_width = g_screen_width, old_height = g_screen_height;
+            measure_window(window);
+            if (g_screen_width == old_width && g_screen_height == old_height) {
+                if (g_render_scale != 1.0f) {
+                    ANativeWindow_setBuffersGeometry(window, render_width(), render_height(), 0);
+                }
+                break;
+            }
+            __android_log_print(ANDROID_LOG_INFO, "torchlight", "window resized: %dx%d -> %dx%d",
+                                old_width, old_height, g_screen_width, g_screen_height);
+            if (g_hooks.lost) g_hooks.lost();
+            if (g_hooks.restored) g_hooks.restored(window, glue->config);
+            break;
+        }
         default: break;
     }
 }

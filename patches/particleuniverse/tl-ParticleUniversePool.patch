@@ -1,8 +1,17 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniversePool.h b/Plugins/ParticleUniverse/include/ParticleUniversePool.h
-index 2690fc5..00ccdbf 100644
+index 2690fc5..9fde0e6 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniversePool.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniversePool.h
-@@ -187,12 +187,11 @@ namespace ParticleUniverse
+@@ -51,6 +51,8 @@ namespace ParticleUniverse
+ 				}
+ 			};
+ 			//-----------------------------------------------------------------------
++			// Torchlight: `Pool::~Pool` (for visual particles, the same for each kind) is the
++			// library's: the two lists freed, their elements not deleted.
+ 			virtual ~Pool (void)
+ 			{
+ 				if (mManaged)
+@@ -187,12 +189,11 @@ namespace ParticleUniverse
  			inline void lockLatestElement (void)
  			{
  				// Move element pointed by mPoolIterator from released elements to locked elements

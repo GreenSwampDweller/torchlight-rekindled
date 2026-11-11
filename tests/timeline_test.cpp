@@ -31,6 +31,15 @@ CmpTimelineKey key(float t, std::initializer_list<float> values,
 
 bool close(float a, float b) { return std::abs(a - b) < 1e-4f; }
 
+// A one-wide key as a spline reads it: an integer word.
+CmpTimelineKey int_key(float t, int32_t value) {
+    CmpTimelineKey k;
+    k.time = t;
+    k.interpolation = static_cast<uint32_t>(TimelineInterpolation::Linear);
+    k.words.push_back(static_cast<uint32_t>(value));
+    return k;
+}
+
 // The value at `percent` played forwards from 0.
 float scalar_at(const std::vector<CmpTimelineKey>& keys, TimelineInterpolation property,
                 TimelineInterpolation timeline_default, float percent) {
@@ -110,8 +119,8 @@ TL_TEST(timeline_quaternion_default_normalises_a_vector3) {
 // Points evenly spaced by index whatever the key times: 0.5 of four points is segment 1 at
 // s = 0.5.
 TL_TEST(timeline_spline_spaces_its_points_by_index) {
-    const std::vector<CmpTimelineKey> keys = {key(0.0f, {0.0f}), key(0.2f, {10.0f}),
-                                              key(0.4f, {40.0f}), key(1.0f, {60.0f})};
+    const std::vector<CmpTimelineKey> keys = {int_key(0.0f, 0), int_key(0.2f, 10),
+                                              int_key(0.4f, 40), int_key(1.0f, 60)};
     TL_CHECK(
         close(scalar_at(keys, TimelineInterpolation::Spline, TimelineInterpolation::Linear, 0.5f),
               24.375f));
@@ -119,11 +128,20 @@ TL_TEST(timeline_spline_spaces_its_points_by_index) {
 
 // First point equal to the last closes the spline: T0 = 0.5 (p1 - p[n-2]).
 TL_TEST(timeline_spline_closes_when_it_ends_where_it_began) {
-    const std::vector<CmpTimelineKey> keys = {key(0.0f, {0.0f}), key(0.3f, {10.0f}),
-                                              key(0.6f, {20.0f}), key(1.0f, {0.0f})};
+    const std::vector<CmpTimelineKey> keys = {int_key(0.0f, 0), int_key(0.3f, 10),
+                                              int_key(0.6f, 20), int_key(1.0f, 0)};
     TL_CHECK(
         close(scalar_at(keys, TimelineInterpolation::Spline, TimelineInterpolation::Linear, 0.1f),
               0.795f));
+}
+
+// A key of another width ends the fill; the points before it are still the spline.
+TL_TEST(timeline_spline_keeps_the_points_before_a_key_of_another_width) {
+    std::vector<CmpTimelineKey> keys = {int_key(0.0f, 0), int_key(0.5f, 10), int_key(1.0f, 30)};
+    keys.push_back(key(1.0f, {1.0f, 2.0f}));
+    TL_CHECK(
+        close(scalar_at(keys, TimelineInterpolation::Spline, TimelineInterpolation::Linear, 1.0f),
+              30.0f));
 }
 
 // The spline is built only when the property itself is Spline; one reached

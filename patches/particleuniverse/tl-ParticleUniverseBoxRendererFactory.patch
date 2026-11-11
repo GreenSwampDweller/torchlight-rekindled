@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRendererFactory.h
+index 915c03b..faa6ee6 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRendererFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			BoxRendererFactory(void) {};
++	        // Torchlight: `BoxRendererFactory::~BoxRendererFactory` is the library's (the script members apart).
+ 	        virtual ~BoxRendererFactory(void) {};
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `BoxRendererFactory::getRendererType` is the library's (the same name).
+ 			String getRendererType(void) const
+ 			{
+ 				return "Box";
+ 			}
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `BoxRendererFactory::createRenderer` is the library's: made, then given its type.
+ 			ParticleRenderer* createRenderer(void)
+ 			{
+ 				return _createRenderer<BoxRenderer>();

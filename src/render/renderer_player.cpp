@@ -6,6 +6,18 @@
 #include "render/unit_opacity.h"
 
 namespace tl::render {
+namespace {
+/// `CGenericModel::clearAnimations` on what OGRE plays: every state switched off.
+void stop_animations(Ogre::Entity* entity) {
+    if (entity == nullptr) return;
+    if (Ogre::AnimationStateSet* states = entity->getAllAnimationStates()) {
+        for (const auto& entry : states->getAnimationStates()) entry.second->setEnabled(false);
+    }
+}
+std::string die_animation(tl::core::LevelScript* owner, int64_t node) {
+    return owner != nullptr ? owner->death_animation(node) : std::string();
+}
+}  // namespace
 bool Renderer::dump_loading_screen(const std::string& png_path) {
     Impl& m = *impl_;
     // The tip is chosen at random, once per process, exactly as the original
@@ -254,6 +266,7 @@ void Renderer::Impl::update_unit_lights(const Ogre::Vector3& focus) {
 
 void Renderer::Impl::step_player(float delta, const tl::core::InputState& stick) {
     if (!subject_node) return;
+    sync_mouse_hud(delta);
 
     // CCharacter::update: the active skill's cast stops
     // the path and setDestination takes no new one until the animation lets go.
@@ -474,8 +487,8 @@ void Renderer::Impl::drive_player(float delta) {
     // `CGameClient::processIngameInput` takes
     // nothing while the interface is in the cinematic menu; the screen reads
     // the pad itself.
-    tl::core::InputState in =
-        cinematic_open ? tl::core::InputState{} : tl::core::poll_input();
+    const tl::core::InputState in =
+        mouse_as_pad(cinematic_open ? tl::core::InputState{} : tl::core::poll_input());
     // + / Start: the Pause Menu. It,
     // Options and the debug menu (a DIVERGENCE, debug_menu_open) have the pad.
     const bool quit_edge = in.quit && !quit_held;
@@ -486,7 +499,7 @@ void Renderer::Impl::drive_player(float delta) {
     if (howto_menu.open) {
         const bool back_edge = in.inventory && !inventory_button_held;
         inventory_button_held = in.inventory;
-        drive_howto_menu(in, delta, quit_edge, back_edge);
+        drive_howto_menu(menu_pointer(in), delta, quit_edge, back_edge);
         confirm_held = in.confirm;
         skip_held = in.skip;
         step_player(delta, tl::core::InputState{});
@@ -494,9 +507,9 @@ void Renderer::Impl::drive_player(float delta) {
     }
     if (pause_menu.open || settings_menu.open) {
         if (settings_menu.open) {
-            drive_settings_menu(in);
+            drive_settings_menu(menu_pointer(in));
         } else {
-            drive_pause_menu(in, quit_edge);
+            drive_pause_menu(menu_pointer(in), quit_edge);
         }
         confirm_held = in.confirm;
         skip_held = in.skip;
@@ -597,16 +610,8 @@ void Renderer::Impl::drive_player(float delta) {
     // The quest offer window has the pad before the menu: A accepts, B declines, the left
     // stick toggles the reward row; a read-only line has one OK.
     if (quest_dialog.visible()) {
-        // DIVERGENCE (desktop mouse): a click on Accept or OK is A, on Decline B.
-        dialog_pointer.step(in);
-        mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
-        const bool click_yes = dialog_pointer.pressed && (quest_dialog.pointed(in, "Accept") ||
-                                                          quest_dialog.pointed(in, "Ok"));
-        // The right button is B: Decline, or the close of a line with only OK.
-        const bool click_no = (dialog_pointer.pressed && quest_dialog.pointed(in, "Decline")) ||
-                              dialog_pointer.alt_pressed;
-        const bool confirm_edge = (in.confirm && !confirm_held) || click_yes;
-        const bool skip_edge = (in.skip && !skip_held) || click_no;
+        const bool confirm_edge = in.confirm && !confirm_held;
+        const bool skip_edge = in.skip && !skip_held;
         confirm_held = in.confirm;
         skip_held = in.skip;
 
@@ -684,12 +689,7 @@ void Renderer::Impl::drive_player(float delta) {
     // The modal message has the pad while it is up (`CModalMenu`): A is its
     // `Ok`, the only button `openModalDialog` leaves shown.
     if (modal_screen.visible()) {
-        // DIVERGENCE (desktop mouse): a click on Ok is A.
-        dialog_pointer.step(in);
-        mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
-        const bool confirm_edge = (in.confirm && !confirm_held) ||
-                                  (dialog_pointer.pressed && modal_screen.pointed(in, "Ok")) ||
-                                  dialog_pointer.alt_pressed;
+        const bool confirm_edge = in.confirm && !confirm_held;
         confirm_held = in.confirm;
         skip_held = in.skip;
         if (confirm_edge) modal_screen.hide();
@@ -757,23 +757,7 @@ void Renderer::Impl::drive_player(float delta) {
     }
     inventory_button_held = in.inventory;
 
-    // DIVERGENCE (desktop keyboard): 'K' opens the master menu on its skills tab, and closes
-    // it when that tab is already showing.
-    const bool skills_edge = in.skills && !skills_key_held;
-    skills_key_held = in.skills;
-    if (skills_edge && !inventory_menu.pet_commands_open() && !inventory_menu.spell_remove_open()) {
-        if (inventory_menu.visible() && inventory_menu.menu_mode() == MenuMode::Skills) {
-            close_master_menu();
-        } else {
-            if (!inventory_menu.visible()) {
-                inventory_menu.toggle();
-                play_ui(tl::core::InterfaceSound::MenuOpen);
-            }
-            inventory_menu.set_menu_mode(MenuMode::Skills);
-            update_menu();
-            update_character_preview(0.0f);
-        }
-    }
+    step_keyboard_extras(in);
 
     // Automap controls: toggle with 'M' / Right Stick click (a turned free camera's reset), zoom
     const bool map_toggle_edge = in.map_toggle && !map_toggle_held && !game_camera.touch.took_r3;
@@ -887,86 +871,6 @@ void Renderer::Impl::drive_player(float delta) {
         const bool skills_tab = inventory_menu.menu_mode() == MenuMode::Skills &&
                                 inventory_menu.vendor() == VendorScreen::None;
 
-        // DIVERGENCE (desktop mouse): the PC's inventory under the pad's orders. A click on a row
-        // puts the focus there; a double click or the right button is A on it; a row dragged
-        // onto another tray, or the right button at a merchant's, is X (to the pet, the stash, the
-        // merchant and back); a tab clicked
-        // opens it; the ring's two trigger arrows step the pages; a quest row is selected.
-        inventory_pointer.step(in);
-        mouse_click_held = in.pointer && in.click;
-        inventory_click_age += delta;
-        bool mouse_a = false;
-        bool mouse_x = false;
-        if (inventory_pointer.pressed || inventory_pointer.alt_pressed ||
-            inventory_pointer.released) {
-            using Hit = InventoryMenu::PointerHit;
-            const Hit hit = inventory_menu.pointer_hit(in);
-            if (inventory_pointer.released && skill_drag) {
-                skill_drag = false;
-                drop_dragged_skill(in);
-            } else if (inventory_pointer.released) {
-                if (inventory_drag.kind == Hit::Kind::Row &&
-                    (hit.kind == Hit::Kind::Row || hit.kind == Hit::Kind::Tab) &&
-                    hit.tray != inventory_drag.tray) {
-                    mouse_x = true;
-                }
-                inventory_drag = Hit{};
-            } else if (inventory_pointer.alt_pressed && hit.kind == Hit::Kind::None &&
-                       !inventory_menu.pointer_on_menu(in)) {
-                // The right button off the menu's windows closes it, as B does.
-                close_master_menu();
-                confirm_held = in.confirm;
-                skip_held = in.skip;
-                tl::core::InputState zero_in;
-                step_player(delta, zero_in);
-                return;
-            } else if (skills_tab && !inventory_pointer.released &&
-                       inventory_menu.point_skill(in)) {
-                // A skill clicked takes the cursor; the right button on it spends a point there,
-                // as A does.
-                if (inventory_pointer.pressed) {
-                    play_ui(tl::core::InterfaceSound::Navigate);
-                    skill_drag = !inventory_menu.skill_cursor().in_spells;
-                }
-                mouse_a = inventory_pointer.alt_pressed && !inventory_menu.skill_cursor().in_spells;
-                update_menu();
-            } else if (hit.kind == Hit::Kind::Ring && !skills_tab &&
-                       inventory_menu.vendor() == VendorScreen::None) {
-                step_master_menu_tab(hit.tab);
-            } else if (hit.kind == Hit::Kind::Quest) {
-                inventory_menu.set_selected_quest(hit.row);
-                play_ui(tl::core::InterfaceSound::Navigate);
-                update_menu();
-            } else if (hit.kind == Hit::Kind::Tab) {
-                TL_LOG_INFO("mouse: tray %d tab %d", static_cast<int>(hit.tray), hit.tab);
-                inventory_menu.point_at(hit.tray, hit.tab, 0);
-                play_ui(tl::core::InterfaceSound::Navigate);
-                update_menu();
-            } else if (hit.kind == Hit::Kind::Row) {
-                const bool again = inventory_pointer.pressed && inventory_click_age < 0.35f &&
-                                   inventory_drag.kind == Hit::Kind::None &&
-                                   last_inventory_click.tray == hit.tray &&
-                                   last_inventory_click.row == hit.row;
-                inventory_menu.point_at(hit.tray, hit.tab, hit.row);
-                update_menu();
-                // The right button is X where X moves the item to the other window: a buy or a
-                // sale at a merchant's, into the stash or the Transmuter and back, and between
-                // the hero's bag and the pet's beside it. Elsewhere it is A.
-                const bool trade_screen =
-                    inventory_menu.vendor() == VendorScreen::Merchant ||
-                    housing_inventory_for(inventory_menu.vendor()) != nullptr ||
-                    (inventory_menu.vendor() == VendorScreen::None &&
-                     inventory_menu.pet_tray_available());
-                mouse_x = inventory_pointer.alt_pressed && trade_screen;
-                mouse_a = (inventory_pointer.alt_pressed && !trade_screen) || again;
-                if (inventory_pointer.pressed) {
-                    inventory_drag = hit;
-                    last_inventory_click = hit;
-                    inventory_click_age = 0.0f;
-                }
-            }
-        }
-
         // B button / Escape closes menu
         if (in.skip && !skip_held && !skills_tab) {
             close_master_menu();
@@ -995,7 +899,6 @@ void Renderer::Impl::drive_player(float delta) {
             pad.lt_up = menu_prev_release;
             pad.rt_up = menu_next_release;
             pad.y_up = action_y_release;
-            pad.mouse_a = mouse_a;
             handle_skills_tab(in, pad);
         }
 
@@ -1053,9 +956,9 @@ void Renderer::Impl::drive_player(float delta) {
             const bool combine_screen = inventory_menu.vendor() == VendorScreen::Combine;
             // On the pet's tray A with the pet as the owner
             // (`pet_tray_press`), outside a combiner's page.
-            const bool a_edge = (in.confirm && !confirm_held) || mouse_a;
-            if (a_edge && pet_tray && !combine_screen) pet_tray_press();
-            bool own_a = a_edge && !vendor_tray && !combine_screen && !pet_tray;
+            if (in.confirm && !confirm_held && pet_tray && !combine_screen) pet_tray_press();
+            bool own_a =
+                in.confirm && !confirm_held && !vendor_tray && !combine_screen && !pet_tray;
             if (own_a && (inventory_menu.vendor() == VendorScreen::Enchant ||
                           inventory_menu.vendor() == VendorScreen::EnchantShrine)) {
                 // on an enchanter's or a shrine's page:.
@@ -1102,16 +1005,15 @@ void Renderer::Impl::drive_player(float delta) {
             }
 
             // X: the tray dispatch by the screen and the tray.
-            const bool x_edge = action_x_edge || mouse_x;
-            if (x_edge && housing_inventory_for(inventory_menu.vendor()) != nullptr) {
+            if (action_x_edge && housing_inventory_for(inventory_menu.vendor()) != nullptr) {
                 // into the Transmuter or the stash from the
                 // bag, back out from their own tray.
                 swap_selected();
-            } else if (x_edge && inventory_menu.vendor() == VendorScreen::Merchant) {
+            } else if (action_x_edge && inventory_menu.vendor() == VendorScreen::Merchant) {
                 // on the merchant's tray a buy,
                 // on the bag a sale.
                 trade_selected();
-            } else if (x_edge && !vendor_screen) {
+            } else if (action_x_edge && !vendor_screen) {
                 // on the bag's screen: from the pet's tray to
                 // the player's bag, from the bag to the pet's when
                 // allows.
@@ -1220,8 +1122,9 @@ void Renderer::Impl::drive_player(float delta) {
         return;
     }
 
-    // The mouse's orders, as the pad's own (DIVERGENCE: the console has no pointer).
-    steer_by_mouse(in, delta);
+    // The PC's mouse and keyboard take the rest of the frame in place of the pad's
+    // selector, buttons and hotbar.
+    if (tl::core::mouse_controls()) return drive_player_mouse(delta, in);
 
     // A through a line on the press, not the hold; the press is spent on the line, not
     // also on the item or trigger below.
@@ -1261,7 +1164,7 @@ void Renderer::Impl::drive_player(float delta) {
         const Ogre::Vector3 at = pad_highlighted->getParentSceneNode()->_getDerivedPosition();
         if (nav.ready()) {
             std::vector<tl::core::Vec3> route =
-                nav.find_path(player.position(), tl::core::Vec3{at.x, at.y, at.z});
+                nav.find_path(player.position(), tl::core::Vec3{at.x, at.y, at.z}, passability);
             if (route.empty()) {
                 TL_LOG_INFO("no route to '%s'", pad_selected.c_str());
             } else {
@@ -1315,14 +1218,11 @@ void Renderer::Impl::drive_player(float delta) {
         const bool skipping = script.busy();
         set(HotbarButton::LB, in.tab_prev, tab_prev_edge);
         set(HotbarButton::RB, in.tab_next, tab_next_edge);
-        // DIVERGENCE (desktop keyboard): '1'..'4' beside the pad's buttons, left to right.
-        const auto key = [&](int i) { return in.hotbar_key[i]; };
-        const auto key_edge = [&](int i) { return in.hotbar_key[i] && !hotbar_key_held[static_cast<size_t>(i)]; };
-        set(HotbarButton::Y, in.action_y || key(0), action_y_edge || key_edge(0));
-        set(HotbarButton::B, (in.skip && !skipping) || key(3),
-            (in.skip && !skip_held && !skipping) || key_edge(3));
-        set(HotbarButton::LT, in.menu_prev || key(1), menu_prev_edge || key_edge(1));
-        set(HotbarButton::RT, in.menu_next || key(2), menu_next_edge || key_edge(2));
+        set(HotbarButton::Y, in.action_y, action_y_edge);
+        set(HotbarButton::B, in.skip && !skipping, in.skip && !skip_held && !skipping);
+        set(HotbarButton::LT, in.menu_prev, menu_prev_edge);
+        set(HotbarButton::RT, in.menu_next, menu_next_edge);
+        add_hotbar_keys(pressed, held);
         release_held_skill(pressed, held, (in.confirm && !confirm_held) || action_x_edge);
         step_hotbar(pressed, held, in.move_x, in.move_y);
     }
@@ -1330,10 +1230,23 @@ void Renderer::Impl::drive_player(float delta) {
     // handler. attack_held is +0x55; a menu marks X in +0x57 instead,
     // so X still down when a menu goes is a fresh press.
     step_attack_button(delta, attack_down, attack_down && !attack_held, in.move_x, in.move_y);
-    for (size_t i = 0; i < hotbar_key_held.size(); ++i) hotbar_key_held[i] = in.hotbar_key[i];
     confirm_held = in.confirm;
     attack_held = attack_down;
 
+    // Under the hold the stick aims and does not walk (the walk
+    // is called only with `+0x1fe` clear).
+    tl::core::InputState walk_in = in;
+    if (held_before) {
+        walk_in.move_x = 0.0f;
+        walk_in.move_y = 0.0f;
+    }
+    finish_player_frame(delta, in, walk_in);
+}
+
+/// The end of the in-game frame, whichever controls drove it: a cutscene skipped, a
+/// disabled character held, and the character stepped with `walk_in`'s stick.
+void Renderer::Impl::finish_player_frame(float delta, const tl::core::InputState& in,
+                                         const tl::core::InputState& walk_in) {
     // Throwing the whole scene away. On the press, and only while something is
     // actually running - a `Skip Cutscene` node fired at an idle moment would
     // run a scene's cleanup over a scene that never started.
@@ -1369,13 +1282,6 @@ void Renderer::Impl::drive_player(float delta) {
         step_player(delta, held_in);
         return;
     }
-    // Under the hold the stick aims and does not walk (the walk
-    // is called only with `+0x1fe` clear).
-    tl::core::InputState walk_in = in;
-    if (held_before) {
-        walk_in.move_x = 0.0f;
-        walk_in.move_y = 0.0f;
-    }
     // The stick routes the character to a point two units off
     // (`gamepad.h`'s `stick_destination`): a new order, and the conversation's
     // target is let go.
@@ -1396,7 +1302,7 @@ void Renderer::Impl::step_hud_visibility() {
     // DIVERGENCE: the conversation's end lets the unit go as well -
     // no window, no vendor screen, no line over its head, no walk still on
     // its way to it.
-    if (!stash_opened_unit.empty() && !inventory_menu.visible()) {
+    if (!stash_opened_unit.empty() && !inventory_menu.visible() && !mouse_storage_open()) {
         animate_stash(stash_opened_unit, false);
     }
     if (talk_target_machine != kNoMachine && !scene && pending_talk.empty() &&
@@ -1423,25 +1329,19 @@ void Renderer::Impl::step_hud_visibility() {
     hud_hidden_automap = false;
 }
 
-// CStashMenu::setOpen: OPEN once and IDLE queued as it opens, CLOSE as it
-// shuts. INVENTED (from memory of play): the chest's `opening`/`closed` stand for OPEN/CLOSE,
-// which CGenericModel::playAnimation would not match.
+// INVENTED (from memory of play): the chest's `opening` as the stash opens, `closed` as it
+// shuts. CStashMenu::setOpen's OPEN/IDLE/CLOSE play on the PC menu's own model,
+// CStashMenuXenon names no animation, and no code of the console names these two.
 void Renderer::Impl::animate_stash(const std::string& unit, bool open) {
     // A spawned unit is listed in both places; animate each model once.
     std::set<const Ogre::Entity*> done;
-    // `closed` is a pose, not an animation: whatever is still enabled - the
-    // `opening` one-shot, held on its last frame - has to be switched off
+    // `closed` is a pose: the `opening` one-shot, held on its last frame, is switched off
     // first, or the two fight over the lid every frame.
-    const auto quiet = [](Ogre::Entity* entity) {
-        if (Ogre::AnimationStateSet* states = entity->getAllAnimationStates()) {
-            for (auto& entry : states->getAnimationStates()) entry.second->setEnabled(false);
-        }
-    };
     const auto units = scene_units.equal_range(unit);
     for (auto it = units.first; it != units.second; ++it) {
         SceneUnit& placed = it->second;
         if (placed.entity == nullptr || !done.insert(placed.entity).second) continue;
-        if (!open) quiet(placed.entity);
+        if (!open) stop_animations(placed.entity);
         Ogre::AnimationState* started = nullptr;
         const std::string animation = open ? "opening" : "closed";
         if (!play_scene_animation(placed.entity, placed.mesh, animation, false, placed.rate,
@@ -1457,7 +1357,7 @@ void Renderer::Impl::animate_stash(const std::string& unit, bool open) {
         for (const SpawnedUnit& made : owner.second) {
             if (made.unit != unit || made.entity == nullptr) continue;
             if (!done.insert(made.entity).second) continue;
-            if (!open) quiet(made.entity);
+            if (!open) stop_animations(made.entity);
             Ogre::AnimationState* started = nullptr;
             const std::string animation = open ? "opening" : "closed";
             if (play_scene_animation(made.entity, made.entity->getMesh()->getName(), animation,
@@ -1579,6 +1479,8 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // Otherwise enabling is the script object's own state (a trigger stops
                 // testing, a timer counting), not the scene's.
                 break;
+
+            case ScriptAction::ParticleLinkStarted: particle_link_started(event); break;
 
             case ScriptAction::ParticleLinkPause: {
                 // `CParticle::Pause`: a shown `CParticle`
@@ -1933,22 +1835,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                             event.status == tl::core::QuestStatus::Complete ? "complete"
                             : event.status == tl::core::QuestStatus::Active ? "active"
                                                                             : "not held");
-                // CQuestController::setQuestComplete
-                // ends in CQuestManager::completeQuest, whose consequences are run here.
-                // Force Not Accepted / Not Complete: removeQuest(quest, false), resetQuest.
-                if (event.status == tl::core::QuestStatus::Unknown) quest_log.drop(event.text);
-                if (event.status == tl::core::QuestStatus::Complete) {
-                    load_quest_book();
-                    if (const tl::core::QuestDefinition* quest = quest_book.find(event.text)) {
-                        quest_log.apply_completion_consequences(*quest);
-                    }
-                    pay_quest_completions();
-                }
-                report_gates_waiting_on(event.text);
-                // `giveQuest` / `completeQuest`, which a `Quest Controller`
-                // calls, both end in `updateAutomapIcons` and `updateNPCIcons`.
-                update_automap_icons();
-                update_npc_icons();
+                quest_controller_changed(event);
                 break;
 
             case ScriptAction::MoveUnit: {
@@ -2210,59 +2097,64 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 break;
             }
 
+            case ScriptAction::DeathFlight:
+                for (auto& [key, scene_unit] : scene_units) {
+                    if (scene_unit.node != event.node_id) continue;
+                    play_death_flight(event, scene_unit);
+                    break;
+                }
+                break;
+
             case ScriptAction::Kill: {
-                // A body falls where it stands, addressed by node. INVENTED: the death
-                // animation is `Die`, else `Die1`, else hidden (no data names one).
-                // A swing cut short by death queued its idle; a body must not play it.
+                // A body falls where it stands, addressed by node. A swing cut short by
+                // death queued its idle; a body must not play it.
                 pending_idles.erase(
                     std::remove_if(pending_idles.begin(), pending_idles.end(),
                                    [&](const PendingIdle& p) { return p.node == event.node_id; }),
                     pending_idles.end());
                 bool fell = false;
-                for (auto it = scene_units.begin(); it != scene_units.end(); ++it) {
-                    if (it->second.node != event.node_id) continue;
+                for (auto& [key, scene_unit] : scene_units) {
+                    if (scene_unit.node != event.node_id) continue;
                     // `CCharacter::die`: the
                     // death particle (PARTICLE_DEATH or its censored twin) for a death the
                     // level script deals. Its `DEATH_SOUND` is the machine's `UnitSample`.
-                    if (it->second.entity != nullptr) {
-                        if (const Ogre::SceneNode* at = it->second.entity->getParentSceneNode()) {
-                            play_death_particle(stats_for_unit(it->first),
-                                                at->_getDerivedPosition(),
+                    if (scene_unit.entity != nullptr) {
+                        if (const Ogre::SceneNode* at = scene_unit.entity->getParentSceneNode()) {
+                            play_death_particle(stats_for_unit(key), at->_getDerivedPosition(),
                                                 character_ref(event.node_id));
                         }
                     }
                     // The burst or the flight, which take the death from the
                     // animation below.
-                    if (die_burst_or_flight(event, it->second, nodes)) {
+                    if (die_burst_or_flight(event, scene_unit, nodes)) {
                         fell = true;
                         break;
                     }
-                    for (const char* stem : {"Die", "Die1"}) {
-                        Ogre::AnimationState* started = nullptr;
-                        if (!play_scene_animation(it->second.entity, it->second.mesh, stem,
-                                                  /*loops=*/false, it->second.rate,
-                                                  /*optional=*/true, &started, it->second.armed)) {
-                            continue;
-                        }
-                        remember_state(it->second.entity, stem, started);
-                        // What it plays now, so the animation's keys are
-                        // followed: a death's particles and sounds
-                        // (`step_unit_particle_keys`, `step_unit_sounds`).
-                        it->second.playing = stem;
-                        it->second.playing_state = started;
-                        fell = true;
-                        TL_LOG_INFO("script: %s dies where it stands ('%s')", event.name.c_str(),
-                                    stem);
-                        break;
+                    // `CCharacter::die`: `findRandomAnimation("DIE")` blended in
+                    // when the model has one, else `clearAnimations` - the body stays.
+                    std::string stem = die_animation(script_owning(event.node_id), event.node_id);
+                    Ogre::AnimationState* started = nullptr;
+                    if (stem.empty() ||
+                        !play_scene_animation(scene_unit.entity, scene_unit.mesh, stem,
+                                              /*loops=*/false, scene_unit.rate,
+                                              /*optional=*/true, &started, scene_unit.armed)) {
+                        stop_animations(scene_unit.entity);
+                        stem.clear();
                     }
+                    remember_state(scene_unit.entity, stem, started);
+                    // What it plays, so its keys (particles, sounds) are followed.
+                    scene_unit.playing = stem;
+                    scene_unit.playing_state = started;
+                    fell = true;
+                    TL_LOG_INFO("script: %s dies where it stands ('%s')", event.name.c_str(),
+                                stem.c_str());
                     break;
                 }
                 if (!fell) {
                     for (auto it = range.first; it != range.second; ++it) {
                         it->second->setVisible(false);
                     }
-                    TL_LOG_INFO("script: %s dies (no death animation beside its mesh)",
-                                event.name.c_str());
+                    TL_LOG_INFO("script: %s dies (no scene unit; hidden)", event.name.c_str());
                 }
                 break;
             }
@@ -2277,7 +2169,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 }
                 const tl::core::Vec3 to{event.position.x, event.position.y, event.position.z};
                 std::vector<tl::core::Vec3> route;
-                if (nav.ready()) route = nav.find_path(player.position(), to);
+                if (nav.ready()) route = nav.find_path(player.position(), to, passability);
                 if (route.empty()) route.push_back(to);
                 player.follow(route);
                 scripted_walk_path = event.node_id;
@@ -2513,9 +2405,10 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 const tl::core::UnitStats attacker = stats_for_unit(event.unit);
                 const std::string who =
                     attacker.display_name.empty() ? event.unit : attacker.display_name;
+                strike_interrupt(event);
                 // What rollAttack shows: the hit particle
                 // on the one struck (not for 0 damage), the strike particle.
-                // INVENTED: no "Glancing Blow!" (no glancing flag here).
+                //
                 {
                     Ogre::Vector3 from = Ogre::Vector3::ZERO;
                     Ogre::Vector3 at = Ogre::Vector3::ZERO;
@@ -2539,6 +2432,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                                              event.blocked, character_ref(event.node_id));
                     }
                 }
+                strike_damage_effects(event);
                 // `rollAttack`: the knock-back, the degraded
                 // armour and the attacker's `TRANSFER` effects onto the one
                 // struck, blocked or not, ahead of `applyDamage`.
@@ -2559,15 +2453,6 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                         }
                         TL_LOG_INFO("combat: player blocked attack from %s", who.c_str());
                     } else {
-                        // `rollAttack`: `applyDamageEffects` ahead of
-                        // `applyDamage`, at the attacker's level.
-                        int level = 1;
-                        tl::core::LevelScript* by = script_owning(event.node_id);
-                        if (by != nullptr) by->unit_level(event.node_id, level);
-                        apply_damage_status(
-                            nullptr, 0, event.amount, event.by_type, event.parts, event.first_type,
-                            event.critical, level,
-                            tl::core::EffectSource{by != nullptr, by, event.node_id});
                         // `rollCritical`: over the target.
                         if (event.critical && subject_node != nullptr) {
                             add_combat_text(tl::core::CombatText::CriticalStrike,
@@ -2586,6 +2471,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                             if (made.id == event.target_node) unit = made.unit;
                         }
                     }
+                    strike_glancing(event);
                     tl::core::KillingBlow blow;
                     blow.has_direction = event.has_direction;
                     blow.direction = event.direction;
@@ -2869,9 +2755,9 @@ void Renderer::Impl::reset_script() {
         for (auto& layout : entry.second) destroy_particle_holders(layout.second);
     }
     spawner_particles.clear();
-    // Every breakable is a spawner's, so none survives the rebuild either.
-    for (BreakableWorld& b : breakables) remove_breakable(b);
+    for (BreakableWorld& b : breakables) remove_breakable(b);  // each a spawner's: none survives
     breakables.clear();
+    prop_effect_owners.clear();
     player_skill_item = 0;
     merchants.clear();
     combiners.clear();
@@ -2906,20 +2792,6 @@ void Renderer::Impl::reset_script() {
         follow_subject();
     }
     TL_LOG_INFO("level script reset: triggers unspent, camera released");
-}
-
-// CGameUI::setInteractiveMenuVisible(bool): a count,
-// held at 0. At 1 the bars open and the automap goes; back at 0 they close and it returns
-// (the minimap's half is step_hud_visibility's).
-void Renderer::Impl::set_interactive_menu_visible(bool on) {
-    interactive_menus += on ? 1 : -1;
-    if (interactive_menus < 0) {
-        interactive_menus = 0;
-    } else if (interactive_menus == 1) {
-        if (!hud.letterboxed()) hud.set_letterboxed(true);
-    } else if (interactive_menus == 0 && hud.letterboxed()) {
-        hud.set_letterboxed(false);
-    }
 }
 
 // doActualGameState state 6: CGameUI::closeLeft,

@@ -1,3 +1,15 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxSet.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxSet.h
+index c946d7b..9d1b4f3 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxSet.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxSet.h
+@@ -282,6 +282,7 @@ namespace ParticleUniverse
+ 
+ 			/** Sets whether boxes should be treated as being in world space. 
+ 			*/
++			// Torchlight: `BoxSet::setBoxesInWorldSpace` is the library's (+0x1a1).
+ 			void setBoxesInWorldSpace(bool ws) { mWorldSpace = ws; }
+ 	};
+ 
 diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp
 index f7173b7..b305e2e 100644
 --- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxSet.cpp

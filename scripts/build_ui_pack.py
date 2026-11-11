@@ -1,23 +1,29 @@
-"""Build the port's own interface pack: plain-line art and layouts of our own,
-for running the console interface on a PC `Pak.zip` without any Xbox file.
+"""Build the port's own interface pack: layouts of our own over the PC pak's
+own art, for running the console interface on a PC `Pak.zip` without any Xbox
+file.
 
     python scripts/build_ui_pack.py [--out build-ui-pack]
     torchlight --game-data <PC install> --console-ui build-ui-pack ...
 
-Everything in the pack is drawn or written here: the sprites with Pillow (its
-bundled font for the glyph letters), the layouts in Runic's `[UI]` text format.
+Everything in the pack is written or drawn here. Most pictures are the PC
+pak's own, named by coordinates (`ui_pack_art.PC`: an imageset over one of the
+PC's textures, the rectangle tinted or mirrored where that helps) - the pack
+ships no picture of the game's. What the PC has no picture of (the pad's
+buttons, the tab icons) is drawn with Pillow in `ui_pack_art.py`. The layouts
+are in Runic's `[UI]` text format.
+
 The only thing kept from the console's files is the contract the engine reads:
 the file paths, the `WIDGET NAME`s the code looks up, and the image names the
 code asks for itself (the floor labels' frame, the pet stances' states).
-Positions, sizes, nesting below those names and every picture are our own.
-
-Pilot scope (2026-10-21): the HUD (`hud_xenon.layout`, `pethud_xenon.layout`)
-and the floor labels. The other screens still need the console's files.
+Positions, sizes and nesting below those names are our own.
 """
 import argparse
 import os
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+import ui_pack_art as art
+from ui_pack_art import PANEL_TEX, PC, UI1, UI2, UIICONS  # noqa: F401
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -30,8 +36,8 @@ HUD_RES = 2
 
 INK = (232, 226, 210, 235)        # the lines
 INK_DIM = (150, 146, 136, 200)
-PANEL = (14, 16, 22, 185)         # panel fill
-PANEL_DARK = (6, 7, 10, 215)
+PANEL = (30, 25, 20, 215)         # panel fill: dark leather
+PANEL_DARK = (14, 12, 10, 228)
 GOLD = (226, 186, 92, 255)
 RED = (196, 44, 40, 255)
 RED_LIGHT = (236, 96, 84, 255)
@@ -41,6 +47,29 @@ PAD_A = (98, 186, 72, 255)
 PAD_B = (214, 66, 56, 255)
 PAD_X = (56, 124, 222, 255)
 PAD_Y = (234, 190, 50, 255)
+
+
+def write_pc_sets(out_dir, sprites):
+    """`pcartN.imageset`: one per PC texture and tint, the engine's
+    `pack_imageset_path`."""
+    groups = {}
+    for name, ref in sorted(sprites.items()):
+        groups.setdefault((ref.texture, ref.tint), []).append((name, ref))
+    if len(groups) > 24:
+        raise SystemExit("more PC art sets than the engine looks for (kMaxPackImagesets)")
+    for index, ((texture, tint), refs) in enumerate(sorted(groups.items(),
+                                                           key=lambda kv: (kv[0][0], kv[0][1] or ""))):
+        tint_attr = f' Tint="{tint}"' if tint else ""
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 f'<Imageset Name="PackArt{index}" Imagefile="{texture}" NativeHorzRes="1024" '
+                 f'NativeVertRes="768" AutoScaled="true"{tint_attr} >']
+        for name, ref in refs:
+            lines.append(f'\t<Image Name="{name}" XPos="{ref.x}" YPos="{ref.y}" '
+                         f'Width="{ref.w}" Height="{ref.h}" />')
+        lines.append("</Imageset>")
+        with open(os.path.join(out_dir, f"media/UI/icons2/pcart{index}.imageset"), "w",
+                  encoding="utf-8", newline="\r\n") as fh:
+            fh.write("\n".join(lines) + "\n")
 
 
 def font(px):
@@ -299,55 +328,64 @@ def screen_sprites():
     """The pieces the death screen, the quest offer and the tip window add."""
     r = HUD_RES
     out = {
-        "facet_panel_bottom": plate(240 * r, 32 * r),
+        "facet_panel_bottom": PC(PANEL_TEX.format("character", "top"), 98, 378, 252, 62),
         "quest_button_incomplete": choice_button(285 * r, 96 * r, False),
         "quest_button_rollover": choice_button(285 * r, 96 * r, True),
         "item_transmute_window": item_box(63 * r, 88 * r),
         "item_window_small": item_box(40 * r, 65 * r, outline=(0, 0, 0, 0), fill=PANEL_DARK),
         "item_window_rollover": item_box(60 * r, 86 * r, outline=GOLD, fill=(0, 0, 0, 0)),
         "socket_empty": socket(16 * r),
-        "button_x": face_button(21 * r, PAD_X, "X"),
-        "analog_button_left_lr": stick(67 * r, 37 * r, "lr"),
+        "button_x": art.face_button(21 * r, "X"),
+        "analog_button_left_lr": art.stick(67 * r, 37 * r, "L", "lr"),
     }
     # `frame*` (`ceguiWidget/LineFrame`) and the item tooltips' frames are the
     # menu's (`ui_pack_menu.py`): the first sheet to name an image wins, so one copy.
     return out
 
 
+# The PC's bottom bar, `PlayerHealthManaRight` (ui2, at 1,384): the right half of
+# the globe's housing and the hotbar. The console's HUD is cut from it and its
+# mirror image: the globe, three slots a side, the end caps.
+HUD_S = 1.25                 # authored pixels per texture pixel
+BAR_Y = 384                  # the piece's top in the texture
+BAR_H = 122
+GLOBE_UP = (1, 384, 46, 52)      # the housing above the bar's top rail
+GLOBE_LOW = (1, 436, 61, 70)     # the housing's foot and the curl beside it
+BAR_SLOTS = (248, 430, 133, 76)  # the last three slots and the end cap
+# The pet's panel, the lower part of `PetHealthMana` (ui2, at 189,150): the bars' plate and the
+# three stance rings.
+PET_PLATE = (189, 243, 115, 61)
+PET_S = 1.4
+
+
 def hud_sprites():
     r = HUD_RES
     out = {
-        "hpmanaball": orb_frame(100 * r),
-        "hpball": orb_fill(82 * r, RED, RED_LIGHT),
-        "manaball": orb_fill(82 * r, BLUE, BLUE_LIGHT),
-        "spells_window": slot_frame(48 * r),
-        "a_button": face_button(21 * r, PAD_A, "A"),
-        "b_button": face_button(21 * r, PAD_B, "B"),
-        "x_button": face_button(21 * r, PAD_X, "X"),
-        "y_button": face_button(21 * r, PAD_Y, "Y"),
-        "left_bumper": bumper(36 * r, 22 * r, "LB", False),
-        "right_bumper": bumper(36 * r, 22 * r, "RB", True),
-        "left_trigger": trigger(24 * r, 34 * r, "LT", False),
-        "right_trigger": trigger(24 * r, 34 * r, "RT", True),
-        "back_button": back_button(29 * r, 22 * r),
-        "bag": bag(38 * r, 44 * r),
-        "plus": plus(31 * r, 36 * r, False),
-        "plus_glow": plus(31 * r, 36 * r, True),
-        "xpbar": bar_frame(280 * r, 6 * r),
-        "xbarfill": bar_fill(280 * r, 6 * r, GOLD, (255, 230, 150, 255)),
+        "a_button": art.face_button(21 * r, "A"),
+        "b_button": art.face_button(21 * r, "B"),
+        "x_button": art.face_button(21 * r, "X"),
+        "y_button": art.face_button(21 * r, "Y"),
+        "left_bumper": art.bumper(36 * r, 22 * r, "LB"),
+        "right_bumper": art.bumper(36 * r, 22 * r, "RB"),
+        "left_trigger": art.trigger(24 * r, 34 * r, "LT", False),
+        "right_trigger": art.trigger(24 * r, 34 * r, "RT", True),
+        "back_button": art.pill_button(29 * r, 22 * r, "left"),
         # Opaque, as the Xbox's: the layouts dim with it through `ALPHA`.
         "black": flat(16, 16, (0, 0, 0, 255)),
-        "slider_bar": bar_frame(120 * r, 6 * r),
-        "pethealth": bar_fill(120 * r, 6 * r, RED, RED_LIGHT),
-        "petmana": bar_fill(120 * r, 6 * r, BLUE, BLUE_LIGHT),
-        "pethud_base": pet_base(140 * r, 46 * r),
+        # The bar and its mirror.
+        "pk_globe_up_r": PC(UI2, *GLOBE_UP),
+        "pk_globe_up_l": PC(UI2, *GLOBE_UP, flip=True),
+        "pk_globe_low_r": PC(UI2, *GLOBE_LOW),
+        "pk_globe_low_l": PC(UI2, *GLOBE_LOW, flip=True),
+        "pk_bar_r": PC(UI2, *BAR_SLOTS),
+        "pk_bar_l": PC(UI2, *BAR_SLOTS, flip=True),
+        # The merchant's sign, a sack of coins, in leather brown: the bag.
+        "bag": PC("media/particles/Textures/Quest/merchant.dds", 11, 6, 42, 54, tint="C08A54"),
+        "pethud_base": PC(UI2, *PET_PLATE),
     }
-    for kind in ("aggressive", "defensive", "passive"):
-        out[f"petstance_{kind}"] = stance(23 * r, kind, True)
-        out[f"petstance_{kind}_inactive"] = stance(23 * r, kind, False)
-        out[f"petstance_{kind}_rollover"] = stance(23 * r, kind, True)
     # `ceguiWidget/ItemText`'s soft panel (`tooltip*`: the floor labels, the screens' frames) is
-    # not drawn: every screen finds the PC's `GuiLook` `Tooltip*` by name.
+    # not drawn: every screen finds the PC's `GuiLook` `Tooltip*` by name. So are the globe's two
+    # halves, the bars and the stances (`pc_image_for`, or the PC's name in the layout).
     return out
 
 
@@ -467,88 +505,135 @@ def render(objects):
     return "\n".join(head + lines + ["\t[/OBJECTS]", "[/UI]"]) + "\n"
 
 
-def skill_slot(button_image, glyph_w, glyph_h, slot, x):
-    """One of the four face slots at the bottom centre: its frame, the button
-    glyph over its top edge, the slot window and its label."""
-    return obj("Image", f"slot{slot}", [
-        obj("Image", "glyph", **at(0, -glyph_h + 8, glyph_w, glyph_h, ha="CENTER"),
-            IMAGE=button_image, **{"ALWAYS ON TOP": True, "CLIPPED": False}),
-        obj("Window", "icon", widget=f"SkillSlot{slot}", **at(0, 0, 36, 36, "CENTER", "CENTER")),
-        obj("Text", "label", widget=f"SkillText{slot}", **at(-4, -2), **full(),
+def bar_x(tex_x, right=True):
+    """Where a texture column of the right-hand bar lands in the HUD's bar
+    window, whose middle is the globe's: `GLOBE_LOW` then `BAR_SLOTS`, the left
+    side their mirror."""
+    if tex_x >= BAR_SLOTS[0]:
+        along = GLOBE_LOW[2] + (tex_x - BAR_SLOTS[0])
+    else:
+        along = tex_x - GLOBE_LOW[0]
+    half = (GLOBE_LOW[2] + BAR_SLOTS[2]) * HUD_S
+    return half + along * HUD_S if right else half - along * HUD_S
+
+
+def bar_y(tex_y):
+    return (tex_y - BAR_Y) * HUD_S
+
+
+# The three slots a side: their middles in the texture, the octagon's and the plaque's under it.
+SLOT_TEX_X = (266, 302, 338)
+SLOT_TEX_Y = 455.5
+PLAQUE_TEX_Y = 481
+
+
+def bar_slot(name, tex_x, right, glyph, glyph_w, glyph_h, children):
+    """One slot of the bar: the window the icon is drawn in and the button on
+    the plaque under it."""
+    x = bar_x(tex_x, right)
+    return [
+        obj("Window", f"{name} slot", children, **at(x - 19, bar_y(SLOT_TEX_Y) - 19, 38, 38)),
+        obj("Image", f"{name} glyph", IMAGE=glyph,
+            **at(x - glyph_w / 2, bar_y(PLAQUE_TEX_Y) - glyph_h / 2 + 1, glyph_w, glyph_h),
+            **{"ALWAYS ON TOP": True, "CLIPPED": False}),
+    ]
+
+
+def skill_cell(slot):
+    return [
+        obj("Window", "icon", widget=f"SkillSlot{slot}", **at(1, 1, 36, 36)),
+        obj("Text", "label", widget=f"SkillText{slot}", **at(-3, -1), **full(),
             **{"ALWAYS ON TOP": True, "HORIZONTAL ALIGN": "RIGHT", "VERTICAL ALIGN": "BOTTOM"}),
-    ], IMAGE="spells_window", **at(x, -34, 48, 48, "CENTER", "BOTTOM"))
+    ]
 
 
 def skill_set(widget, slots):
-    """`SkillSet1` / `SkillSet2`: the four slots in the order LT, Y, B, RT."""
-    glyphs = [("left_trigger", 24, 34), ("y_button", 21, 21), ("b_button", 21, 21),
-              ("right_trigger", 24, 34)]
-    xs = [-111, -37, 37, 111]
-    return obj("Window", widget.lower(), [
-        skill_slot(g[0], g[1], g[2], s, x) for g, s, x in zip(glyphs, slots, xs)
-    ], widget=widget, **full())
+    """`SkillSet1` / `SkillSet2`: the four slots LT, Y, B, RT, two each side of
+    the globe."""
+    places = [(SLOT_TEX_X[1], False, "left_trigger", 16, 22), (SLOT_TEX_X[0], False, "y_button", 19, 19),
+              (SLOT_TEX_X[0], True, "b_button", 19, 19), (SLOT_TEX_X[1], True, "right_trigger", 16, 22)]
+    cells = []
+    for (tex_x, right, glyph, gw, gh), slot in zip(places, slots):
+        cells += bar_slot(f"skill {slot}", tex_x, right, glyph, gw, gh, skill_cell(slot))
+    return obj("Window", widget.lower(), cells, widget=widget, **full())
 
 
-def orb(widget, fill_widget, image, side):
-    sign = 1 if side == "LEFT" else -1
-    return obj("Image", widget.lower(), [
-        obj("Window", "fill", [
-            obj("Image", "liquid", widget=f"{fill_widget}Sub", IMAGE=image, **at(0, 0, 82, 82)),
-        ], widget=fill_widget, **at(9, 9, 82, 82)),
-    ], widget=widget, IMAGE="hpmanaball", **at(sign * 24, 20, 100, 100, side, "TOP"))
-
-
-def potion(slot, count_widget, bumper_image, side):
-    """A potion slot beside its orb, the bumper that drinks it under it."""
-    sign = 1 if side == "LEFT" else -1
-    return obj("Image", f"potion{slot}", [
-        obj("Image", "glyph", IMAGE=bumper_image, **at(0, 42, 36, 22, ha="CENTER"),
-            **{"ALWAYS ON TOP": True, "CLIPPED": False}),
+def potion(slot, count_widget, bumper_image, right):
+    """A potion slot at the bar's end, the bumper that drinks it under it."""
+    return bar_slot(f"potion {slot}", SLOT_TEX_X[2], right, bumper_image, 27, 17, [
         obj("Window", "icon", [
             obj("Text", "count", widget=count_widget, FONT="Serif14",
-                **at(2, 2, 40, 18, "RIGHT", "BOTTOM"),
+                **at(3, 3, 40, 18, "RIGHT", "BOTTOM"),
                 **{"ALWAYS ON TOP": True, "HORIZONTAL ALIGN": "RIGHT", "VERTICAL ALIGN": "BOTTOM"}),
-        ], widget=f"SkillSlot{slot}", **at(0, 0, 36, 36, "CENTER", "CENTER")),
-    ], IMAGE="spells_window", **at(sign * 132, 34, 48, 48, side, "TOP"))
+        ], widget=f"SkillSlot{slot}", **at(1, 1, 36, 36)),
+    ])
+
+
+def globe_half(widget, image, x):
+    """A half of the globe's liquid, drained from the top: the PC's own half
+    at the PC's own place in the housing."""
+    return obj("Window", widget.lower(), [
+        obj("Window", "fill", [
+            obj("Image", "liquid", widget=f"{widget}BarSub", IMAGE=image,
+                **at(0, 0, 38 * HUD_S, 82 * HUD_S)),
+        ], widget=f"{widget}Bar", **at(0, 0, 38 * HUD_S, 82 * HUD_S)),
+    ], widget=widget, **at(x, 11 * HUD_S, 38 * HUD_S, 82 * HUD_S))
 
 
 def hud_layout():
-    return [
-        orb("PlayerHealth", "PlayerHealthBar", "hpball", "LEFT"),
-        orb("PlayerMana", "PlayerManaBar", "manaball", "RIGHT"),
-        potion(1, "POTIONCOUNT", "left_bumper", "LEFT"),
-        potion(2, "MANACOUNT", "right_bumper", "RIGHT"),
+    half = (GLOBE_LOW[2] + BAR_SLOTS[2]) * HUD_S
+    piece = lambda name, image, rect, right: obj(
+        "Image", name, IMAGE=image,
+        **at(bar_x(rect[0], right) - (0 if right else rect[2] * HUD_S), bar_y(rect[1]),
+             rect[2] * HUD_S, rect[3] * HUD_S))
+    # The experience bar lies in the gap between the bar's bottom rails, as the PC's does.
+    xp_left, xp_right = bar_x(372, False), bar_x(372)
+    bar = [
+        piece("globe up left", "pk_globe_up_l", GLOBE_UP, False),
+        piece("globe up right", "pk_globe_up_r", GLOBE_UP, True),
+        piece("globe low left", "pk_globe_low_l", GLOBE_LOW, False),
+        piece("globe low right", "pk_globe_low_r", GLOBE_LOW, True),
+        piece("bar left", "pk_bar_l", BAR_SLOTS, False),
+        piece("bar right", "pk_bar_r", BAR_SLOTS, True),
+        obj("Window", "experience", [
+            obj("Image", "track", IMAGE="PlayerXPBarBack", **at(0, 0, xp_right - xp_left, 9)),
+            obj("Image", "fill", widget="ExperienceBar", IMAGE="PlayerXPBar",
+                **at(0, 1, xp_right - xp_left, 7)),
+        ], widget="PlayerXP", **at(xp_left, bar_y(490) + 0.5, xp_right - xp_left, 9)),
+        globe_half("PlayerHealth", "PlayerHealthBar", half - 42 * HUD_S),
+        globe_half("PlayerMana", "PlayerManaBar", half + 4 * HUD_S),
+        *potion(1, "POTIONCOUNT", "left_bumper", False),
+        *potion(2, "MANACOUNT", "right_bumper", True),
         # The two banks of four; the code shows one at a time.
         skill_set("SkillSet1", [6, 4, 5, 7]),
         skill_set("SkillSet2", [9, 3, 8, 10]),
+        # The bag, where the PC keeps its round buttons: over the bar, beside the globe.
         obj("Image", "bag", [
-            obj("Image", "glyph", IMAGE="back_button", **at(18, -8, 24, 18),
+            obj("Image", "glyph", IMAGE="back_button", **at(36, 22, 24, 18),
                 **{"ALWAYS ON TOP": True, "CLIPPED": False}),
             obj("Image", "glow", widget="AvailableSkillsGlowIcon", IMAGE="plus_glow",
-                **at(-8, -10, 24, 28), CLIPPED=False),
+                **at(-10, -4, 24, 24), CLIPPED=False),
             obj("Image", "plus", widget="AvailableSkillsIcon", IMAGE="plus",
-                **at(-8, -10, 24, 28), CLIPPED=False),
-        ], IMAGE="bag", **at(200, -36, 30, 35, "CENTER", "BOTTOM")),
-        obj("Window", "experience", [
-            obj("Image", "track", [
-                obj("Image", "fill", widget="ExperienceBar", IMAGE="xbarfill", **at(0, 0, 600, 6)),
-            ], IMAGE="black", **at(0, 0, 600, 6)),
-            obj("Image", "rim", IMAGE="xpbar", **at(0, 0, 600, 6), **{"ALWAYS ON TOP": True}),
-        ], widget="PlayerXP", **at(0, -18, 600, 6, "CENTER", "BOTTOM")),
+                **at(-12, -8, 22, 22), CLIPPED=False),
+        ], IMAGE="bag", **at(half + 64, bar_y(BAR_SLOTS[1]) - 44, 34, 44)),
+    ]
+    return [
+        obj("Window", "bar", bar, **at(0, -2, 2 * half, BAR_H * HUD_S, "CENTER", "BOTTOM")),
         obj("Text", "level name", widget="LevelName", COLOR="C8FFFFFF",
-            **at(-24, 126, 320, 18, ha="RIGHT"), **{"HORIZONTAL ALIGN": "RIGHT"}),
+            **at(-24, 14, 320, 18, ha="RIGHT"), **{"HORIZONTAL ALIGN": "RIGHT"}),
         obj("Image", "target", [
-            obj("Text", "name", widget="TargetName", **at(0, -22, 420, 18, ha="CENTER"),
+            obj("Text", "name", widget="TargetName", **at(0, -20, 420, 18, ha="CENTER"),
                 **{"HORIZONTAL ALIGN": "CENTER"}),
             obj("Window", "track", [
-                obj("Image", "fill", widget="TargetHealthBar", IMAGE="pethealth", **at(0, 0, 236, 6)),
-            ], **at(2, 2, 236, 6)),
+                obj("Image", "fill", widget="TargetHealthBar", IMAGE="TargetHealthBar",
+                    **at(0, 0, 221, 8)),
+            ], **at(18, 7, 221, 8)),
             obj("Text", "level", widget="TargetLevel", COLOR="B4FFFFFF",
-                **at(0, 14, 240, 18, ha="CENTER"), **{"HORIZONTAL ALIGN": "CENTER"}),
+                **at(0, 26, 255, 18, ha="CENTER"), **{"HORIZONTAL ALIGN": "CENTER"}),
             obj("Text", "description", widget="TargetDescription", COLOR="FFFBCA04",
-                **at(0, 32, 420, 40, ha="CENTER"),
+                **at(0, 44, 420, 40, ha="CENTER"),
                 **{"HORIZONTAL ALIGN": "CENTER", "WORD WRAP": True}),
-        ], widget="TargetHealth", IMAGE="slider_bar", **at(0, 44, 240, 10, ha="CENTER"),
+        ], widget="TargetHealth", IMAGE="TargetHealth", **at(0, 40, 255, 25, ha="CENTER"),
             **{"ALWAYS ON TOP": True}),
         obj("CEGUI Object", "interact", [
             obj("Image", "glyph", IMAGE="a_button", **at(2, 3, 21, 21), CLIPPED=False),
@@ -564,26 +649,29 @@ def hud_layout():
 
 
 def pethud_layout():
+    k = PET_S
+    plate_w, plate_h = PET_PLATE[2] * k, PET_PLATE[3] * k
+    # Offsets from the PC's `pethud.layout`, less the part of the panel cut away above the plate.
+    cut = PET_PLATE[1] - 150
+
     def stance_button(widget, kind, x):
         return obj("Button", kind, widget=widget, NORMAL=f"PETSTANCE_{kind.upper()}",
                    DISABLED=f"PETSTANCE_{kind.upper()}_INACTIVE",
                    HOVER=f"PETSTANCE_{kind.upper()}_ROLLOVER", CLICKED=f"PETSTANCE_{kind.upper()}",
-                   **at(x, 0, 22, 22))
+                   **at(x * k, (126 - cut) * k, 23 * k, 23 * k))
 
     return [
         obj("Image", "pet panel", [
-            obj("Window", "stances", [
-                stance_button("PetAggressive", "aggressive", 0),
-                stance_button("PetDefensive", "defensive", 25),
-                stance_button("PetPassive", "passive", 50),
-            ], **at(9, 6, 74, 22)),
+            stance_button("PetAggressive", "aggressive", 22),
+            stance_button("PetDefensive", "defensive", 47),
+            stance_button("PetPassive", "passive", 72),
+            obj("Image", "health", widget="PetHealthBar", IMAGE="pethealth",
+                **at(22 * k, (99 - cut) * k, 72 * k, 7 * k)),
+            obj("Image", "mana", widget="PetManaBar", IMAGE="petmana",
+                **at(22 * k, (110 - cut) * k, 72 * k, 7 * k)),
             obj("Text", "fleeing", widget="FleeingText", TEXT="Fleeing", COLOR="FFF07060",
-                **at(84, 7, 52, 18), **{"ALWAYS ON TOP": True}),
-            obj("Window", "bars", [
-                obj("Image", "health", widget="PetHealthBar", IMAGE="pethealth", **at(0, 0, 122, 4)),
-                obj("Image", "mana", widget="PetManaBar", IMAGE="petmana", **at(0, 6, 122, 4)),
-            ], **at(9, 32, 122, 10)),
-        ], IMAGE="pethud_base", **at(24, -24, 140, 46, "LEFT", "BOTTOM")),
+                **at(22 * k, -18, 100, 18), **{"ALWAYS ON TOP": True, "CLIPPED": False}),
+        ], IMAGE="pethud_base", **at(16, -8, plate_w, plate_h, "LEFT", "BOTTOM")),
     ]
 
 
@@ -740,19 +828,27 @@ def main():
         sheets[ui_pack_front.FIXED_SHEET.get(name, "widgets1")][name] = sprite
     # What the PC has the like of is drawn in the PC's art: not in the pack.
     for sprites in sheets.values():
-        for name in [n for n in sprites if n.lower() in ui_pack_front.PC_HAS]:
+        for name in [n for n in sprites if n.lower() in ui_pack_front.PC_HAS
+                     and not isinstance(sprites[n], PC)]:
             del sprites[name]
     # Some code looks an image up on one sheet only: move those there.
     for sheet, sprites in sheets.items():
         for name in [n for n in sprites if ui_pack_front.FIXED_SHEET.get(n, sheet) != sheet]:
             sheets[ui_pack_front.FIXED_SHEET[name]][name] = sprites.pop(name)
     sheet_of = {}
+    borrowed = {}
     for sheet, sprites in sheets.items():
         for name in sprites:
             if name.lower() in sheet_of:
                 raise SystemExit(f"'{name}' is on both {sheet_of[name.lower()]} and {sheet}")
             sheet_of[name.lower()] = sheet
+        # The PC's own art goes by coordinates into sets of its own.
+        for name in [n for n in sprites if isinstance(sprites[n], PC)]:
+            borrowed[name] = sprites.pop(name)
+        if not sprites:
+            sprites["pack_blank_" + sheet] = Image.new("RGBA", (4, 4), (0, 0, 0, 0))
         write_sheet(args.out, sheet, sprites, size=16 if sheet == "ratings" else 2048)
+    write_pc_sets(args.out, borrowed)
 
     layouts = [("media/UI/hud_xenon.layout", hud_layout()),
                ("media/UI/pethud_xenon.layout", pethud_layout()),

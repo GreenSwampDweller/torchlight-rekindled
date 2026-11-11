@@ -1,4 +1,5 @@
 // The gameplay half of render/renderer_sound.cpp (core/world.h).
+#include "core/sound_object.h"
 #include "core/unit_stats_reader.h"
 #include "core/world.h"
 
@@ -60,6 +61,20 @@ const tl::core::AnimationManifest& World::manifest_for(const std::string& mesh_p
         manifests.emplace(key, std::move(manifest)).first->second;
     manifests_by_mesh.emplace(mesh_path, &made);
     return made;
+}
+
+// `CGenericModel::loadAnimations`'s set for a model, read once per mesh.
+const tl::core::AnimationSet& World::animation_set_for(const std::string& mesh_path) {
+    const auto known = animation_sets.find(mesh_path);
+    if (known != animation_sets.end()) return known->second;
+    const std::string dir = dir_of_asset(mesh_path);
+    const auto read_beside = [this, &dir](const std::string& name) {
+        const std::string path = archive_path_in_dir(name, dir);
+        return path.empty() ? std::vector<uint8_t>() : read_resource(path);
+    };
+    tl::core::AnimationSet set =
+        tl::core::load_animation_set(mesh_path, manifest_for(mesh_path).order(), read_beside);
+    return animation_sets.emplace(mesh_path, std::move(set)).first->second;
 }
 
 void World::music_node_input(const tl::core::ScriptEvent& event) {
@@ -349,6 +364,61 @@ bool World::play_voice(tl::core::SoundSlot slot, float delay, float volume) {
     return queue_global_sample(slot, name, volume, delay);
 }
 
+// `CSoundBank::playSample` on a unit's own bank: the slot's
+// chance, a recording among those `addSample` kept, and for a play
+// heard at the listener `CSoundManager::playSound`'s variation.
+bool World::play_bank_sample(const std::string& name, const ogre::Vector3& at) {
+    if (name.empty()) return false;
+    ensure_sound_index();
+    const tl::core::SoundData* sound = sound_info.find(name);
+    if (sound == nullptr || sound->files.empty()) return false;
+    tl::core::RunicRandom& rolls = tl::core::volatile_random();
+    if (sound->play_chance >= 0 && sound->play_chance <= rolls.integer_between(1, 100)) {
+        return false;
+    }
+    const std::vector<size_t> kept = tl::core::bank_recordings(*sound);
+    const std::string& file = sound->files[kept[static_cast<size_t>(
+        rolls.integer_between(0, static_cast<int>(kept.size()) - 1))]];
+    const float heard = sound->volume * tl::core::configure_volume_scale(
+                                            sound->radius, sound_listener, {at.x, at.y, at.z});
+    const float variation = 0.0f < heard ? rolls.between(0.0f, sound->volume_variation) : 0.0f;
+    return play_recording(name, file, variation, at);
+}
+
+// `CSoundBank::playSample(slot, node)` on a slot the unit's data may leave empty
+// (`CCharacter::spawn`'s slot 19, `SPAWN_SOUND`). The bank is as long as its highest slot added
+// (`addSample` grows it to the slot, the new chances 0): a slot past its end returns
+// at once; inside it the chance (`+0x7c[slot]`, the sound's own or the pad's 0, -1 plays unrolled)
+// is rolled before the slot's samples are looked; then as
+// `play_bank_sample`. `CCharacter::loadModel` adds `MISSILEREFLECT` at slot 34
+// to every character's bank when the definitions have it, so a character's bank reaches slot 34.
+bool World::play_bank_slot(const tl::core::UnitStats& stats, tl::core::SoundSlot slot,
+                           const ogre::Vector3& at) {
+    ensure_sound_index();
+    size_t length = sound_info.find("MISSILEREFLECT") != nullptr
+                        ? static_cast<size_t>(tl::core::SoundSlot::MissileReflect) + 1
+                        : 0;
+    for (size_t s = 0; s < tl::core::kSoundSlots; ++s) {
+        const std::string& authored = stats.sounds[static_cast<tl::core::SoundSlot>(s)];
+        if (!authored.empty() && sound_info.find(authored) != nullptr)
+            length = std::max(length, s + 1);
+    }
+    if (static_cast<size_t>(slot) >= length) return false;
+    const std::string& name = stats.sounds[slot];
+    const tl::core::SoundData* sound = name.empty() ? nullptr : sound_info.find(name);
+    tl::core::RunicRandom& rolls = tl::core::volatile_random();
+    const int chance = sound != nullptr ? sound->play_chance : 0;
+    if (chance >= 0 && chance <= rolls.integer_between(1, 100)) return false;
+    if (sound == nullptr || sound->files.empty()) return false;
+    const std::vector<size_t> kept = tl::core::bank_recordings(*sound);
+    const std::string& file = sound->files[kept[static_cast<size_t>(
+        rolls.integer_between(0, static_cast<int>(kept.size()) - 1))]];
+    const float heard = sound->volume * tl::core::configure_volume_scale(
+                                            sound->radius, sound_listener, {at.x, at.y, at.z});
+    const float variation = 0.0f < heard ? rolls.between(0.0f, sound->volume_variation) : 0.0f;
+    return play_recording(name, file, variation, at);
+}
+
 // CSoundBank::queueGlobalSample(slot, volume, delay). The
 // gate on the sound system (manager +0x375/+0x374) is the mixer's: a silent run still
 // queues.
@@ -452,14 +522,16 @@ void World::lift_path_blockers() {
     nav.clear_blockers();
 }
 
-void World::register_door_avoidance() {
+void World::register_door_avoidance(size_t from) {
     // CTriggerUnit::setActiveInLevel(true): first time
     // the state set to the first, shown, CItem::snapToGround and
     // CBaseUnit::addToAvoidanceMap, whose INTERACTABLE
     // branch probes the trigger's collision into the map grid. INVENTED: no snap for a
-    // layout's prop.
-    const std::vector<int64_t> nodes = std::move(door_trigger_nodes);
-    door_trigger_nodes.clear();
+    // layout's prop. Those queued before `from` stay queued.
+    if (from > door_trigger_nodes.size()) from = door_trigger_nodes.size();
+    const std::vector<int64_t> nodes(door_trigger_nodes.begin() + static_cast<long>(from),
+                                     door_trigger_nodes.end());
+    door_trigger_nodes.resize(from);
     if (!passability.ready()) return;
 
     size_t added = 0;
@@ -472,6 +544,10 @@ void World::register_door_avoidance() {
         tl::core::Vec3 low, high;
         if (!collision.group_bounds(node_id, low, high)) continue;
         passability.increment_map_passability_collision(low, high, collision, node_id);
+        TL_LOG_DEBUG("  map avoidance C group %lld (%.2f, %.2f)..(%.2f, %.2f)",
+                     static_cast<long long>(node_id), static_cast<double>(low.x),
+                     static_cast<double>(low.z), static_cast<double>(high.x),
+                     static_cast<double>(high.z));
         door_avoidance_added.insert(node_id);
         ++added;
     }

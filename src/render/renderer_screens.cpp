@@ -382,16 +382,8 @@ void Renderer::Impl::open_vendor_screen(const std::string& unit, VendorScreen sc
             TL_LOG_WARN("npc: '%s' is not placed as a combiner", unit.c_str());
         }
     }
-    if (screen == VendorScreen::Merchant) {
-        if (MerchantState* merchant = merchant_named(unit)) {
-            for (const auto& entry : merchants) {
-                if (&entry.second == merchant) trading_with = entry.first;
-            }
-            inventory_menu.set_vendor_stock(&merchant->inventory, merchant->gambler);
-        } else {
-            TL_LOG_WARN("npc: '%s' has no stock", unit.c_str());
-        }
-    }
+    if (screen == VendorScreen::Merchant && open_merchant_stock(unit)) return;
+    if (mouse_opens_storage(screen)) return animate_stash(unit, true);
     if (screen == VendorScreen::Stash || screen == VendorScreen::SharedStash) {
         // the stash tray's owner is the player and its
         // inventory the player's `+0x9f4` (page 7) or `CSharedStash +8`
@@ -1005,17 +997,19 @@ void Renderer::Impl::close_quest_offer() {
 
 namespace {
 
-/// One of the unit `name` out of `bag`, the first slot holding it:
-/// with a count of -1, as calls it for one bag.
-/// INVENTED: the slot order walks was not read; slot order stands in.
-bool remove_one_named(tl::core::Inventory& bag, const std::string& name) {
-    const std::vector<tl::core::InventorySlot>& slots = bag.slots();
-    for (size_t i = 0; i < slots.size(); ++i) {
-        if (slots[i].count > 0 && tl::core::upper_ascii(slots[i].item.name) == name) {
-            return bag.remove_item(i, 1);
+/// One pass: (by the unit's GUID, any type, whole) on each
+/// bag, every item of the unit `name` out of it however many it stacks. Whether there was one.
+bool remove_all_named(std::initializer_list<tl::core::Inventory*> bags, const std::string& name) {
+    bool any = false;
+    for (tl::core::Inventory* bag : bags) {
+        for (size_t i = 0; bag != nullptr && i < bag->slots().size(); ++i) {
+            const tl::core::InventorySlot& slot = bag->slots()[i];
+            if (slot.count > 0 && tl::core::upper_ascii(slot.item.name) == name) {
+                any = bag->remove_item(i, slot.count) || any;
+            }
         }
     }
-    return false;
+    return any;
 }
 
 }  // namespace
@@ -1035,12 +1029,13 @@ bool Renderer::Impl::hand_dialog_items(const tl::core::QuestDefinition& quest,
             player_inventory.give_gold(-item.count);
             continue;
         }
-        // COUNT times, the UNIT_GUID out of the bag, the first pet's, and X360 +0x9f4's.
-        // INVENTED: +0x9f4's bag, and the pets dismissed.
+        // COUNT times, the UNIT_GUID out of the bag, the first pet's and `+0x9f4`, the
+        // stash's. INVENTED: with none of it found, the console dismisses the
+        // pets of that unit; not here.
+        tl::core::Inventory* pet_bag = pet.alive() ? &pet.bag() : nullptr;
+        tl::core::Inventory* stash = housing_inventory_for(VendorScreen::Stash);
         for (int i = 0; i < item.count; ++i) {
-            if (!remove_one_named(player_inventory, item.name) && pet.alive()) {
-                remove_one_named(pet.bag(), item.name);
-            }
+            if (!remove_all_named({&player_inventory, pet_bag, stash}, item.name)) break;
         }
         TL_LOG_INFO("quest %s takes %d x %s", quest.name.c_str(), item.count, item.name.c_str());
     }
@@ -1714,7 +1709,7 @@ void Renderer::Impl::update_character_preview(float delta) {
     // as the character's, and `CCharacterMenuXenon` renders whichever owns the
     // panel (hands the viewport to the panel being shown): the pet
     // while its tray has the focus. The pet wears and holds nothing here.
-    const bool pet_shown = inventory_menu.pet_tray_focused() && pet_entity != nullptr;
+    const bool pet_shown = preview_of_pet() && pet_entity != nullptr;
     Ogre::Entity* const source = pet_shown ? pet_entity : subject;
     static const std::vector<Ogre::Entity*> kNothingWorn;
     const std::vector<Ogre::Entity*>& worn = pet_shown ? kNothingWorn : equipment;

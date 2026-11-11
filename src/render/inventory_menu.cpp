@@ -249,6 +249,7 @@ bool InventoryMenu::load_art(const std::string& group) {
 
         textures_.push_back(texture);
         materials_.push_back(build_menu_material("tl/inv/item_" + stored.name, texture));
+        apply_set_tint(materials_.back(), stored);
 
         for (const tl::formats::ImagesetImage& image : stored.images) {
             Sprite entry;
@@ -2011,16 +2012,6 @@ void InventoryMenu::update_vendor_column(const tl::core::StatBook& graphs) {
     }
 }
 
-void InventoryMenu::set_tray_legend(const std::string& prefix, const std::string& a,
-                                    const std::string& x, const std::string& y) {
-    set_widget_visible(prefix + "buttonB", false);
-    const std::string captions[3][2] = {{"buttonA", a}, {"buttonX", x}, {"buttonY", y}};
-    for (const auto& button : captions) {
-        set_widget_text(prefix + button[0] + "text", button[1]);
-        set_widget_visible(prefix + button[0], !button[1].empty());
-    }
-}
-
 void InventoryMenu::set_widget_text_colour(const std::string& widget_name,
                                            const Ogre::ColourValue& colour) {
     Node* node = find_node_by_widget(widget_name);
@@ -2743,11 +2734,10 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
                          lit_tab == 5 ? "tab_fish_rollover" : "tab_fish");
 
         if (vendor_ == VendorScreen::None) {
-            // the focused tray shows its `rightbumper` (RB, the swap), the other
-            // neither. INVENTED: the count test gating the unfocused tray's `leftbumper` (`+0x60 <
-            // +0xd0`) is not read.
+            // `CInventoryMenuXenon::vfunc_8`: the bag's `leftbumper` hidden,
+            // its `rightbumper` (RB, to the pet's tray on its right) while it has the focus.
             set_widget_visible("inv/leftbumper", false);
-            set_widget_visible("inv/rightbumper", bag_focused && pet_tray_available_);
+            set_widget_visible("inv/rightbumper", bag_focused);
         } else {
             // On a vendor's screen the bumpers move between trays; the bag's
             // neighbour is the vendor's, to its left.
@@ -2919,7 +2909,8 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         for (int tab = 0; tab < 6; ++tab) {
             set_widget_visible(kPetHi[tab], pet_focused && pet_tab_ == tab);
         }
-        set_widget_visible("pet/rightbumper", pet_focused);
+        // `vfunc_8`: the pet's tray's `leftbumper` (LB, back to the bag) while it has the focus.
+        set_widget_visible("pet/leftbumper", pet_focused);
 
         pet_rows_.clear();
         if (pet_here) {

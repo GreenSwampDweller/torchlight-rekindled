@@ -1,3 +1,15 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRenderer.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRenderer.h
+index 006db25..6dd4b36 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRenderer.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBoxRenderer.h
+@@ -76,6 +76,7 @@ namespace ParticleUniverse
+ 			virtual void setRenderQueueGroup(uint8 queueId);
+ 
+ 			/** @copydoc ParticleRenderer::_getSortMode */
++			// Torchlight: `BoxRenderer::_getSortMode` is the library's.
+ 			virtual SortMode _getSortMode(void) const {return SM_DISTANCE;};
+ 
+ 			/** @copydoc ParticleRenderer::copyAttributesTo */
 diff --git a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp b/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp
 index 95bc2ac..66bf96b 100644
 --- a/Plugins/ParticleUniverse/src/ParticleRenderers/ParticleUniverseBoxRenderer.cpp

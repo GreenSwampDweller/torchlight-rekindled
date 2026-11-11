@@ -2,13 +2,36 @@
 #include "core/equipment_attach.h"
 #include "core/item_ai.h"
 #include "core/targeting.h"
+#include "core/unit_themes.h"
 #include "core/world.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 namespace tl::core {
+
+namespace {
+
+// A character's quest marker at once (`__dynamic_cast`,
+// `CQuestManager::calculateNPCIcon`), which draws its quest off `g_RandVolatile`. DIVERGENCE:
+// the marker's themes are left to the level's next `updateNPCIcons`; only the draw is made here.
+void adopted_npc_icon(World& world, int64_t handle, const std::string& quest) {
+    for (tl::core::LevelScript* machine : world.level_machines) {
+        const std::string name = machine->unit_of(handle);
+        if (name.empty()) continue;
+        tl::core::UnitThemeSet themes;
+        const bool marked = world.quest_log.calculate_npc_icon(
+            name, world.stats_for_unit(name).quests, tl::core::volatile_random(),
+            world.ui_in_cinematic(), true, themes, nullptr);
+        TL_LOG_DEBUG("quests: %s adopted by '%s', its icon %s", name.c_str(), quest.c_str(),
+                     marked ? "set" : "none");
+        return;
+    }
+}
+
+}  // namespace
 
 void World::load_recipes() {
     if (recipes_loaded) return;
@@ -59,6 +82,11 @@ void World::transmute_selected() {
     context.player_level = player_character.level();
     context.spawn_context = &loot_tables.context;
     context.game_rng = &tl::core::game_random();
+    context.destroy_item = [this](const tl::core::ItemStats& item) {
+        const tl::core::EffectManager::Context& effects = item_effect_context();
+        tl::core::destroy_item_effects(item, effects,
+                                       {&stat_graphs, &tl::core::volatile_random(), effects.owner});
+    };
 
     const tl::core::CombineOutcome out =
         tl::core::transmute(found->second.inventory, player_inventory, context);
@@ -444,6 +472,13 @@ void World::step_level_items(float delta) {
     // `CLevel::updateItems` over the near list: `update`,
     // or `deleteItem` for one marked (`+0x190`).
     load_unit_types();
+    if (door_avoidance_deferred) {
+        // `CTriggerUnit::setActiveInLevel(true)` on a room trigger's first update:
+        // `CBaseUnit::addToAvoidanceMap`. The routes' grid takes the new walls.
+        door_avoidance_deferred = false;
+        register_door_avoidance();
+        if (passability.ready()) nav.build(passability);
+    }
     for (size_t i = 0; i < breakables.size();) {
         BreakableWorld& b = breakables[i];
         if (b.presence.deleted) {
@@ -521,7 +556,7 @@ void World::step_level_items(float delta) {
 // collision out around it.
 void World::cast_prop_trap(const std::string& unit, const std::string& name, uint32_t level,
                            const ogre::Vector3& skill_at, const ogre::Quaternion& facing,
-                           bool by_player) {
+                           bool by_player, int64_t prop_id) {
     ensure_player_skill_files();
     ensure_effect_data();
     const auto file = player_skill_files.find(tl::core::upper_ascii(name));
@@ -547,25 +582,57 @@ void World::cast_prop_trap(const std::string& unit, const std::string& name, uin
         return affixes.get_affix(n);
     };
     context.caster = &caster;
-    context.on_event = [this, skill_at, facing](const tl::core::KnownSkill& cast, uint32_t, int,
-                                                const tl::formats::AdmSection& event,
-                                                const tl::core::SkillEventTarget&) {
+    context.on_event = [this, skill_at, facing, level, prop_id](
+                           const tl::core::KnownSkill& cast, uint32_t, int group,
+                           const tl::formats::AdmSection& event,
+                           const tl::core::SkillEventTarget& target) {
         // `CSkillEvent::startEvent`: the block's layout
-        // at the cast point, facing the prop's way. INVENTED: the damage shape's listener
-        // (`CDamageShape +0x1c8`) is not wired, so an explosion deals its shape's damage only.
+        // at the cast point, facing the prop's way, its damage shapes listened to
+        // (`addListeners`) with the prop for the owner.
         const tl::core::SkillEventSpec spec = tl::core::read_skill_event(event);
         if (spec.file.empty()) return;
         const size_t before = nested_scripts.size();
-        if (!place_layout(spec.file, skill_at, facing, /*depth=*/1)) {
+        const bool was_event = std::exchange(placing_skill_event_layout, true);
+        const bool placed = place_layout(spec.file, skill_at, facing, /*depth=*/1);
+        placing_skill_event_layout = was_event;
+        if (!placed) {
             TL_LOG_WARN("prop: '%s' could not place '%s'", cast.entry.name.c_str(),
                         spec.file.c_str());
             return;
         }
+        SkillEventSource source;
+        source.skill = cast.entry.name;
+        source.level = level;
+        source.event = &event;
+        const tl::core::SkillProperty* property = cast.property(level);
+        source.property = property != nullptr && property->section != nullptr
+                              ? &property->event_section()
+                              : nullptr;
+        source.duration_override = property != nullptr ? property->events_duration_override : 0.0f;
+        source.target_type =
+            property != nullptr ? property->target_type : cast.def->base.target_type;
+        source.target_unit_type =
+            property != nullptr ? property->target_unit_type : cast.def->base.target_unit_type;
+        source.single_target =
+            property != nullptr ? property->single_target : cast.def->base.single_target;
+        source.has_original_target = target.has_unit && source.target_type != 0xb;
+        source.original_machine = source.has_original_target ? target.machine : nullptr;
+        source.original_node = source.has_original_target ? target.unit : 0;
+        source.unauthored = tl::core::kSkillBlockTargetDefault;
+        source.target_alignment = cast.def->target_alignment;
+        source.spec = spec;
+        source.group = group;
+        source.prop_owner = true;
+        source.prop_id = prop_id;
+        source.prop_level = level_monster_level;
+        hang_player_skill_event(source, before);
         for (size_t i = before; i < nested_scripts.size(); ++i) {
             NestedScript& machine = nested_scripts[i];
             std::vector<tl::core::ScriptEvent> events;
             machine.running = true;
-            machine.script.play_layout_timelines(quest_log.state(), events, /*backwards=*/false);
+            // `CSkillEvent::startEvent`: the layout's start, state 0.
+            machine.script.play_layout_timelines(quest_log.state(), events, /*backwards=*/false,
+                                                 /*restart=*/true);
             if (!events.empty()) apply_script_events(events, machine.nodes);
         }
         TL_LOG_INFO("prop: '%s' places %s", cast.entry.name.c_str(), spec.file.c_str());
@@ -587,8 +654,9 @@ void World::hurt_player(float amount, const std::string& from, int64_t attacker,
                         bool shown) {
     if (amount <= 0.0f || player_health.dead) return;
     if (!(player_health.max > 0.0f)) return;
-    // `applyDamage`: onto the number over the character (`+0x1ec`). INVENTED: a
-    // glancing blow on the player is not told apart, so it is added too.
+    // `applyDamage`: onto the number over the character
+    // (`+0x1ec`). A glancing blow is added too: its text is only for a struck one that is
+    // neither `ISA(0x1c)` nor mastered by one.
     if (shown) player_damage_shown.pending = amount + player_damage_shown.pending;
     // `CCharacter::applyDamage`: struck, and `+0x708` run out, the
     // `CAST SKILL ON STRUCK` procs roll (`executeProcs(0x51, attacker)`), ahead
@@ -645,8 +713,8 @@ void World::hurt_player(float amount, const std::string& from, int64_t attacker,
             }
         }
     }
-    if (0.0f < player_health.current && attacker != 0) {
-        // `applyDamage`: still alive, the character answers the
+    if (struck && 0.0f < player_health.current && attacker != 0) {
+        // `applyDamage`: struck and still alive, the character answers the
         // attacker with what it reflects.
         reflect_damage(player_total(), 0, "the character", amount, attacker);
     }
@@ -829,7 +897,30 @@ void World::drop_item(const tl::core::ItemStats& item, int count, const ogre::Ve
         ogre::Quaternion(ogre::Radian(heading * 0.017453292f), ogre::Vector3::UNIT_Y) * tilted;
 
     const tl::core::Vec3 from{at.x, at.y, at.z};
-    play_sound(item.fall_sound, at);  // slot 0x10, before the spot is chosen
+    // The item's bank, slot 0x10 (`FALL_SOUND`), before the spot is chosen. Its slots
+    // (`CItem::loadModel`): fall 0x10, land 0x11, take 0x12,
+    // attack 0xa, strike 1, use 0x14; with no fall sound but a higher slot filled, the empty
+    // slot's chance 0 still rolls.
+    {
+        ensure_sound_index();
+        const auto found = [&](const std::string& name) {
+            std::string key = name;
+            for (char& ch : key) {
+                if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+            }
+            const tl::core::SoundData* named = sound_info.find(key);
+            return named != nullptr && sound_info.find_by_guid(named->guid) != nullptr
+                       ? key
+                       : std::string();
+        };
+        const std::string fall = found(item.fall_sound);
+        if (!fall.empty()) {
+            play_bank_sample(fall, at);
+        } else if (!found(item.land_sound).empty() || !found(item.take_sound).empty() ||
+                   !found(item.use_sound).empty()) {
+            tl::core::volatile_random().integer_between(1, 100);
+        }
+    }
 
     tl::core::Vec3 land = tl::core::random_open_item_position(
         from, 0.0f, tl::core::kDropTossRadius,
@@ -860,6 +951,7 @@ void World::drop_item(const tl::core::ItemStats& item, int count, const ogre::Ve
     start_item_particles(dropped);
     // `addItem`: `+0x204` to 1 (`updateOpacity(0, true)`).
     dropped.presence.opacity = 1.0f;
+    dropped.made = ++items_made;
     dropped_items.push_back(dropped);
     TL_LOG_INFO("dropped %d x %s: tossed from (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f), %.2f along",
                 count, item.display_name.c_str(), static_cast<double>(from.x),
@@ -877,7 +969,14 @@ ogre::Vector3 World::snap_item_to_ground(const ogre::Vector3& at) {
         [&](const tl::core::Vec3& from, const tl::core::Vec3& to, tl::core::Vec3& point,
             uint32_t& material) {
             tl::core::CollisionHit hit;
-            if (!collision.ray_collision(from, to, false, hit)) return false;
+            // `li r10, 0`: the objects are tested too. DIVERGENCE: the console's
+            // characters (`CLevel +0x54`, material 200) are not among them (finding 63).
+            const bool found = collision.ray_collision(from, to, /*objects=*/true, hit);
+            TL_LOG_DEBUG("  snap ray (%a, %a) -> %d y %a material %u", static_cast<double>(from.x),
+                         static_cast<double>(from.z), found ? 1 : 0,
+                         found ? static_cast<double>(hit.point.y) : 0.0,
+                         found ? static_cast<unsigned>(hit.material) : 0u);
+            if (!found) return false;
             point = hit.point;
             material = static_cast<uint32_t>(hit.material);
             return true;
@@ -890,15 +989,17 @@ ogre::Vector3 World::snap_item_to_ground(const ogre::Vector3& at) {
     return ogre::Vector3(rest.x, rest.y, rest.z);
 }
 
-ogre::Vector3 World::character_to_ground(const ogre::Vector3& at) {
+ogre::Vector3 World::character_to_ground(const ogre::Vector3& at, float collision_radius) {
     // CCharacter::dropToGround, as CLevel::addCharacter calls
     // it with 4.0.
     const tl::core::Vec3 ground = tl::core::drop_character_to_ground(
-        {at.x, at.y, at.z}, 4.0f,
+        {at.x, at.y, at.z}, 4.0f, collision_radius,
         [&](const tl::core::Vec3& from, const tl::core::Vec3& to, tl::core::Vec3& point,
             uint32_t& material) {
             tl::core::CollisionHit hit;
-            const bool found = collision.ray_collision(from, to, false, hit);
+            // `li r10, 0`: the objects are tested too. DIVERGENCE:
+            // the console's characters (`CLevel +0x54`, material 200) are not among them (finding 63).
+            const bool found = collision.ray_collision(from, to, /*objects=*/true, hit);
             TL_LOG_DEBUG("  drop ray (%a, %a) -> %d y %a material %u", static_cast<double>(from.x),
                          static_cast<double>(from.z), found ? 1 : 0,
                          found ? static_cast<double>(hit.point.y) : 0.0, found ? hit.material : 0u);
@@ -952,9 +1053,11 @@ void World::place_gold(const tl::core::GoldPile& pile, const ogre::Vector3& plac
     if (!sparkle.empty()) {
         dropped.sparkle = place_particle_layout(sparkle, at, ogre::Quaternion::IDENTITY, nullptr);
     }
+    dropped.made = ++items_made;
     dropped_items.push_back(dropped);
-    // `addItem` plays the drop sound and `rollMoney` again.
-    if (drop_sound) play_sound("GoldPickup", at);
+    // `addItem`: a tossed `GOLD` plays its bank's slot 0x11,
+    // `GOLDPICKUP`, through `CSoundBank::playSample`.
+    if (drop_sound) play_bank_sample("GOLDPICKUP", at);
     TL_LOG_INFO("gold: %d on the ground at (%.2f, %.2f, %.2f)", pile.amount,
                 static_cast<double>(at.x), static_cast<double>(at.y), static_cast<double>(at.z));
 }
@@ -1031,6 +1134,7 @@ void World::place_ground_item(const tl::core::ItemStats& item, int count, const 
     // called) starts the drop particle (`+0x3d0`) on the item's node.
     start_item_particles(placed);
     placed.presence.opacity = 1.0f;  // `addItem`
+    placed.made = ++items_made;
     dropped_items.push_back(placed);
     TL_LOG_INFO("item: %d x %s on the ground at (%.2f, %.2f, %.2f)%s%s", count,
                 item.display_name.c_str(), static_cast<double>(rest_at.x),
@@ -1209,6 +1313,7 @@ tl::core::QuestUnitWorld World::quest_unit_world() {
                             const tl::core::QuestUnitTag& tag) {
         if (!unit.item) {
             quest_unit_tags[unit.handle] = tag;
+            adopted_npc_icon(*this, unit.handle, tag.quest);
             return;
         }
         if (unit.handle < 0 || static_cast<size_t>(unit.handle) >= dropped_items.size()) return;

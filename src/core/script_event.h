@@ -18,20 +18,21 @@ class UnitSpawner;
 
 /// What the script is asking the renderer to do.
 enum class ScriptAction {
-    SetVisible,      ///< `Show` / `Hide` on something the layout placed
-    SetEnabled,      ///< `Enable` / `Disable`; a particle link starts or stops
-    MoveNode,        ///< a timeline property track driving a target's position
-    CameraOn,        ///< a `Camera Controller` taking the camera
-    CameraOff,       ///< ... and handing it back
-    CameraLookAt,    ///< where a camera controller has the camera looking this frame
-    GameState,       ///< the interface state during a scripted scene
-    QuestChanged,    ///< a `Quest Controller` fired
-    Animation,       ///< a unit starts or stops an animation
-    MoveUnit,        ///< a unit walked by the script moved
-    Dialog,          ///< a `Quest Controller` opened or closed a line of dialogue
-    Hunt,            ///< a `Monster` started or stopped going after something
-    Kill,            ///< a `Monster` died: fall over, do not vanish; `on`: the player struck it
-    WalkPlayer,      ///< a `Pathing` node whose `GROUP` is PLAYER: walk the character
+    SetVisible,    ///< `Show` / `Hide` on something the layout placed
+    SetEnabled,    ///< `Enable` / `Disable`; a particle link starts or stops
+    MoveNode,      ///< a timeline property track driving a target's position
+    CameraOn,      ///< a `Camera Controller` taking the camera
+    CameraOff,     ///< ... and handing it back
+    CameraLookAt,  ///< where a camera controller has the camera looking this frame
+    GameState,     ///< the interface state during a scripted scene
+    QuestChanged,  ///< a `Quest Controller` fired
+    Animation,     ///< a unit starts or stops an animation
+    MoveUnit,      ///< a unit walked by the script moved
+    Dialog,        ///< a `Quest Controller` opened or closed a line of dialogue
+    Hunt,          ///< a `Monster` started or stopped going after something
+    Kill,          ///< a `Monster` died: fall over, do not vanish; `on`: the player struck it
+    DeathFlight,   ///< its body flung: `position` the landing, `rate` the seconds, `loops` the void
+    WalkPlayer,    ///< a `Pathing` node whose `GROUP` is PLAYER: walk the character
     NestedTimeline,  ///< `Play` / `Play Backwards` / `Stop` on a `Layout Link Timeline`
     Music,           ///< `Play` or `Play Level Music` on a `Music` node
     SpawnerInput,    ///< an input reached a `Unit Spawner`: `spawner` takes `input`
@@ -75,8 +76,9 @@ enum class ScriptAction {
     ShowTip,            ///< `Show Tip`: `CGameUI::queueTip` with the tip in `input`
     PlayerMeshVisible,  ///< the player's `setMeshVisible(on, true)` (`HIDE PLAYER`, a skip)
     ParticleNode,  ///< a `Particle` node's own system: `CParticleTechWrapper::start` (`on`) / `stop`
-    ParticleLinkPause,  ///< a particle link's `CParticle::Pause`: `CLayout::pause` on its layout
-    AffectorEnabled,    ///< a particle affector's `ENABLE` (`CAffectorWrapper::setEnabled`): `on`
+    ParticleLinkPause,    ///< a particle link's `CParticle::Pause`: `CLayout::pause` on its layout
+    ParticleLinkStarted,  ///< a particle link's `CParticle::Start`: its sounds at `position`
+    AffectorEnabled,      ///< a particle affector's `ENABLE` (`CAffectorWrapper::setEnabled`): `on`
     EmitterEnabled,  ///< an `Emitter` node's emission (`CParticleEmitterWrapper::setEnabled`): `on`
     CameraShake,  ///< `Activate` on a `Camera Shake`: its `node`, about `position` (the layout's)
     /// `CCharacter::convertCharacter` re-made `node_id` as
@@ -239,6 +241,11 @@ struct ScriptEvent {
     /// Strike: `CCharacter::rollAttack` decided it, so its tail (knock-back, degraded armour,
     /// `TRANSFER` effects) follows. A damage shape's strike is not one.
     bool roll_attack = false;
+    /// Strike: `rollAttack` interrupted the one struck (`interrupt(target, true)`),
+    /// ahead of the rest of the blow.
+    bool interrupts = false;
+    /// Strike: a glancing blow (`applyDamage`'s glancing argument).
+    bool glancing = false;
     /// Strike and Kill: the blow's direction and force (`applyDamage`'s, for
     /// `die`), and on a Kill whether the body bursts (a critical, or a blow of
     /// at least 1.75 times the maximum).

@@ -131,6 +131,12 @@ SkillProperty read_property(const tl::formats::AdmSection& section, const SkillP
     std::string target_word = section.string_or("TARGET_TYPE", "");
     if (target_word.empty()) target_word = section.string_or("TARGET", "");
     p.target_type = target_type_of(target_word, from.target_type);
+    // `TARGET_UNITTYPE` and `SINGLETARGET`, each the default
+    // property's when not authored.
+    p.target_unit_type = section.string_or("TARGET_UNITTYPE", "");
+    if (p.target_unit_type.empty()) p.target_unit_type = from.target_unit_type;
+    p.single_target = section.bool_or("SINGLETARGET", from.single_target);
+    p.slowdown = read_ms(section, "SLOWDOWNMS", from.slowdown);
     p.interruptable = section.bool_or("INTERRUPTABLE", from.interruptable);
     p.continuous_looping = section.bool_or("CONTINUOUSLOOPING", from.continuous_looping);
     p.exclusive = section.bool_or("EXCLUSIVE", from.exclusive);
@@ -186,6 +192,8 @@ SkillDef parse_skill_def(const tl::formats::AdmFile& file) {
     def.moves_to_target = root.bool_or("MOVES_TO_TARGET", false);
     def.allows_turning = root.bool_or("ALLOWS_TURNING", true);
     def.requires_passable_los = root.bool_or("REQUIRES_PASSABLE_LOS", false);
+    def.dont_stop_on_death = root.bool_or("DONT_STOP_ON_DEATH", false);
+    def.can_be_silenced = root.bool_or("CAN_BE_SILENCED", true);
     def.requires_pathable = root.bool_or("REQUIRES_PATHABLE", false);
     def.guid = root.guid_or("UNIQUE_GUID", -1);
     // `CSkill::CSkill`: `TARGET_ALIGNMENT`

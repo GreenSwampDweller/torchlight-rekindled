@@ -59,7 +59,8 @@ def main() -> int:
 
     shutil.copy2(BINARY, out / BINARY.name)
     launcher = out / "torchlight.sh"
-    launcher.write_text(LAUNCHER, encoding="utf-8", newline="\n")
+    with open(launcher, "w", encoding="utf-8", newline="\n") as fh:  # Python 3.9: the release image's
+        fh.write(LAUNCHER)
     for f in (out / BINARY.name, launcher):
         f.chmod(f.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

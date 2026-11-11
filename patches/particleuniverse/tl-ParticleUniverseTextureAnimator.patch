@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
-index 3a686a3..e387676 100644
+index 3a686a3..a848403 100644
 --- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
 +++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimator.h
 @@ -31,12 +31,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -66,8 +66,8 @@ index 3a686a3..e387676 100644
 -
 -			/** Todo */
 -			bool isStartRandom(void) const;
-+			/** The starting frame, read at the system's age (`getFrame`,
-+				`setFrame`). Takes ownership.
++			/** The starting frame, read at the system's age (`TextureAnimator::getFrame`,
++				`TextureAnimator::setFrame`). Takes ownership.
 +			*/
 +			DynamicAttribute* getFrame(void) const {return mFrame;}
 +			void setFrame(DynamicAttribute* frame);
@@ -75,16 +75,16 @@ index 3a686a3..e387676 100644
 -			/** Todo */
 -			void setStartRandom(bool startRandom);
 +			/** Frames a second, read at the particle's time fraction
-+				(`getAnimationSpeed`, `setAnimationSpeed`). Takes ownership.
++				(`TextureAnimator::getAnimationSpeed`, `TextureAnimator::setAnimationSpeed`). Takes ownership.
 +			*/
 +			DynamicAttribute* getAnimationSpeed(void) const {return mAnimationSpeed;}
 +			void setAnimationSpeed(DynamicAttribute* animationSpeed);
 +
-+			/** `useOwnAnimationSpeed`, `setUseOwnAnimationSpeed`. */
++			/** `TextureAnimator::useOwnAnimationSpeed`, `TextureAnimator::setUseOwnAnimationSpeed`. */
 +			bool useOwnAnimationSpeed(void) const {return mUseOwnAnimationSpeed;}
 +			void setUseOwnAnimationSpeed(bool useOwnAnimationSpeed) {mUseOwnAnimationSpeed = useOwnAnimationSpeed;}
 +
-+			/** `useRandomStartingFrame`, `setUseRandomStartingFrame`. */
++			/** `TextureAnimator::useRandomStartingFrame`, `TextureAnimator::setUseRandomStartingFrame`. */
 +			bool useRandomStartingFrame(void) const {return mUseRandomStartingFrame;}
 +			void setUseRandomStartingFrame(bool useRandomStartingFrame) {mUseRandomStartingFrame = useRandomStartingFrame;}
 +
@@ -133,16 +133,16 @@ index 3a686a3..e387676 100644
 -			/** Todo.
 -			*/
 -			void _determineNextTextureCoords(VisualParticle* visualParticle);
-+			/** `_calculateAnimationSpeed`. */
++			/** `TextureAnimator::_calculateAnimationSpeed`. */
 +			Real _calculateAnimationSpeed(Particle* particle);
 +
-+			/** `_calculateFrame`. */
++			/** `TextureAnimator::_calculateFrame`. */
 +			int _calculateFrame(void);
  	};
  
  }
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
-index 582e18a..3addec8 100644
+index 582e18a..4679bdf 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseTextureAnimator.cpp
 @@ -28,10 +28,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -193,7 +193,7 @@ index 582e18a..3addec8 100644
 +		mAnimationSpeed = speed;
  	}
  	//-----------------------------------------------------------------------
-+	// Torchlight: `~TextureAnimator`.
++	// Torchlight: `TextureAnimator::~TextureAnimator`.
  	TextureAnimator::~TextureAnimator(void)
  	{
 +		if (mFrame)

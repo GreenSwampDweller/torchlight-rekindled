@@ -42,6 +42,7 @@
 #include "ParticleUniverseSystem.h"
 #include "ParticleUniverseSystemManager.h"
 #include "formats/cmp.h"
+#include "render/depth_buffer.h"
 
 namespace tl::render {
 
@@ -78,7 +79,7 @@ constexpr unsigned kRenderTypeEntity = 10;
 constexpr unsigned kRenderTypeEntityWorld = 11;
 constexpr unsigned kRenderTypeRibbonTrail = 12;
 
-/// `gPARTICLE_MATERIAL_TYPES` (`setParticleRenderStyle`).
+/// `gPARTICLE_MATERIAL_TYPES` (`CParticleTechWrapper::setParticleRenderStyle`).
 constexpr const char* kRenderStyles[] = {"Alpha", "Normal", "Additive", "Modulate"};
 constexpr unsigned kStyleAlpha = 0;
 constexpr unsigned kStyleAdditive = 2;
@@ -359,7 +360,8 @@ struct TechWrapper {
         if (PU::ParticleRenderer* renderer = technique->getRenderer()) renderer->setSorted(value);
     }
 
-    // `setFlipbookWidth` / `setFlipbookHeight`.
+    // `CParticleTechWrapper::setFlipbookWidth`,
+    // `CParticleTechWrapper::setFlipbookHeight`.
     void set_flipbook_width(int width) {
         flipbook_width = width;
         technique->setFlipbookWidthHeight(width, flipbook_height);
@@ -369,7 +371,8 @@ struct TechWrapper {
         technique->setFlipbookWidthHeight(flipbook_width, height);
     }
 
-    // `setBillboardRotationType`, `setBillboardOrigin`.
+    // `CParticleTechWrapper::setBillboardRotationType`,
+    // `CParticleTechWrapper::setBillboardOrigin`.
     void set_rotation_type(unsigned type) {
         rotation_type = type;
         if (billboard) {
@@ -381,11 +384,11 @@ struct TechWrapper {
         if (billboard) billboard->setBillboardOrigin(static_cast<Ogre::BillboardOrigin>(value));
     }
 
-    // The ribbon setters (`CParticleTechWrapper::setRibbonEndFade`
+    // Stored, and applied to a ribbon renderer: `CParticleTechWrapper::setRibbonEndFade`,
     // colours of 0 when fading, 1 when not;
-    // `setRibbonLocalTrail`
-    // `setRibbonLength`, `setRibbonWidth`,
-    // `setRibbonMaxChains`): stored, and applied to a ribbon renderer.
+    // `CParticleTechWrapper::setRibbonLocalTrail`,
+    // `CParticleTechWrapper::setRibbonLength`, `CParticleTechWrapper::setRibbonWidth`,
+    // `CParticleTechWrapper::setRibbonMaxChains` (at most 100).
     void set_ribbon_fade(bool fade) {
         ribbon_fade = fade;
         if (!ribbon) return;
@@ -558,10 +561,9 @@ struct TechWrapper {
         material = materials.create(name, context->resource_group);
         Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
         pass->setLightingEnabled(false);
-        // `D3D9RenderSystem::_setDepthBias` adds `constantBias *
-        // -3.99999999e-06` of the [0, 1] depth range; GL takes units
-        // of the 24-bit depth buffer and negates, so the bias is scaled by 4e-6 * 2^24.
-        pass->setDepthBias(depth_bias * 3.99999999e-06f * 16777216.0f, 0.0f);
+        // `D3D9RenderSystem::_setDepthBias`: `constantBias * -3.99999999e-06`
+        // of the [0, 1] depth range; GL counts in the depth buffer's units, negated.
+        pass->setDepthBias(depth_bias * 3.99999999e-06f * depth_buffer_units(), 0.0f);
         material->setFog(true, Ogre::FOG_NONE, Ogre::ColourValue::White, 0.001f, 0.0f, 1.0f);
         if (!path.empty()) pass->createTextureUnitState(path);
         pass->setDepthWriteEnabled(false);
@@ -612,36 +614,48 @@ struct EmitterWrapper {
     std::vector<float> min_radius, max_radius, circle_degrees, circle_step;  // +0x148..+0x160
     Ogre::Vector3 position = Ogre::Vector3::ZERO;
 
+    // Each shape setter keeps its value and hands it to an emitter of its type:
+    // `CParticleEmitterWrapper::setRadius`, SphereSurface (4);
+    // `CParticleEmitterWrapper::setBoxWidth`, Box (1);
+    // `CParticleEmitterWrapper::setBoxHeight`, Box (1);
+    // `CParticleEmitterWrapper::setBoxDepth`, Box (1);
+    // `CParticleEmitterWrapper::setPositionEnd`, Line (3);
+    // `CParticleEmitterWrapper::setMinLineIncrement`, Line (3);
+    // `CParticleEmitterWrapper::setMaxLineIncrement`, Line (3);
+    // `CParticleEmitterWrapper::setMaxLineDeviation`, Line (3);
+    // `CParticleEmitterWrapper::setCircleFixedSize`, Circle (2).
     void set_radius(float value) {
         radius = value;
         if (type == kEmitterSphereSurface)
             static_cast<PU::SphereSurfaceEmitter*>(emitter)->setRadius(value);
     }
-    void set_box(float width, float height, float depth) {
-        box_width = width;
-        box_height = height;
-        box_depth = depth;
-        if (type != kEmitterBox) return;
-        auto* box = static_cast<PU::BoxEmitter*>(emitter);
-        box->setDepth(depth);
-        box->setHeight(height);
-        box->setWidth(width);
+    void set_box_width(float value) {
+        box_width = value;
+        if (type == kEmitterBox) static_cast<PU::BoxEmitter*>(emitter)->setWidth(value);
     }
-    // `CParticleEmitterWrapper::setPositionEnd`:
-    // kept, and handed to a Line emitter (type 3).
+    void set_box_height(float value) {
+        box_height = value;
+        if (type == kEmitterBox) static_cast<PU::BoxEmitter*>(emitter)->setHeight(value);
+    }
+    void set_box_depth(float value) {
+        box_depth = value;
+        if (type == kEmitterBox) static_cast<PU::BoxEmitter*>(emitter)->setDepth(value);
+    }
     void set_line_end(const Ogre::Vector3& end) {
         line_end = end;
         if (type == kEmitterLine) static_cast<PU::LineEmitter*>(emitter)->setEnd(end);
     }
-    void set_line(float min_increment, float max_increment, float deviation) {
-        min_line_increment = min_increment;
-        max_line_increment = max_increment;
-        max_line_deviation = deviation;
-        if (type != kEmitterLine) return;
-        auto* line = static_cast<PU::LineEmitter*>(emitter);
-        line->setMinIncrement(min_increment);
-        line->setMaxIncrement(max_increment);
-        line->setMaxDeviation(deviation);
+    void set_min_line_increment(float value) {
+        min_line_increment = value;
+        if (type == kEmitterLine) static_cast<PU::LineEmitter*>(emitter)->setMinIncrement(value);
+    }
+    void set_max_line_increment(float value) {
+        max_line_increment = value;
+        if (type == kEmitterLine) static_cast<PU::LineEmitter*>(emitter)->setMaxIncrement(value);
+    }
+    void set_max_line_deviation(float value) {
+        max_line_deviation = value;
+        if (type == kEmitterLine) static_cast<PU::LineEmitter*>(emitter)->setMaxDeviation(value);
     }
     void set_circle_fixed(bool fixed) {
         circle_fixed = fixed;
@@ -722,11 +736,8 @@ struct EmitterWrapper {
         PU::ParticleEmitter* replacement = manager->createEmitter(kEmitterTypes[new_type]);
         TechWrapper* const owner = parent;
         set_parent_technique_wrapper(nullptr);
-        // The new emitter's type string (`+0x128`, `mEmitterType`) is kept
-        // across `copyAttributesTo` (vtable +0x108), which would otherwise
-        // stamp the old one's on it; the name is the
-        // old emitter's, as the copy leaves it. `CSkillEvent::startEvent`
-        // finds an event's line emitters by that type.
+        // The new emitter keeps its own type string (+0x128) across the copy, which would
+        // stamp the old one's on it; `CSkillEvent::startEvent` finds line emitters by it.
         const Ogre::String kind = replacement->getEmitterType();
         emitter->copyAttributesTo(replacement);
         replacement->setEmitterType(kind);
@@ -736,9 +747,13 @@ struct EmitterWrapper {
 
         set_radius(radius);
         emitter->position = position;
-        set_line(min_line_increment, max_line_increment, max_line_deviation);
+        set_min_line_increment(min_line_increment);
+        set_max_line_increment(max_line_increment);
+        set_max_line_deviation(max_line_deviation);
         set_line_end(line_end);
-        set_box(box_width, box_height, box_depth);
+        set_box_depth(box_depth);
+        set_box_height(box_height);
+        set_box_width(box_width);
         set_circle_fixed(circle_fixed);
         set_min_radius(std::vector<float>(min_radius));
         set_max_radius(std::vector<float>(max_radius));
@@ -747,13 +762,9 @@ struct EmitterWrapper {
     }
 };
 
-/// `CParticleEmitterWrapperDescriptor::CreateObject`
-/// makes an `Emitter` node's wrapper:
-/// `CParticleEmitterWrapper::CParticleEmitterWrapper`:
-/// a `Point` emitter that loops forever,
-/// pointing up, releasing 15 a second for 1 second each loop, 1 x 1 x 1
-/// particles at 45 degrees and 15 units a second living 5-10 seconds; a circle
-/// of radius 3 in steps of 0.1.
+/// `CParticleEmitterWrapperDescriptor::CreateObject` makes an
+/// `Emitter` node's wrapper: `CParticleEmitterWrapper::CParticleEmitterWrapper`.
+///
 void construct_emitter(EmitterWrapper& wrapper, TechWrapper& parent) {
     auto* manager = PU::ParticleSystemManager::getSingletonPtr();
     wrapper.emitter = manager->createEmitter("Point");
@@ -790,15 +801,14 @@ void construct_emitter(EmitterWrapper& wrapper, TechWrapper& parent) {
 /// registration order.
 void read_emitter(EmitterWrapper& wrapper, const CmpNode& node) {
     namespace f = cmp_field::emitter;
-    PU::ParticleEmitter* e = nullptr;
-    const auto emitter = [&]() { return (e = wrapper.emitter); };
+    const auto emitter = [&]() { return wrapper.emitter; };
     Ogre::Vector3 v;
     float x = 0.0f;
     bool b = false;
     uint32_t u = 0;
     std::string text;
 
-    // POSITION: `positionUpdated` - the node's local position.
+    // POSITION: `CParticleEmitterWrapper::positionUpdated`, the node's local position.
     if (read_vector(node, f::kPosition, v)) {
         wrapper.position = v;
         emitter()->position = v;
@@ -826,27 +836,18 @@ void read_emitter(EmitterWrapper& wrapper, const CmpNode& node) {
     if (read_uint(node, f::kNumLoops, u)) emitter()->setNumberOfLoops(static_cast<int32_t>(u));
     if (read_bool(node, f::kReleaseOverDistance, b)) emitter()->setEmitOverDistance(b);
     if (auto* d = read_dynamic(node, f::kChanceToEmit)) emitter()->setDynChanceToEmit(d);
-    float min_increment = wrapper.min_line_increment;
-    float max_increment = wrapper.max_line_increment;
-    float deviation = wrapper.max_line_deviation;
-    if (read_float(node, f::kMinLineIncrement, x)) min_increment = x;
-    wrapper.set_line(min_increment, wrapper.max_line_increment, wrapper.max_line_deviation);
-    if (read_float(node, f::kMaxLineIncrement, x)) max_increment = x;
-    wrapper.set_line(min_increment, max_increment, wrapper.max_line_deviation);
-    if (read_float(node, f::kMaxLineDeviation, x)) deviation = x;
-    wrapper.set_line(min_increment, max_increment, deviation);
+    if (read_float(node, f::kMinLineIncrement, x)) wrapper.set_min_line_increment(x);
+    if (read_float(node, f::kMaxLineIncrement, x)) wrapper.set_max_line_increment(x);
+    if (read_float(node, f::kMaxLineDeviation, x)) wrapper.set_max_line_deviation(x);
     if (read_vector(node, f::kEndPosition, v)) wrapper.set_line_end(v);
-    float width = wrapper.box_width, height = wrapper.box_height, depth = wrapper.box_depth;
-    if (read_float(node, f::kBoxWidth, x)) width = x;
-    if (read_float(node, f::kBoxHeight, x)) height = x;
-    if (read_float(node, f::kBoxDepth, x)) depth = x;
-    wrapper.set_box(width, height, depth);
+    if (read_float(node, f::kBoxWidth, x)) wrapper.set_box_width(x);
+    if (read_float(node, f::kBoxHeight, x)) wrapper.set_box_height(x);
+    if (read_float(node, f::kBoxDepth, x)) wrapper.set_box_depth(x);
     if (read_float(node, f::kRadius, x)) wrapper.set_radius(x);
     if (node.field(f::kMinRadius)) wrapper.set_min_radius(read_floats(node, f::kMinRadius));
     if (node.field(f::kMaxRadius)) wrapper.set_max_radius(read_floats(node, f::kMaxRadius));
     if (node.field(f::kStep)) wrapper.set_circle_step(read_floats(node, f::kStep));
     if (read_bool(node, f::kCircleFixed, b)) wrapper.set_circle_fixed(b);
-    (void)e;
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,7 +1019,8 @@ bool build_affector(TechWrapper& parent, const CmpNode& node) {
         case cmp_type::kJet: {
             // `CJetAffectorDescriptor::CreateObject`, its
             // constructor inline on the console: `CJetWrapper::CJetWrapper`, the
-            // affector's defaults; `ACCELERATION` through `setDynamicPropAcceleration`.
+            // affector's defaults; `ACCELERATION` through
+            // `CJetWrapper::setDynamicPropAcceleration`.
             auto* jet =
                 static_cast<PU::JetAffector*>(construct_affector(parent, node, "Jet", true));
             if (auto* d = read_dynamic(node, cmp_field::jet::kAcceleration))
@@ -1042,7 +1044,7 @@ bool build_affector(TechWrapper& parent, const CmpNode& node) {
             // `CGeometryRotateDescriptor::CreateObject`, its
             // constructor inline on the console: `CGeometryRotateWrapper::CGeometryRotateWrapper`,
             // the affector's defaults; `ROTATION SPEED` through
-            // `setDynamicPropRotationSpeed`. An axis is set only when authored.
+            // `CGeometryRotateWrapper::setDynamicPropRotationSpeed`.
             namespace f = cmp_field::geometry_rotator;
             auto* rotator = static_cast<PU::GeometryRotator*>(
                 construct_affector(parent, node, "GeometryRotator", true));
@@ -1062,12 +1064,10 @@ bool build_affector(TechWrapper& parent, const CmpNode& node) {
             // constructor inline on the console: `CPlaneColliderWrapper::CPlaneColliderWrapper`,
             // `CSphereColliderWrapper::CSphereColliderWrapper`,
             // `CBoxColliderWrapper`, on `CColliderWrapper::CColliderWrapper`:
-            // positioning on (`+0x11a`), the collider's defaults
-            // (`Collider::Collider`: `Bounce`, `Fast`, friction 0,
-            // bouncyness 1). The plane keeps a normal of (0, 1, 0) and hands it over in
-            // `updatePlane`, called by POSITION (`positionUpdated`), NORMAL and
-            // SHOW PLANE. The sphere's `updateCircle` does nothing; RADIUS goes to
-            // `setRadius`.
+            // positioning on, the collider's defaults. The plane's
+            // normal (0, 1, 0) goes over in `CPlaneColliderWrapper::updatePlane`, which
+            // `CPlaneColliderWrapper::positionUpdated`, NORMAL and SHOW PLANE call;
+            // `CSphereColliderWrapper::updateCircle` does nothing.
             namespace f = cmp_field::collider;
             const bool plane = node.type == cmp_type::kPlaneCollision;
             const bool box = node.type == cmp_type::kBoxCollision;
@@ -1079,8 +1079,8 @@ bool build_affector(TechWrapper& parent, const CmpNode& node) {
                                                                   true));
             if (box) {
                 // The box wrapper's constructor: 5 x 2.5 x 5 before the node's
-                // own. Its `updateAlignedBox`, which each dimension's
-                // and SHOW BOX's setter calls, does nothing.
+                // own. `CBoxColliderWrapper::updateAlignedBox`, which each
+                // dimension's and SHOW BOX's setter calls, does nothing.
                 auto* box_collider = static_cast<PU::BoxCollider*>(collider);
                 box_collider->setWidth(5.0f);
                 box_collider->setHeight(2.5f);
@@ -1469,7 +1469,7 @@ void start_torchlight_wrapper(TorchlightParticle& particle) {
     // instead).
     if (particle.playing) stop_torchlight_wrapper(particle);
     set_torchlight_wrapper_visible(particle, true);
-    // Each emitter `starting()` (its own `+0x138` applied again) and
+    // Each emitter `CParticleEmitterWrapper::starting` (`+0x138` applied again) and
     // then enabled: every one releases.
     set_wrapper_emitters_enabled(particle, true);
     // `CParticleWrapper::start`.

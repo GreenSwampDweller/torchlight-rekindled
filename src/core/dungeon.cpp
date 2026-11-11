@@ -1100,7 +1100,11 @@ LevelTemplate* Dungeon::get_strata_template(uint32_t depth, const DungeonFiles& 
     auto built = std::make_unique<LevelTemplate>();
     const tl::formats::AdmFile rules =
         files.read_ruleset ? files.read_ruleset(strata.ruleset) : tl::formats::AdmFile{};
+    const uint64_t rng_before = rng.state();
     built->load(strata.ruleset, rules, files.layouts, rng);
+    TL_LOG_DEBUG("level template %s (depth %u) built: rng %016llx -> %016llx",
+                 strata.ruleset.c_str(), depth, static_cast<unsigned long long>(rng_before),
+                 static_cast<unsigned long long>(rng.state()));
 
     built->cinematic = strata.cinematic;
     if (!strata.name_override.empty()) built->level_name = strata.name_override;

@@ -22,7 +22,7 @@ index 64d78e5..8b83907 100644
  			Vector3 mForceVector;
  			Vector3 mScaledVector;
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
-index 403c1ac..5e225b9 100644
+index 403c1ac..a93fceb 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBaseForceAffector.cpp
 @@ -31,11 +31,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -61,7 +61,7 @@ index 403c1ac..5e225b9 100644
  	}
  	//-----------------------------------------------------------------------
 +	// Checked against Torchlight's `ForceAffector::setForceVector` and
-+	// `setForceApplication`: the same.
++	// `ForceAffector::setForceApplication`: the same.
  	void BaseForceAffector::setForceVector(const Vector3& forceVector)
  	{
  		mForceVector = forceVector;

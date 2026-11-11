@@ -54,8 +54,8 @@ public:
     ///
     void set_seed(int32_t seed) {
         if (trace_ != nullptr) {
-            char line[32];
-            std::snprintf(line, sizeof(line), "S %d", seed);
+            char line[64];
+            std::snprintf(line, sizeof(line), "S %d port @%p", seed, __builtin_return_address(0));
             trace_->write(trace_->user, line);
         }
         state_ = static_cast<uint32_t>(seed != 0 ? seed : get_tick_count());

@@ -44,7 +44,7 @@ public:
     // move, and every `std::move` of a graph would copy its lines.
 
     // CGraph::loadGraph / CGraph::loadGraphLine: a `[LINE]` record.
-    static StatGraph from(const tl::formats::AdmSection& line);
+    static StatGraph from(const tl::formats::AdmSection& section);
 
     // CGraph::clear: empties one line's points; every other field survives.
     void clear(unsigned int line_idx = 0);

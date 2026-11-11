@@ -14,6 +14,19 @@
 
 namespace tl::core {
 
+namespace {
+
+// PORT: the log's "2 Goblin Hero, 1 Goblin Necromancer".
+std::string count_summary(const std::map<std::string, int>& counts) {
+    std::string summary;
+    for (const auto& entry : counts) {
+        summary += (summary.empty() ? "" : ", ") + std::to_string(entry.second) + " " + entry.first;
+    }
+    return summary;
+}
+
+}  // namespace
+
 // `CLevel::randomOpenPosition(p, radius, true)`, as the population
 // phases ask it.
 tl::core::Vec3 World::populate_open_position(const tl::core::Vec3& at, float radius) {
@@ -87,6 +100,14 @@ bool World::place_populated_trigger(const std::string& unit, const ogre::Vector3
                                     const ogre::Quaternion& facing, int64_t id, float scale) {
     TriggerProp prop;
     if (!trigger_prop(unit, prop)) return false;
+    // A chest the population makes is `addItem`ed active (finding 58), unlike a room's trigger:
+    // its collision is not held back from the object ray through the load (finding 63).
+    struct ActiveTrigger {
+        bool& slot;
+        bool was;
+        ~ActiveTrigger() { slot = was; }
+    } active_trigger{loading_floor, loading_floor};
+    loading_floor = false;
 
     using tl::formats::CmpField;
     const auto vec = [](float x, float y, float z) {
@@ -147,7 +168,7 @@ bool World::place_populated_trigger(const std::string& unit, const ogre::Vector3
     const bool placed = place_layout(key, at, facing, /*depth=*/1);
     made_trigger_scale.erase(id);
     if (!placed) return false;
-    populated_triggers[id] = PopulatedTrigger{unit, facing};
+    populated_triggers[id] = PopulatedTrigger{unit, facing, ++items_made};
     return true;
 }
 
@@ -157,6 +178,18 @@ bool World::place_populated_trigger(const std::string& unit, const ogre::Vector3
 //
 void World::place_unit_minions(int64_t master, int64_t owner,
                                const std::vector<std::string>& minions) {
+    tl::core::Vec3 from;
+    if (!script.unit_position(master, from)) return;
+    place_unit_minions_at(from, owner, minions, master);
+}
+
+// The minions round a point: `createPathfinder` runs inside `CLevel::addCharacter` before the master
+// is grounded, and before its AI and effects are set up, so a spawner's release makes them from the
+// drawn point alone and takes them as pets once its own character is added.
+std::vector<int64_t> World::place_unit_minions_at(const tl::core::Vec3& from, int64_t owner,
+                                                  const std::vector<std::string>& minions,
+                                                  int64_t master) {
+    std::vector<int64_t> made_ids;
     for (const std::string& name : minions) {
         // Not a character: made and left out of the level.
         ensure_monster_index();
@@ -164,8 +197,6 @@ void World::place_unit_minions(int64_t master, int64_t owner,
         index_unit(name);
         const tl::core::LevelScript::UnitCreation creation = script.roll_unit_creation(name);
         const float yaw = tl::core::volatile_random().between(0.0f, 360.0f) * 0.017453292f;
-        tl::core::Vec3 from;
-        if (!script.unit_position(master, from)) return;
         const tl::core::Vec3 at = tl::core::random_open_position(
             from, 1.0f, 4.0f,
             [this](const tl::core::Vec3& p) {
@@ -176,7 +207,8 @@ void World::place_unit_minions(int64_t master, int64_t owner,
             tl::core::volatile_random());
         // `CLevel::addCharacter(minion, at, false)`: on the ground.
         const ogre::Quaternion turn(ogre::Radian(yaw), ogre::Vector3::UNIT_Y);
-        const ogre::Vector3 place = character_to_ground(ogre::Vector3(at.x, at.y, at.z));
+        const ogre::Vector3 place =
+            character_to_ground(ogre::Vector3(at.x, at.y, at.z), stats_for_unit(name).radius);
         if (spawn_unit(name, place, owner, level_monster_level, /*champion=*/false,
                        /*spawn_anim=*/false, turn, creation.scale) == nullptr) {
             continue;
@@ -185,6 +217,7 @@ void World::place_unit_minions(int64_t master, int64_t owner,
         const ogre::Vector3 forward = turn * ogre::Vector3::UNIT_Z;
         script.add_spawned_unit(id, name, tl::core::Vec3{place.x, place.y, place.z},
                                 /*hunts=*/false, std::atan2(forward.x, forward.z), &creation);
+        script.mark_dropped(id);
         int made_level = 0;
         if (0 < level_monster_level &&
             !(script.unit_level(id, made_level) && made_level == level_monster_level)) {
@@ -192,24 +225,29 @@ void World::place_unit_minions(int64_t master, int64_t owner,
         }
         // ... which rolls a minion's own minions, before its master takes it.
         spawn_unit_minions(id, owner);
-        add_monster_pet(script, id, script, master);
-        TL_LOG_INFO("  minion: %s beside %s at (%.2f, %.2f, %.2f)", name.c_str(),
-                    script.unit_of(master).c_str(), static_cast<double>(place.x),
-                    static_cast<double>(place.y), static_cast<double>(place.z));
+        // A placed master takes each minion as it is made; a spawner's release takes them once its
+        // own character is added (`World::SpawnerHost::create_unit`).
+        if (master != 0) add_monster_pet(script, id, script, master);
+        made_ids.push_back(id);
+        TL_LOG_INFO("  minion: %s beside (%.2f, %.2f) at (%.2f, %.2f, %.2f)", name.c_str(),
+                    static_cast<double>(from.x), static_cast<double>(from.z),
+                    static_cast<double>(place.x), static_cast<double>(place.y),
+                    static_cast<double>(place.z));
     }
+    return made_ids;
 }
 
 // `populateSectionOfLevel`: a champion's name is `CRandomNames::generateName(true)`,
 // drawn on the game generator once the character is in the level, and `makeChampion` takes it.
 void World::make_populated_champion(int64_t id, const std::string& unit) {
     load_quest_book();
-    if (!random_names.empty()) {
-        unit_names[id] = random_names.generate_name(true, tl::core::game_random());
-        TL_LOG_INFO("  champion: %s is '%s'", unit.c_str(), unit_names[id].c_str());
+    std::string name;
+    if (!random_names.empty()) name = random_names.generate_name(true, tl::core::game_random());
+    // `makeChampion` on it: the champion's name, hit points,
+    // armour, experience and fame, and its size - nothing for a unit already a champion.
+    if (script.make_unit_champion(id, name)) {
+        TL_LOG_INFO("  champion: %s is '%s'", unit.c_str(), script.unit_champion_name(id).c_str());
     }
-    // `makeChampion` on it: the champion's hit points,
-    // armour, experience and fame, and its size.
-    script.make_unit_champion(id);
 }
 
 int World::populate_units(const std::string& spawn_class, uint32_t wanted, int level,
@@ -259,6 +297,7 @@ int World::populate_units(const std::string& spawn_class, uint32_t wanted, int l
     // What `createUnit` drew for a unit, by handle, until it is added.
     std::map<int64_t, tl::core::LevelScript::UnitCreation> made_characters;
     std::map<int64_t, float> made_scales;
+    std::map<int64_t, tl::core::ItemStats> made_items;
     int64_t handles = 0;
 
     tl::core::PopulateWorld world;
@@ -291,7 +330,8 @@ int World::populate_units(const std::string& spawn_class, uint32_t wanted, int l
         if (prop_file == prop_files.end()) {
             // Not a prop: a character (the props class's `Mimic` among them).
             ensure_monster_index();
-            if (monster_files.count(lowered(unit)) == 0) return tl::core::PopulatedUnit{};
+            if (monster_files.count(lowered(unit)) == 0)
+                return create_populated_item(unit, made.handle, made_items);
             // Its numbers, which making it reads.
             index_unit(unit);
             made.kind = tl::core::PopulatedKind::Character;
@@ -363,17 +403,19 @@ int World::populate_units(const std::string& spawn_class, uint32_t wanted, int l
         // name `makeChampion` took, each placed and dropped before the unit's own drop.
         spawn_unit_minions(placed.id, phase.owner);
         // Then `addCharacter`'s `dropToGround(level, 4.0, ..., false)`.
-        const ogre::Vector3 place = character_to_ground(start);
+        const ogre::Vector3 place = character_to_ground(start, stats_for_unit(unit).radius);
         view_set_position(placed.node, place);
         script.move_unit(placed.id, tl::core::Vec3{place.x, place.y, place.z});
+        script.mark_dropped(placed.id);
         return true;
     };
     world.add_item = [&](const tl::core::PopulatedUnit& made, const std::string& unit,
                          const tl::core::Vec3& at, const tl::core::PopulatedFacing& facing) {
         const ogre::Quaternion turn = turn_of(facing);
+        if (const auto item = made_items.find(made.handle); item != made_items.end())
+            return add_populated_item(item->second, ogre::Vector3(at.x, at.y, at.z), counts[unit]);
         if (!is_breakable_unit(unit)) {
             // `addItem`, on the ground (`CItem::snapToGround`).
-            //
             const ogre::Vector3 ground = snap_item_to_ground(ogre::Vector3(at.x, at.y, at.z));
             const auto scale = made_scales.find(made.handle);
             if (!place_populated_trigger(unit, ground, turn, next_spawned_id(),
@@ -400,26 +442,22 @@ int World::populate_units(const std::string& spawn_class, uint32_t wanted, int l
         made_characters.erase(made.handle);
         made_merchants.erase(made.handle);
         made_scales.erase(made.handle);
+        made_items.erase(made.handle);
     };
 
+    const size_t queued_before = door_trigger_nodes.size();  // the rooms', not this phase's
     const int placed =
         tl::core::populate_phase(population_sections, sections, g_rand, spawn_class, wanted,
                                  phase.champion, phase.markers, phase.empty_counts, world);
-    if (phase.markers) {
-        for (size_t i = 0; i < markers.size() && i < quest_boss_markers.size(); ++i) {
-            quest_boss_markers[i].taken = markers[i].taken;
-        }
-    }
+    for (size_t i = 0; phase.markers && i < markers.size() && i < quest_boss_markers.size(); ++i)
+        quest_boss_markers[i].taken = markers[i].taken;
 
-    std::string summary;
-    for (const auto& entry : counts) {
-        summary += (summary.empty() ? "" : ", ") + std::to_string(entry.second) + " " + entry.first;
-    }
+    const std::string summary = count_summary(counts);
     if (triggers > 0) {
         // The chests' own collision, into the soup and onto the map grid
         // (`addToAvoidanceMap`), and the routes around them.
         collision.build();
-        register_door_avoidance();
+        register_door_avoidance(queued_before);
         if (passability.ready()) nav.build(passability);
     }
     if (phase.props) {
@@ -438,10 +476,39 @@ int World::populate_units(const std::string& spawn_class, uint32_t wanted, int l
     return placed;
 }
 
+tl::core::PopulatedUnit World::create_populated_item(const std::string& unit, int64_t handle,
+                                                     std::map<int64_t, tl::core::ItemStats>& made) {
+    // An item's name (`RESOURCEGROUP` 0): `createItem(guid, false, false)`,
+    // random enchants allowed, none forced.
+    ensure_item_index();
+    const tl::core::ItemStats* data = items.find(unit);
+    if (data == nullptr) return {};
+    made[handle] = create_item(*data, false, true, false);
+    tl::core::PopulatedUnit unit_made;
+    unit_made.handle = handle;
+    unit_made.kind = tl::core::PopulatedKind::Item;
+    return unit_made;
+}
+
+bool World::add_populated_item(const tl::core::ItemStats& item, const ogre::Vector3& at,
+                               int& count) {
+    // `CLevel::addItem(item, at, true)`: a `CEquipment` is tossed
+    // (`CEquipment::drop`), gold stays where it was put.
+    const size_t before = dropped_items.size();
+    if (item.is_gold()) {
+        place_gold(item.gold, at, &item, /*drop_sound=*/false);
+    } else {
+        drop_item(item, 1, at);
+    }
+    if (dropped_items.size() == before) return false;
+    ++count;
+    return true;
+}
+
 // A CFormationNode: setLayoutFile loads the layout
 // hidden, its Monsters out of the level, until the player comes near (wake_formations()).
 bool World::add_pending_formation(const std::string& reference, const ogre::Vector3& at,
-                                  int monster_level) {
+                                  int monster_level, const ogre::Vector3& placed) {
     std::string formation_path = resolve_archive_path(reference);
     if (formation_path.empty()) formation_path = resolve_archive_path(reference + ".cmp");
     if (formation_path.empty()) {
@@ -460,10 +527,14 @@ bool World::add_pending_formation(const std::string& reference, const ogre::Vect
         const tl::formats::CmpField* who = node.field(tl::formats::cmp_field::monster::kMonster);
         const std::string unit = who != nullptr ? who->as_text() : std::string();
         index_unit(unit);
-        made.push_back(script.roll_unit_creation(unit, true, monster_level));
+        // Through `convertCharacter`: on a remembered level a node id the saved
+        // state holds a character of - the same formation file placed and stored elsewhere on it -
+        // makes the unit as from a save, with no default equipment.
+        const bool from_save = level_has_saved_state && level_stores_unit(node.id);
+        made.push_back(script.roll_unit_creation(unit, !from_save, monster_level));
     }
     pending_formations.push_back(
-        {formation_path, at, monster_level, false, spawners, reference, std::move(made)});
+        {formation_path, at, monster_level, false, spawners, reference, std::move(made), placed});
     TL_LOG_INFO("  formation %s%s waits at (%.2f, %.2f, %.2f)", formation_path.c_str(),
                 spawners ? " (unit spawners)" : "", static_cast<double>(at.x),
                 static_cast<double>(at.y), static_cast<double>(at.z));
@@ -475,6 +546,11 @@ bool World::add_pending_formation(const std::string& reference, const ogre::Vect
 // creeps, props and gold.
 void World::populate_level(const tl::core::LevelTemplate& level_template, int level,
                            std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
+    // The random population runs on the template's `POPULATE` (X360 +0x76 of `CLevel +0x144`)
+    // and the argument, else `populate` goes straight to the quests
+    // (a mini-boss room's `POPULATE 0`). A settings key at its default
+    // ( +0x48`) would also stop it.
+    if (!level_template.populate) return;
     tl::core::RunicRandom& g_rand = tl::core::game_random();
     tl::core::RunicRandom& volatile_rolls = tl::core::volatile_random();
     const tl::core::SpawnSlots& spawn_classes = level_template.chosen_spawn_classes;
@@ -511,8 +587,9 @@ void World::populate_level(const tl::core::LevelTemplate& level_template, int le
         world.add_formation = [&](const std::string& reference, const tl::core::Vec3& open) {
             // `CFormationNode::setPosition(at)`; its monsters go to the ground
             // as they join the level.
-            const ogre::Vector3 at = dropped_to_ground(ogre::Vector3(open.x, open.y, open.z));
-            if (!add_pending_formation(reference, at, level)) return;
+            const ogre::Vector3 set_at(open.x, open.y, open.z);
+            const ogre::Vector3 at = dropped_to_ground(set_at);
+            if (!add_pending_formation(reference, at, level, set_at)) return;
             placed_pieces.emplace_back(pending_formations.back().path, at);
             ++formations_placed;
         };

@@ -100,7 +100,8 @@ bool recipe_matches(const Recipe& recipe, const Inventory& inventory,
 /// One slot's share of an ingredient: a stack of 1 costs 1 and
 /// the item goes; a larger one gives `min(owed, stack)` and goes only if that
 /// empties it.
-void consume_from(Inventory& inventory, int slot, int32_t& owed, CombineOutcome& outcome) {
+void consume_from(Inventory& inventory, int slot, int32_t& owed, const CombineContext& context,
+                  CombineOutcome& outcome) {
     const InventorySlot& held = inventory.slots()[static_cast<size_t>(slot)];
     const int stack = held.count;
     if (stack < 2) {
@@ -118,6 +119,7 @@ void consume_from(Inventory& inventory, int slot, int32_t& owed, CombineOutcome&
     // menu's `itemUpdatedInMenu(item, false)` and the item's destructor.
     outcome.consumed.push_back(held.item);
     inventory.remove_item(static_cast<size_t>(slot), stack);
+    if (context.destroy_item) context.destroy_item(outcome.consumed.back());
 }
 
 /// The pick: `best` starts
@@ -154,7 +156,7 @@ void consume_recipe(const Recipe& winner, Inventory& slots, const CombineContext
             for (int slot : kCombineSlots) {
                 if (!(0 < owed) || !slots.occupied(static_cast<size_t>(slot))) continue;
                 if (slots.slots()[static_cast<size_t>(slot)].item.unit_guid != guid) continue;
-                consume_from(slots, slot, owed, outcome);
+                consume_from(slots, slot, owed, context, outcome);
             }
         } else {
             for (int slot : kCombineSlots) {
@@ -163,7 +165,7 @@ void consume_recipe(const Recipe& winner, Inventory& slots, const CombineContext
                                            ingredient.unit_type, types)) {
                     continue;
                 }
-                consume_from(slots, slot, owed, outcome);
+                consume_from(slots, slot, owed, context, outcome);
             }
         }
     }

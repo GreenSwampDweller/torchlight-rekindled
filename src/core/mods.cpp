@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstdio>
 #include <optional>
+#include <string>
 
 namespace tl::core {
 
@@ -106,6 +107,37 @@ bool make_directory(const std::string& path) {
 
 bool g_free_camera = false;
 bool g_fps_overlay = false;
+ModArchiveReader g_archive_reader;
+
+bool ends_with_upper(const std::string& text, const char* suffix) {
+    const std::string upper = upper_ascii(text);
+    const size_t n = std::char_traits<char>::length(suffix);
+    return upper.size() >= n && upper.compare(upper.size() - n, n, suffix) == 0;
+}
+
+// The `.zip` files of the mods directory, in name order.
+std::vector<std::string> list_archives(const std::string& dir) {
+    std::vector<std::string> names;
+    for (const std::string& file : list_entries(dir, false)) {
+        if (ends_with_upper(file, ".ZIP")) names.push_back(file);
+    }
+    return names;
+}
+
+// A zip mod's `mod.dat`, under the folder the zip wraps it in when it does; `entries` receives
+// the zip's file entries, empty when it cannot be read.
+bool read_archive_mod_dat(const std::string& archive, std::vector<std::string>& entries,
+                          std::vector<uint8_t>& bytes) {
+    entries.clear();
+    if (g_archive_reader.list == nullptr || !g_archive_reader.list(archive, entries)) return false;
+    const std::string wanted = upper_ascii(mod_archive_prefix(entries) + "mod.dat");
+    for (const std::string& entry : entries) {
+        if (upper_ascii(entry) == wanted) {
+            return g_archive_reader.read != nullptr && g_archive_reader.read(archive, entry, bytes);
+        }
+    }
+    return false;
+}
 
 std::string with_slash(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
@@ -155,6 +187,27 @@ void append_utf16(std::vector<uint8_t>& out, const std::string& text) {
 }
 
 }  // namespace
+
+void set_mod_archive_reader(const ModArchiveReader& reader) { g_archive_reader = reader; }
+
+const ModArchiveReader& mod_archive_reader() { return g_archive_reader; }
+
+std::string mod_archive_prefix(const std::vector<std::string>& entries) {
+    std::string prefix;
+    for (const std::string& entry : entries) {
+        const size_t slash = entry.find('/');
+        const std::string top = upper_ascii(entry.substr(0, slash));
+        if (top == "MOD.DAT" || top == "MEDIA") return {};
+        if (slash == std::string::npos) continue;  // a loose file beside the folder
+        const std::string folder = entry.substr(0, slash + 1);
+        if (prefix.empty()) {
+            prefix = folder;
+        } else if (upper_ascii(folder) != upper_ascii(prefix)) {
+            return {};
+        }
+    }
+    return prefix;
+}
 
 std::string mods_directory(const std::string& game_data) {
     const std::string root = with_slash(game_data.empty() ? std::string("./") : game_data);
@@ -222,16 +275,41 @@ ModList load_mods(const std::string& mods_dir) {
             TL_LOG_WARN("mods: could not read %smods.dat: %s", dir.c_str(), listed.error.c_str());
     }
     const std::vector<std::string> folders = list_entries(dir, true);
-    ModList list = arrange_mods(listed.ok ? &listed.root : nullptr, folders);
+    const std::vector<std::string> archives = list_archives(dir);
+    // Folders and zips in one name order, as one listing would give them.
+    std::vector<std::string> names = folders;
+    names.insert(names.end(), archives.begin(), archives.end());
+    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+        return upper_ascii(a) < upper_ascii(b);
+    });
+    ModList list = arrange_mods(listed.ok ? &listed.root : nullptr, names);
     list.mods_dir = dir;
     for (ModInfo& mod : list.mods) {
         // The folder as it is spelt on disk, which a device's filesystem minds.
         for (const std::string& folder : folders) {
             if (upper_ascii(folder) == upper_ascii(mod.folder)) mod.folder = folder;
         }
-        mod.directory = dir + mod.folder + "/";
+        for (const std::string& archive : archives) {
+            if (upper_ascii(archive) == upper_ascii(mod.folder)) {
+                mod.folder = archive;
+                mod.archive = true;
+            }
+        }
+        mod.directory = dir + mod.folder + (mod.archive ? "" : "/");
         mod.name = mod.folder;
-        if (read_file(find_in(mod.directory, "mod.dat"), bytes)) {
+        std::vector<std::string> entries;
+        if (mod.archive) {
+            if (mod.priority >= 0) {
+                mod.has_files =
+                    read_archive_mod_dat(mod.directory, entries, bytes) || !entries.empty();
+                if (g_archive_reader.list == nullptr) {
+                    TL_LOG_WARN("mods: no zip reader; '%s' has no files", mod.folder.c_str());
+                }
+            } else {
+                read_archive_mod_dat(mod.directory, entries, bytes);
+            }
+        }
+        if (mod.archive ? !bytes.empty() : read_file(find_in(mod.directory, "mod.dat"), bytes)) {
             const tl::formats::AdmFile info =
                 tl::formats::parse_dat_text(bytes.data(), bytes.size());
             if (info.ok) {
@@ -243,8 +321,9 @@ ModList load_mods(const std::string& mods_dir) {
             }
         }
         // `reloadModFiles` runs for a mod that is on, and only that one learns it is empty.
-        if (mod.priority >= 0)
+        if (mod.priority >= 0 && !mod.archive)
             mod.has_files = is_directory(mod.directory) && has_any_file(mod.directory);
+        bytes.clear();
         TL_LOG_INFO("mod: '%s' (%s), priority %d%s", mod.name.c_str(), mod.directory.c_str(),
                     mod.priority,
                     mod.active()       ? ""
@@ -357,11 +436,11 @@ bool port_mod(const ModInfo& mod) {
 std::vector<std::string> active_mod_roots(const ModList& list) {
     std::vector<std::string> roots;
     for (const ModInfo& mod : list.mods) {
-        if (mod.active() && !port_mod(mod))
-        {
-            const std::string root = mod_media_root(mod.directory);
-            roots.push_back(root.substr(0, root.size() - 1));
-        }
+        if (!mod.active() || port_mod(mod)) continue;
+        // An archive is its own root; a folder may wrap the mod (mod_media_root).
+        std::string rootless = mod.archive ? mod.directory : mod_media_root(mod.directory);
+        if (!rootless.empty() && rootless.back() == '/') rootless.pop_back();
+        roots.push_back(std::move(rootless));
     }
     return roots;
 }
@@ -521,7 +600,7 @@ std::string mods_menu_scroll_note(size_t rows, size_t top) {
 
 std::string mods_menu_info(const ModList& list, int row, size_t width) {
     if (row <= 0 || static_cast<size_t>(row) > list.mods.size()) {
-        return wrap_text("Mods\n\nA mod is a folder in " + list.mods_dir +
+        return wrap_text("Mods\n\nA mod is a folder, or a .zip, in " + list.mods_dir +
                              ". Its files are read in place of the game's own.\n\nA switches "
                              "a mod on or off; Start plays.",
                          width);

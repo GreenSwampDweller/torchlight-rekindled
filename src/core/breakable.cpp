@@ -144,6 +144,17 @@ float attack_view_reach(float scale, float reach_bonus, float strike_range,
     return (scale * reach_bonus + 0.2f + strike_range) * range_multiplier + 1.0f;
 }
 
+ViewFrame view_frame_along(const Vec3& at, const Vec3& forward) {
+    // `CCharacter::castSkill`: the rotation's columns the three
+    // axes, `UNIT_Y x forward` exactly (fz, 0, -fx), then `Quaternion::FromRotationMatrix`.
+    const float m[3][3] = {
+        {forward.z, 0.0f, forward.x}, {0.0f, 1.0f, 0.0f}, {-forward.x, 0.0f, forward.z}};
+    ViewFrame frame;
+    frame.position = at;
+    frame.orientation = quaternion_from_rotation_matrix(m);
+    return frame;
+}
+
 bool item_within_view(const ViewFrame& frame, const Vec3& at, float max_angle, float max_distance) {
     // `CLevel::findItemWithinView`: the point
     // through the inverse of the attacker's transform (`Matrix4::inverse`);

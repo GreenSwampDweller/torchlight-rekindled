@@ -1,4 +1,5 @@
 // The gameplay half of render/renderer_combat.cpp (core/world.h).
+#include "core/character_particles.h"
 #include "core/item_data.h"
 #include "core/unit_resource.h"
 #include "core/world.h"
@@ -17,6 +18,7 @@ constexpr const char* kUnitSections[] = {"ITEMS", "MONSTERS", "PLAYERS", "PROPS"
 
 /// The PC releases' flattened table, `media/masterresourceunits.dat`. False when
 /// the pak has none (the Xbox 360's) or it does not parse.
+// PORT: archive lookup for a PC pak and mods; the console reads UNITDATA.RAW only.
 bool load_unit_table(const World& m, tl::formats::AdmFile& file) {
     const std::string path = m.resolve_archive_path("media/masterresourceunits.dat.adm");
     if (path.empty()) return false;
@@ -73,10 +75,7 @@ bool file_unit_list(World& m, tl::formats::AdmFile& file, size_t& differing) {
     return !filed.empty();
 }
 
-/// Units the master table has not got, from their own files (`CUnitResourceList::loadFile`):
-/// beside a table only the items it lacks (`all_groups` false); with neither table nor
-/// list, every kind. A `DONTCREATE` file is a base only. Returns the units added; `items`
-/// counts the items among them.
+// PORT: archive lookup for a PC pak and mods; the console reads UNITDATA.RAW only.
 std::string lower_ascii(std::string text) {
     for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return text;
@@ -84,6 +83,7 @@ std::string lower_ascii(std::string text) {
 
 /// The unit files a table already lists, by its `DATFILE`s, lower case and with
 /// forward slashes.
+// PORT: archive lookup for a PC pak and mods; the console reads UNITDATA.RAW only.
 std::set<std::string> tabled_unit_files(const tl::formats::AdmFile& file) {
     std::set<std::string> tabled;
     for (const tl::formats::AdmSection& section : file.root.children) {
@@ -94,6 +94,11 @@ std::set<std::string> tabled_unit_files(const tl::formats::AdmFile& file) {
     return tabled;
 }
 
+/// Units the master table has not got, from their own files, as the PC's list loads them:
+/// beside a table only the items it lacks (`all_groups` false); with neither table nor
+/// list, every kind. A `DONTCREATE` file is a base only. Returns the units added; `items`
+/// counts the items among them.
+// PORT: archive lookup for a PC pak and mods; the console reads UNITDATA.RAW only.
 size_t add_unit_files(World& m, tl::formats::AdmFile& file, bool all_groups, size_t& items) {
     static const char* const kDirs[] = {"media/units/items/", "media/units/monsters/",
                                         "media/units/players/", "media/units/props/"};
@@ -128,6 +133,7 @@ size_t add_unit_files(World& m, tl::formats::AdmFile& file, bool all_groups, siz
 /// (`masterresourceunits.dat`, which a mod's install notes say to delete). A unit the list
 /// already has, by GUID, is the mod's file in its place; one it lacks is added. Returns the
 /// units added; `items` counts the items among them.
+// PORT: archive lookup for a PC pak and mods; the console reads UNITDATA.RAW only.
 size_t add_mod_unit_files(World& m, tl::formats::AdmFile& file, size_t& items) {
     static const char* const kDirs[] = {"media/units/items/", "media/units/monsters/",
                                         "media/units/players/", "media/units/props/"};
@@ -217,6 +223,7 @@ void World::load_game_speed() {
 }
 
 void World::slow_on_player_kill(bool target_dead) {
+    // `CCharacter::rollAttack` after a killing blow:
     // `CGameSpeed::getSingleton()->addSpeedModifier(0, 0.5, 1.0)`: type 0 slows by
     // the curve, over 0.5 s, at strength 1.
     if (!target_dead) return;
@@ -314,6 +321,8 @@ void World::load_quest_book() {
     quest_log.set_dungeon_source(quest_dungeon_source());
     quest_log.set_player_source(quest_player_source());
     quest_log.set_reward_world(quest_reward_world());
+    quest_log.set_payout(
+        [this](const tl::core::QuestCompletion& done) { pay_quest_completion(done); });
     // `CRandomNames::CRandomNames`, which `CMasterResourceManager`
     // makes from `media/randomnames.dat`.
     const std::vector<uint8_t> names = read_resource("media/RANDOMNAMES.DAT.adm");
@@ -361,9 +370,10 @@ int64_t World::unit_guid_of(const std::string& name) {
     return found != master_guid_by_unit.end() ? found->second : -1;
 }
 
-// `CUnitResourceList::getDataGroupByGuid`: the GUID map.
-// The console's refuses 0x00000000ffffffff and looks a 64-bit -1 up; neither finds a unit.
+// `CUnitResourceList::getDataGroupByGuid`: the GUID map,
+// 0x00000000ffffffff refused first.
 std::string World::unit_of_guid(int64_t guid) {
+    if (guid == 0xffffffffLL) return std::string();
     ensure_item_index();
     const auto found = master_unit_by_guid.find(guid);
     return found != master_unit_by_guid.end() ? found->second : std::string();
@@ -482,7 +492,8 @@ void World::roll_attack_effects(const tl::core::AttackEffectSources& sources, fl
 
 void World::unit_attack_effects(int64_t attacker_node, tl::core::LevelScript* target_machine,
                                 int64_t target_node) {
-    // `rollAttack`'s tail for a placed character: its own manager (X360 `+0x17c`); the
+    // `CCharacter::rollAttack`'s tail for a placed character:
+    // its own manager (X360 `+0x17c`); the
     // pet carries its bag (`+0x3e8`). INVENTED: a monster's weapons are names only, so no
     // inventory or weapon of its own adds to `KNOCK BACK` or the transfers.
     tl::core::LevelScript* by = script_owning(attacker_node);
@@ -548,79 +559,6 @@ float World::missile_reflect_share(int64_t unit) {
         false, worn, tl::core::volatile_random());
 }
 
-void World::apply_damage_status(tl::core::LevelScript* machine, int64_t node, float amount,
-                                const std::array<int, tl::core::kDamageTypeCount>& by_type,
-                                int parts, int first_type, bool forced, int attacker_level,
-                                const tl::core::EffectSource& attacker) {
-    std::array<int, tl::core::kDamageTypeCount> own{};  // the player's `+0x620` is all 0
-    if (machine != nullptr && !machine->unit_raw_defense(node, own)) return;
-    const tl::core::DamageStatus status =
-        tl::core::roll_damage_status(amount, by_type, parts, first_type, own, forced,
-                                     machine == nullptr, tl::core::volatile_random());
-    if (status.type < 0) return;
-    tl::core::EffectManager* manager =
-        machine != nullptr ? unit_effect_manager(machine, node) : &player_effects;
-    if (manager == nullptr) return;
-    // A held affix only redraws its duration; else `addAffix` first. DIVERGENCE: the
-    // duration is drawn before the add, so a missing affix still costs the draw.
-    const float duration =
-        tl::core::volatile_random().between(status.duration_min, status.duration_max);
-    const std::string who = machine != nullptr ? machine->unit_of(node) : "the character";
-    // `addAffix(name, level, attacker)`: the attacker owns the
-    // affix's effects.
-    const tl::core::EffectSourceScope owned(manager, attacker);
-    if (!manager->set_affix_duration(status.affix, duration)) {
-        if (!manager->add_affix_by_name(status.affix, static_cast<uint32_t>(attacker_level),
-                                        &affixes, duration)) {
-            return;
-        }
-    }
-    TL_LOG_INFO("effects: %s takes %s for %.2fs", who.c_str(), status.affix,
-                static_cast<double>(duration));
-}
-
-// `CCharacter::applyDamage`, the reflection at its end;
-// the flags test (`& 0x300`) is skipped, as no caller passes those bits.
-void World::reflect_damage(const tl::core::CharacterEffects& victim, int64_t victim_node,
-                           const std::string& victim_name, float amount, int64_t attacker) {
-    if (!victim || attacker == tl::core::LevelScript::kNoAttacker) return;
-    if (attacker == victim_node) return;
-    // The attacker dying or dead (`+0x330` 5 or 6) is left alone.
-    tl::core::LevelScript* by = nullptr;
-    tl::core::Defender defender;
-    if (attacker == 0) {
-        if (player_health.dead) return;
-        defender = player_defender();
-    } else {
-        by = script_owning(attacker);
-        if (by == nullptr || by->unit_is_dead(attacker) || !by->unit_defender(attacker, defender)) {
-            return;
-        }
-        defender.on_absorbed = [this, by, attacker] { show_unit_absorbed(by, attacker); };
-    }
-    const float flat = victim.effect_value(0x30, 7);
-    if (flat == 0.0f && victim.effect_value(0x20, 7) == 0.0f) return;
-    // DIVERGENCE: the original recurses while both sides reflect and live; cut at eight
-    // so two undying characters return.
-    if (8 <= reflect_depth) return;
-    const float share = victim.effect_value(0x20, 7) / 100.0f;
-    // `modifyDamage((int)(amount * share), 0, (int)amount, share)` on the attacker.
-    const int part =
-        tl::core::modify_damage(defender, static_cast<int>(amount * share), 0,
-                                static_cast<int>(amount), share, tl::core::volatile_random());
-    const float total = victim.effect_value(0x30, 7) + static_cast<float>(part);
-    TL_LOG_INFO("combat: %s reflects %.1f of %.1f (%.0f%% + %.1f)", victim_name.c_str(),
-                static_cast<double>(total), static_cast<double>(amount),
-                static_cast<double>(share * 100.0f), static_cast<double>(flat));
-    ++reflect_depth;
-    if (attacker == 0) {
-        hurt_player(total, victim_name, victim_node);
-    } else {
-        hurt_unit(attacker, by->unit_of(attacker), total, false, victim_node, by);
-    }
-    --reflect_depth;
-}
-
 /// How much life a placed unit has, worked out the first time it is asked for.
 // INVENTED: its HEALTH_GRAPH (else the champion or monster curve) at its level, times a
 // volatile roll between MINHP and MAXHP over 100.
@@ -680,18 +618,59 @@ void World::play_skill_cue(const tl::core::SkillAnimationCue& cue) {
 }
 
 tl::core::CreateLootUnit World::loot_unit_maker() {
-    // `CResourceManager::createUnit` for an item.
-    // INVENTED: a spawn class that rolls a monster or a prop makes nothing yet.
-    return [this](const std::string& name, int32_t, bool force_enchant, tl::core::ItemStats& out) {
+    // `CResourceManager::createUnit`: an item, or a
+    // `CMonster` at `level` (the level's own below 1) and its `unitInit(group, false)`,
+    // held for the drop to place.
+    // INVENTED: a spawn class that rolls a prop makes nothing yet.
+    return [this](const std::string& name, int32_t level, bool force_enchant,
+                  tl::core::ItemStats& out) {
         ensure_item_index();
         const tl::core::ItemStats* data = items.find(name);
         if (data == nullptr) {
-            TL_LOG_WARN("loot: '%s' is not an item; nothing made", name.c_str());
-            return false;
+            ensure_monster_index();
+            if (monster_files.count(lowered(name)) == 0) {
+                TL_LOG_WARN("loot: '%s' is not an item; nothing made", name.c_str());
+                return false;
+            }
+            index_unit(name);
+            loot_creatures.emplace_back(name, script.roll_unit_creation(name, true, level));
+            out = tl::core::ItemStats{};
+            out.name = name;
+            out.display_name = name;
+            out.unittype = stats_for_unit(name).unittype;
+            return true;
         }
         out = create_item(*data, false, true, force_enchant);
         return true;
     };
+}
+
+// `createUnitsBySpawnClassAtPositionInLevel` for a character: `CLevel::addUnit`
+// at the point, turned to face the unit it came from, then `CCharacter::spawn`.
+void World::add_loot_creature(const std::string& unit,
+                              const tl::core::LevelScript::UnitCreation& creation,
+                              const ogre::Vector3& where, const tl::core::Vec3& from) {
+    const ogre::Vector3 place = dropped_to_ground(where);
+    float facing = 0.0f;
+    const float dx = from.x - place.x;
+    const float dz = from.z - place.z;
+    if (dx != 0.0f || dz != 0.0f) facing = std::atan2(dx, dz);
+    const ogre::Quaternion turn(ogre::Radian(facing), ogre::Vector3::UNIT_Y);
+    if (spawn_unit(unit, place, /*owner=*/0, 0, /*champion=*/false, /*spawn_anim=*/true, turn,
+                   creation.scale) == nullptr) {
+        TL_LOG_WARN("loot: '%s' could not be placed", unit.c_str());
+        return;
+    }
+    const int64_t id = spawned[0].back().id;
+    Ogre::Entity* entity = spawned[0].back().entity;
+    script.add_spawned_unit(id, unit, tl::core::Vec3{place.x, place.y, place.z},
+                            /*hunts=*/false, facing, &creation);
+    script.mark_dropped(id);
+    // `addCharacter` -> `createPathfinder`: `MINION_SPAWNCLASS` brings its minions.
+    spawn_unit_minions(id, 0);
+    if (view_begin_spawn_entrance(id, entity)) script.set_spawning(id, true);
+    TL_LOG_INFO("loot: %s rises at (%.2f, %.2f, %.2f)", unit.c_str(), static_cast<double>(place.x),
+                static_cast<double>(place.y), static_cast<double>(place.z));
 }
 
 bool World::is_breakable_unit(const std::string& unit) {
@@ -773,12 +752,10 @@ void World::perform_unknown_skill(const std::string& name, uint32_t level) {
     if (!file->second->def.base.animation.empty()) {
         TL_LOG_WARN("use: the item's skill '%s' has an animation; run at once", copy->name.c_str());
     }
-    const float body =
-        player_stats.radius > 0.0f ? player_stats.radius : tl::core::kDefaultCollisionRadius;
+    // `executeSkill(copy, getPosition(true), ..., getPosition(true), this)`: the feet.
     const tl::core::Vec3 feet = player.position();
-    const tl::core::Vec3 centre{feet.x, feet.y + body, feet.z};
     const tl::core::SkillCopy held = *copy;
-    run_proc_skill(held, centre, centre, ProcTarget{}, "the item used");
+    run_proc_skill(held, feet, feet, ProcTarget{}, "the item used");
 }
 
 // An effect's warp: `CGameClient::warpLevels`
@@ -786,6 +763,7 @@ void World::perform_unknown_skill(const std::string& name, uint32_t level) {
 void World::warp_by_effect(const std::string& dungeon, int32_t absolute) {
     const tl::core::TravelRecord none;
     const tl::core::TravelRecord& travel = config.travel != nullptr ? *config.travel : none;
+    // DIVERGENCE (platform): no trial licence, so the trial's depth cap is not applied.
     const tl::core::WarpRequest request = tl::core::warp_levels(dungeon, 0, absolute, travel);
     const tl::core::WarpDestination to = tl::core::warp_destination(request, warp_origin(), travel);
     if (!to.go) {
@@ -893,9 +871,22 @@ const tl::core::LootCharacter* World::loot_character(int64_t attacker,
                       machine != nullptr ? machine->unit_effects(attacker) : nullptr, nullptr);
         out.gold_find = own.effect_value(tl::core::item_effect::kGoldFind);
         float find = whole(own.effect_value(tl::core::item_effect::kMagicFind));
-        // A unit whose master is the player: the player's, when it is larger.
-        if (machine != nullptr && machine->unit_is_player_pet(attacker)) {
-            find = std::max(find, whole(players.effect_value(tl::core::item_effect::kMagicFind)));
+        // Its master's and that master's master's, the larger kept; the player has none.
+        tl::core::LevelScript* at_machine = machine;
+        int64_t at = attacker;
+        for (int up = 0; up < 2 && at_machine != nullptr; ++up) {
+            if (at_machine->unit_is_player_pet(at)) {
+                find =
+                    std::max(find, whole(players.effect_value(tl::core::item_effect::kMagicFind)));
+                break;
+            }
+            tl::core::LevelScript* up_machine = nullptr;
+            int64_t up_node = 0;
+            if (!at_machine->unit_master(at, up_machine, up_node)) break;
+            at_machine = up_machine;
+            at = up_node;
+            const tl::core::CharacterEffects master(at_machine->unit_effects(at), nullptr);
+            find = std::max(find, whole(master.effect_value(tl::core::item_effect::kMagicFind)));
         }
         out.spawn.magic_find = find;
         out.spawn.level = level_monster_level;
@@ -917,22 +908,6 @@ void World::start_critical_shake() {
     shake.origin = tl::core::Vec3f{at.x, at.y, at.z};
     shake.has_origin = true;
     TL_LOG_INFO("camera: CRITICAL shake%s",
-                shake.curve != nullptr ? "" : " has no curve; nothing moves");
-    camera_shakes.add(shake);
-}
-
-void World::start_death_shake(const char* name, float duration, float magnitude,
-                              const ogre::Vector3& centre) {
-    load_camera_shake_graphs();
-    // `die` hands the shake its own `+0x9c`, `getUp()`: a character stands
-    // upright.
-    tl::core::CameraShake shake(name, tl::core::Vec3f{0.0f, 1.0f, 0.0f}, duration,
-                                camera_shake_graphs);
-    shake.magnitude = magnitude;
-    shake.origin = tl::core::Vec3f{centre.x, centre.y, centre.z};
-    shake.has_origin = true;
-    shake.falloff = true;
-    TL_LOG_INFO("camera: %s shake%s", name,
                 shake.curve != nullptr ? "" : " has no curve; nothing moves");
     camera_shakes.add(shake);
 }
@@ -1172,6 +1147,8 @@ float World::player_strike(int64_t target, const tl::core::Strike& strike) {
     return static_cast<float>(blow.damage);
 }
 
+// What `CCharacter::rollAttack` and `modifyDamage` read of the
+// player as the target.
 tl::core::Defender World::player_defender() {
     tl::core::Defender defense;
     const tl::core::CharacterEffects totals = player_total();
@@ -1196,6 +1173,7 @@ tl::core::Defender World::player_defender() {
 
 /// The nearest hostile placed unit the character can reach, or 0: both radii plus the
 /// larger of `REACH_BONUS` and the held weapon's `STRIKERANGE`.
+// PORT: a headless run's target pick (`--fight`, `hold_hotbar`), not the console's.
 int64_t World::hostile_in_reach(float extra) const {
     if (!subject_node) return 0;
     const ogre::Vector3 me = view_position(subject_node);
@@ -1263,20 +1241,19 @@ void World::hurt_unit(int64_t node, const std::string& unit, float amount, bool 
         TL_LOG_INFO("combat: %s takes %.1f%s, %.1f of %.1f left", display.c_str(),
                     static_cast<double>(amount), is_crit ? " (CRITICAL)" : "",
                     static_cast<double>(hp), static_cast<double>(max));
-        if (owner == &script) {
-            if (!events.empty()) apply_script_events(events, scripted_nodes);
-        } else {
-            for (size_t i = 0; i < nested_scripts.size(); ++i) {
-                // By index: the events can link a layout, a push_back that
-                // invalidates a deque's iterators.
-                NestedScript& machine = nested_scripts[i];
-                if (&machine.script != owner || events.empty()) continue;
-                apply_script_events(events, machine.nodes);
+        if (NodeMap* nodes = nodes_of(owner); nodes != nullptr && !events.empty()) {
+            apply_script_events(events, *nodes);
+        }
+        if (killed) {
+            kill_unit(node, unit, /*fall=*/false, attacker);
+            std::vector<tl::core::ScriptEvent> after;
+            owner->react_after_death(quest_log.state(), after);
+            if (NodeMap* nodes = nodes_of(owner); nodes != nullptr && !after.empty()) {
+                apply_script_events(after, *nodes);
             }
         }
-        if (killed) kill_unit(node, unit, /*fall=*/false, attacker);
-        // `applyDamage`: still alive, it answers the attacker.
-        if (!killed && 0.0f < hp) {
+        // `applyDamage`: struck and still alive, it answers the attacker.
+        if (!killed && 0.0f < hp && struck) {
             reflect_damage(tl::core::CharacterEffects(owner->unit_effects(node)), node, display,
                            amount, attacker);
         }
@@ -1329,6 +1306,15 @@ void World::drop_death_loot(int64_t node, const std::string& unit, int64_t attac
     for (const auto& owner : spawned) {
         for (const SpawnedUnit& made : owner.second) consider(made.entity, made.id);
     }
+    // No drawn node (a world without a view): the unit's own place in its machine.
+    if (!placed) {
+        tl::core::Vec3 own;
+        if (const tl::core::LevelScript* owner = script_owning(node);
+            owner != nullptr && owner->unit_position(node, own)) {
+            at = ogre::Vector3(own.x, own.y, own.z);
+            placed = true;
+        }
+    }
     if (!placed) return;
     drop_death_loot_at(at, node, unit, attacker);
 }
@@ -1336,6 +1322,7 @@ void World::drop_death_loot(int64_t node, const std::string& unit, int64_t attac
 tl::core::LootPlacement World::loot_placement_at(const ogre::Vector3& at) {
     tl::core::LootPlacement place;
     place.at = tl::core::Vec3{at.x, at.y, at.z};
+    loot_creatures.clear();
     place.gold_sounds = gold_sounds();
     place.map_passable = [this](const tl::core::Vec3& p) {
         return !passability.ready() || passability.map_passable(p);
@@ -1343,9 +1330,14 @@ tl::core::LootPlacement World::loot_placement_at(const ogre::Vector3& at) {
     place.position_passable = [this](const tl::core::Vec3& p) {
         return !passability.ready() || passability.position_passable(p);
     };
-    place.add_unit = [this](const tl::core::ItemStats& made, const tl::core::Vec3& where) {
+    const tl::core::Vec3 from{at.x, at.y, at.z};
+    place.add_unit = [this, from](const tl::core::ItemStats& made, const tl::core::Vec3& where) {
         const ogre::Vector3 to(where.x, where.y, where.z);
-        if (made.is_gold()) {
+        if (!loot_creatures.empty() && loot_creatures.front().first == made.name) {
+            auto creature = std::move(loot_creatures.front());
+            loot_creatures.pop_front();
+            add_loot_creature(creature.first, creature.second, to, from);
+        } else if (made.is_gold()) {
             place_gold(made.gold, to, &made);
         } else {
             drop_item(made, 1, to);
@@ -1354,7 +1346,8 @@ tl::core::LootPlacement World::loot_placement_at(const ogre::Vector3& at) {
     place.add_gold = [this](const tl::core::GoldPile& pile, const tl::core::Vec3& where) {
         const ogre::Vector3 to(where.x, where.y, where.z);
         place_gold(pile, to);
-        play_sound("GoldPickup", to);  // `rollMoney`'s own `playDropSound`
+        // `rollMoney`: the pile's slot 0x11 again, after `addItem`'s.
+        play_bank_sample("GOLDPICKUP", to);
     };
     return place;
 }
@@ -1374,12 +1367,27 @@ void World::drop_death_loot_at(const ogre::Vector3& at, int64_t node, const std:
     dying.loot.level_number = level_monster_level;  // `+0x68 -> +0x18 -> +0x1a8`
     dying.loot.dont_drop_gold = stats.dont_drop_gold || no_loot_units.count(node) != 0;
     dying.loot.spawn.level = level_monster_level;
-    dying.no_drops = no_loot_units.count(node) != 0;
+    // `die` hands the dying character itself to the roll: a merchant
+    // (`ISA(0x29)`) widens the item-level window. Its `m_bDontDropTreasure` (`+0x63c`) stops the
+    // drop; `m_bDontDropGold` (`+0x63b`) the money (`CLevel::rollMoney`).
+    // A layout's `NO TREASURE` / `NO GOLD` set them.
+    bool no_treasure = false;
+    if (tl::core::LevelScript* owner = script_owning(node)) {
+        dying.loot.spawn.is_merchant = owner->character_isa(node, tl::core::unit_type::kMerchant);
+        dying.loot.dont_drop_gold = dying.loot.dont_drop_gold || owner->unit_no_gold(node);
+        no_treasure = owner->unit_no_treasure(node);
+    }
+    dying.no_drops = no_loot_units.count(node) != 0 || no_treasure;
     // `KALIGNMENT_STRINGS`: 0 `NEUTRAL`, 1 `GOOD`, 2 `EVIL`.
     const tl::core::UnitStats::Alignment side = unit_side(node, stats);
     dying.alignment = side == tl::core::UnitStats::Alignment::Friendly  ? 1
                       : side == tl::core::UnitStats::Alignment::Hostile ? 2
                                                                         : 0;
+    // `die` asks `alignment()`: a held `TURN ALIGNMENT` swaps the sides.
+    if (const tl::core::LevelScript* owner = script_owning(node)) {
+        if (const int32_t own = owner->unit_console_alignment(node); own >= 0)
+            dying.alignment = own;
+    }
     if (!stats.treasure_class.empty() && context.get_spawn_class) {
         dying.treasure.spawn_class = context.get_spawn_class(stats.treasure_class);
     }
@@ -1705,7 +1713,8 @@ bool World::begin_swing(int64_t target) {
     swing.animation = chosen;
     swing.length = length;
     swing.target = target;
-    // The blow lands on the frame the mesh's manifest times; untagged, halfway through.
+    // The blow lands on the frame the mesh's manifest times. INVENTED: untagged, halfway through
+    // (the console waits for the HIT key, so an untagged swing never lands).
     swing.hit_at =
         manifest_for(view_entity_mesh(subject)).seconds_of(chosen, "HIT", swing.length * 0.5f);
     // `CCharacter::attack`: an attack that uses the weapon, with a
@@ -2174,110 +2183,7 @@ void World::step_active_skill(float dt) {
     }
 }
 
-/// A placed unit's life has run out. The fall is `Die`, then `Die1`: models name their
-/// death animation either way and the unit data names neither.
-void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t attacker) {
-    // Whatever the level hangs off this unit dying (`Monster Killed` wires).
-    {
-        // `CCharacter::die`: the death particle, by "Show Blood".
-        ogre::Vector3 body = ogre::Vector3::ZERO;
-        if (unit_node_position(node, body)) {
-            play_death_particle(stats_for_unit(unit), body, character_ref(node));
-        }
-    }
-    std::vector<tl::core::ScriptEvent> events;
-    script.unit_killed(node, quest_log.state(), events);
-    {
-        // `CCharacter::die`:
-        // `questEventFire(1, attacker, this)`.
-        const auto tagged = quest_unit_tags.find(node);
-        ogre::Vector3 body = ogre::Vector3::ZERO;
-        unit_node_position(node, body);
-        tl::core::QuestEventUnit dead = quest_event_unit(
-            unit, stats_for_unit(unit).unittype, body,
-            tagged == quest_unit_tags.end() ? tl::core::QuestUnitTag{} : tagged->second);
-        // The character's name (`+0x4c0`): a champion's or a quest's
-        // own over the unit's.
-        const auto named = unit_names.find(node);
-        const tl::core::UnitStats& dead_stats = stats_for_unit(unit);
-        dead.shown_name = named != unit_names.end()
-                              ? named->second
-                              : (dead_stats.display_name.empty() ? unit : dead_stats.display_name);
-        quest_event(quest_log.unit_defeated(dead));
-    }
-
-    if (!events.empty()) apply_script_events(events, scripted_nodes);
-
-    index_unit(unit);
-
-    // `CCharacter::die`: `stopAllSkills`,
-    // `fireSkillsOnDeath`, then `executeProcs(0x69, attacker)`, the
-    // `CAST SKILL ON DEATH` effects.
-    if (tl::core::LevelScript* owner = script_owning(node)) {
-        fire_unit_skills_on_death(*owner, node);
-        const ProcTarget by = proc_target_attacker(attacker);
-        unit_execute_procs(*owner, node, tl::core::kEffectCastSkillOnDeath, by.machine, by.node,
-                           by.any() || attacker == 0);
-        std::vector<tl::core::ScriptEvent> sample;
-        owner->play_death_sample(node, sample);
-        if (NodeMap* nodes = nodes_of(owner); nodes != nullptr && !sample.empty()) {
-            apply_script_events(sample, *nodes);
-        }
-    }
-    // a death with no blow to fly from and no burst:
-    // `findRandomAnimation("DIE")` blended in.
-    std::string animation;
-    if (fall) {
-        if (const tl::core::LevelScript* owner = script_owning(node)) {
-            animation = owner->death_animation(node);
-        }
-    }
-    const bool fell = !fall || view_unit_falls(node, animation);
-    TL_LOG_INFO("combat: %s dies%s%s%s", unit.c_str(),
-                fell ? "" : " (no death animation beside its mesh)",
-                animation.empty() ? "" : ", playing ", animation.c_str());
-
-    // The treasure at the end of `CCharacter::die`,
-    // after `fireSkillsOnDeath` and before `applyDamage` pays the experience.
-    drop_death_loot(node, unit, attacker);
-    // after the money: whoever watches the unit hears that it died
-    // (`unitBroadcastMessage(1)`, inline).
-    unit_observers.broadcast({script_owning(node), node}, tl::core::unit_state::kDied);
-
-    const tl::core::UnitStats stats = stats_for_unit(unit);
-    if (unit_hostile(node, stats)) {
-        const bool champion = stats.is_champion || spawn_marked_champion(node);
-
-        // Experience: EXPERIENCE_MONSTER / EXPERIENCE_CHAMPIONMONSTER at the difficulty,
-        // squared, at the monster's level (`monster_experience()`); the authored XP only
-        // switches it on. The level is the floor's (`unit_spawn_level`), else
-        // `character_level`.
-        const int monster_level = effective_monster_level(node);
-        // `applyDamage` pays the attacker: no attacker, no experience; nor from a unit
-        // released with `GIVE XP` clear (+0x454 = 0).
-        const bool pays =
-            attacker != tl::core::LevelScript::kNoAttacker && no_xp_units.count(node) == 0;
-        if (pays) {
-            // CCharacter::awardExperience: incrementJournalStatistic(6, 1)
-            count_journal(tl::core::JournalStatistic::MonstersDefeated);
-            if (champion) {
-                // CCharacter::awardExperience: incrementJournalStatistic(7, 1)
-                count_journal(tl::core::JournalStatistic::ChampionsDefeated);
-            }
-        }
-        const uint64_t xp = pays ? tl::core::monster_experience(monster_level, stats.xp, champion,
-                                                                config.difficulty, stat_graphs)
-                                 : 0;
-        const bool leveled = award_player_experience(static_cast<int>(xp), player_health.dead);
-        TL_LOG_INFO("experience: %s pays %llu, level %d at %llu/%llu", unit.c_str(),
-                    static_cast<unsigned long long>(xp), player_character.level(),
-                    static_cast<unsigned long long>(player_character.experience()),
-                    static_cast<unsigned long long>(player_character.experience_gate()));
-        if (leveled) player_levelled_up();
-
-        update_menu();
-        refresh_game_hud();
-    }
-}
-
+// `CCharacter::die`: the burst's particle, shake and hide run only
+// for a unit that has its `PARTICLE_EXPLODE` (slot 10 of `+0x3f4`); without one, no shake is drawn
+// and the unit is not hidden.
 }  // namespace tl::core

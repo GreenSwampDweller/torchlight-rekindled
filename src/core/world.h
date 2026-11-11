@@ -1,270 +1,43 @@
 // The game the renderer draws: the gameplay half of what `Renderer::Impl` held, moved here so
 // it runs without OGRE and can be checked against the console's own functions. The renderer
-// derives from it and answers the hooks below (render/renderer_impl.h).
+// derives from it and answers the hooks of core/world_view.h (render/renderer_impl.h).
 #pragma once
 
 #include "core/ascii_case.h"
-#include "core/world_state.h"
+#include "core/collision_model.h"
+#include "core/world_view.h"
 
 namespace tl::core {
 
-/// What `World::view_settle_link_particles` does with a link's particle systems: learn their link,
-/// become one `CParticle`, stop.
-struct LinkParticleSettle {
-    bool particle = false;
-    bool cparticle = false;
-    bool stopped = false;
-};
-
-class World : public WorldState {
+class World : public WorldView {
 public:
     World() = default;
     World(const World&) = delete;
     World& operator=(const World&) = delete;
-    virtual ~World() = default;
+    ~World() override = default;
 
-    // PORT: the archive, as the renderer mounts it.
-    virtual std::vector<std::string> archive_paths_in_listing_order(const std::string& dir,
-                                                                    const char* suffix) const = 0;
-    virtual std::string resolve_archive_path_quiet(const std::string& reference) const = 0;
-    virtual std::string class_unit_path(const std::string& class_name,
-                                        bool* console = nullptr) const = 0;
-    virtual std::string archive_animation_in_dir(const std::string& dir, const std::string& state,
-                                                 bool armed, int variation) const = 0;
-    virtual std::string archive_path_in_dir(const std::string& basename,
-                                            const std::string& dir) const = 0;
-    virtual std::string archive_path_unique(const std::string& basename) const = 0;
-    virtual std::vector<std::string> archive_paths_under(const std::string& dir,
-                                                         const char* suffix) const = 0;
-    /// The data files under `dir`: the archive's `.dat.adm`, as `archive_paths_under` orders
-    /// them, then a mod's own `.dat` and `.dat.adm` the archive does not have.
-    virtual std::vector<std::string> data_paths_under(const std::string& dir) const = 0;
-    /// The same, the archive's in its listing order (`archive_paths_in_listing_order`).
-    virtual std::vector<std::string> data_paths_in_listing_order(const std::string& dir) const = 0;
     /// A data file as either form: compiled `.adm`, or a mod's text `.dat`.
     static tl::formats::AdmFile parse_data_group(const uint8_t* data, size_t size);
-    virtual bool console_game_data() const = 0;
-    virtual std::string dir_of_asset(const std::string& name) const = 0;
-    virtual tl::core::DungeonManager& loaded_dungeon_manager() const = 0;
-    virtual std::vector<uint8_t> read_resource(const std::string& path) const = 0;
-    virtual std::string resolve_archive_path(const std::string& reference) const = 0;
     /// Every mod's own copy of `path` (or, for a compiled name, of its text source), in the mods'
     /// order: what one mod's file would hide. Set by the renderer once the mods are mounted.
     std::function<std::vector<std::vector<uint8_t>>(const std::string&)> read_mod_copies;
+    /// Whether any mod answers `path` (what `read_mod_copies` would find), without reading it.
+    std::function<bool(const std::string&)> mod_answers;
     bool mod_has_file(const std::string& path) const {
+        if (mod_answers) return mod_answers(path);
         return read_mod_copies && !read_mod_copies(path).empty();
     }
-
-    // PORT: the renderer's scene nodes, read and moved for the game (core/view_handles.h).
-    virtual ogre::Vector3 view_position(const Ogre::SceneNode* node) const = 0;
-    virtual ogre::Quaternion view_orientation(const Ogre::SceneNode* node) const = 0;
-    virtual ogre::Vector3 view_derived_position(const Ogre::SceneNode* node) const = 0;
-    virtual ogre::Quaternion view_derived_orientation(const Ogre::SceneNode* node) const = 0;
-    virtual void view_set_position(Ogre::SceneNode* node, const ogre::Vector3& at) = 0;
-    virtual void view_set_orientation(Ogre::SceneNode* node, const ogre::Quaternion& turn) = 0;
-    virtual Ogre::SceneNode* view_parent_node(const Ogre::Entity* entity) const = 0;
-    virtual tl::core::DungeonFiles archive_dungeon_files() const = 0;
-
-    // PORT: what the game asks of the renderer's half.
-    virtual bool add_map_portal(const ogre::Vector3& at, const std::string& warp, bool enabled) = 0;
-    virtual void view_restore_automap(const tl::formats::LevelSaveState& state) = 0;
-    virtual void view_store_automap(tl::formats::LevelSaveState& state) = 0;
-    virtual void choose_player_attack_hand() = 0;
-    virtual void fire_particle_trigger(const std::string& animation, size_t index,
-                                       const tl::core::AnimationTag& tag) = 0;
-    virtual void player_hide_hand_trails() = 0;
-    virtual void player_shoot_tracer(const tl::core::Vec3& from, const tl::core::Vec3& to) = 0;
-    virtual bool player_weapon_skill(const ProcTarget& target) = 0;
-    virtual void player_weapon_trail_key(const tl::core::AnimationTag& tag) = 0;
-    virtual void view_add_node_collision(Ogre::SceneNode* node, const std::string& path,
-                                         int64_t group) = 0;
-    virtual float view_animation_length(Ogre::Entity* entity, const std::string& name) const = 0;
-    virtual void view_cast_shadows(Ogre::Entity* entity, bool on) = 0;
-    virtual bool view_ready() const = 0;
-    /// `animation`: the `DIE` animation the death chose, empty when the machine has none.
-    virtual bool view_unit_falls(int64_t node, const std::string& animation) = 0;
-    virtual Ogre::Entity* create_item_entity(const tl::core::ItemStats& item) = 0;
-    virtual void draw_item_presence(Ogre::SceneNode* node, const tl::core::ItemPresence& p,
-                                    const tl::core::ItemPresenceChange& change) = 0;
-    virtual bool item_in_camera(Ogre::SceneNode* node, bool from_model = false) const = 0;
-    virtual ogre::Vector3 item_view_point() const = 0;
-    virtual void place_pet_beside_player() = 0;
-    virtual tl::core::QuestEventUnit quest_event_unit(const std::string& name,
-                                                      const std::string& unittype,
-                                                      const ogre::Vector3& at,
-                                                      const tl::core::QuestUnitTag& tag) = 0;
-    virtual bool save_character(const std::string& path, bool force) = 0;
-    virtual Ogre::Entity* view_spawn_unit_model(const std::string& unit,
-                                                const std::string& mesh_path, int64_t id,
-                                                const ogre::Vector3& at,
-                                                const ogre::Quaternion& facing, float placed_scale,
-                                                bool spawn_anim) = 0;
-    virtual void spawned_item_state(int64_t id, int state) = 0;
-    virtual void step_player(float delta, const tl::core::InputState& in) = 0;
-    virtual void view_destroy_entity(Ogre::Entity* entity) = 0;
-    virtual std::string view_entity_mesh(const Ogre::Entity* entity) const = 0;
-    virtual void view_hide_death_screen() = 0;
-    virtual ogre::Vector3 view_landed_size(Ogre::SceneNode* node, Ogre::Entity* entity) = 0;
-    virtual Ogre::SceneNode* view_place_entity(Ogre::Entity* entity, const ogre::Vector3& at,
-                                               const ogre::Quaternion& turn) = 0;
-    virtual void view_restart_trigger_layout(int64_t node, const NodeMap* nodes) = 0;
-    virtual void view_set_scale(Ogre::SceneNode* node, float scale) = 0;
-    virtual void view_set_visible(const std::vector<Ogre::SceneNode*>& holders, bool on) = 0;
-    virtual void view_show_minimap() = 0;
-    /// `CBaseUnit::sphereCollision` for each of `ids`: `t[i]` the first `t` in [0, 1] unit `i`'s
-    /// collision model is touched, above 1 if not; `drawn[i]` 0 where it is not drawn.
-    virtual void unit_collider_sweeps(const std::vector<int64_t>& ids, const tl::core::Vec3& from,
-                                      const tl::core::Vec3& to, float radius, std::vector<float>& t,
-                                      std::vector<char>& drawn) = 0;
-    virtual std::vector<Ogre::SceneNode*> place_particle_layout(
-        const std::string& reference, const ogre::Vector3& at, const ogre::Quaternion& facing,
-        Ogre::SceneNode* parent, ParticleStart start = ParticleStart::Now) = 0;
-    virtual void view_aim_node(Ogre::SceneNode* node, const ogre::Vector3& at,
-                               const ogre::Vector3& forward) = 0;
-    virtual Ogre::SceneNode* view_create_node(const ogre::Vector3& at) = 0;
-    virtual void view_destroy_node(Ogre::SceneNode* node) = 0;
-    virtual bool view_held_item(const Ogre::Entity* held, ogre::Vector3& hand,
-                                float& height) const = 0;
-    /// For each list of holders: whether a system on one of them has not finished - or, where
-    /// `by_updating` is set, is still updating (`CParticle::getNumberOfParticlesUpdating(true)`)
-    /// - the lists whose `stop` is set stopping their systems' emission first.
-    virtual void view_transients_alive(
-        const std::vector<const std::vector<Ogre::SceneNode*>*>& lists,
-        const std::vector<char>& stop, const std::vector<char>& by_updating,
-        std::vector<char>& alive) = 0;
-    virtual void add_text_event(const tl::core::TextEvent& event) = 0;
-    virtual int breakable_within_view(float max_angle, float max_distance) const = 0;
-    virtual bool skill_bone_world(const ViewUnit& unit, int attachment, ogre::Vector3& out) = 0;
-    virtual bool skill_unit_forward(const ViewUnit& unit, ogre::Vector3& out) = 0;
-    virtual void start_character_particle(const tl::core::UnitStats& unit, int slot,
-                                          const ogre::Vector3& at, CharacterRef who) = 0;
-    virtual void view_claim_particles(size_t mark, std::vector<Ogre::SceneNode*>& holders,
-                                      std::vector<Ogre::SceneNode*>& line_holders) = 0;
-    virtual size_t view_particle_mark() const = 0;
-    virtual bool view_particles_alive(const std::vector<Ogre::SceneNode*>& holders) const = 0;
-    virtual void view_ride_particles(size_t mark, Ogre::SceneNode* ride) = 0;
-    virtual void view_stop_emission(const std::vector<Ogre::SceneNode*>& holders) = 0;
-    virtual void view_stop_particles(const std::vector<Ogre::SceneNode*>& holders, bool loop) = 0;
-    virtual void view_stretch_lines(const std::vector<Ogre::SceneNode*>& line_holders,
-                                    const ogre::Vector3& start, const ogre::Vector3& end) = 0;
-    virtual void view_translate(const std::vector<Ogre::SceneNode*>& holders,
-                                const ogre::Vector3& by) = 0;
-    virtual void play_effect_fx(tl::core::EffectManager& effects, const ogre::Vector3& centre,
-                                const std::string& who) = 0;
-    virtual bool play_sound(const std::string& name, const ogre::Vector3& at) = 0;
-    virtual bool play_sound(const std::string& name, const ogre::Vector3& at, float volume_scale,
-                            float radius_if_none, const std::string& voice_key,
-                            bool volume_given = false) = 0;
-    virtual void apply_script_events(const std::vector<tl::core::ScriptEvent>& events,
-                                     NodeMap& nodes) = 0;
-    virtual void close_ingame_ui() = 0;
-    virtual void create_portals() = 0;
-    virtual void delete_open_portals() = 0;
-    virtual void destroy_particle_holders(std::vector<Ogre::SceneNode*>& holders) = 0;
-    virtual void destroy_spawned_unit(Ogre::Entity* entity, int64_t id) = 0;
-    virtual void log_scene_census(const char* when) const = 0;
-    virtual void open_map_portal(const std::string& dungeon) = 0;
-    virtual void open_modal(const std::string& title, const std::string& text) = 0;
-    virtual bool play_scene_animation(Ogre::Entity* entity, const std::string& mesh_path,
-                                      const std::string& animation, bool loops, float rate,
-                                      bool optional = false,
-                                      Ogre::AnimationState** started = nullptr, bool armed = true,
-                                      std::string* played = nullptr, float blend = 0.0f,
-                                      bool queue = false) = 0;
-    virtual void quest_event(const std::vector<const tl::core::QuestDefinition*>& finished) = 0;
-    virtual SceneUnit* scene_unit_of(tl::core::LevelScript* machine, int64_t node) = 0;
-    virtual void write_entity_animation(EntityAnimation& animation) = 0;
-    virtual void activate_item_slot(int index) = 0;
-    virtual void apply_quest_item_removals() = 0;
-    virtual void bag_item_added(tl::core::ItemStats& item) = 0;
-    virtual void bag_item_removed(const tl::core::ItemStats& item) = 0;
-    virtual bool cast_player_skill(const tl::core::KnownSkill& skill, bool report) = 0;
-    virtual void catch_fish() = 0;
-    virtual void close_pause_menu() = 0;
-    virtual void close_quest_offer() = 0;
-    virtual void close_waypoint_menu() = 0;
-    virtual void dress_player(bool force = false) = 0;
-    virtual bool equip_weapon_item(const tl::core::ItemStats& item, int location = -1) = 0;
-    virtual bool fishing_animation_playing(const std::string& name) const = 0;
-    virtual void follow_player_animation() = 0;
-    virtual bool full_screen_menu_up() const = 0;
-    virtual bool hand_dialog_items(const tl::core::QuestDefinition& quest,
-                                   const tl::core::DialogLine& line) = 0;
-    virtual bool identify_item_in(tl::core::Inventory& bag, size_t slot) = 0;
-    virtual bool link_subject_animation(const std::string& name) = 0;
-    virtual bool modal_dialog_open() const = 0;
-    virtual tl::core::AnimationCatalog model_catalog(const std::string& mesh,
-                                                     const std::string& dir,
-                                                     size_t* missing = nullptr) = 0;
-    virtual tl::core::MusicHost music_host(int64_t node) = 0;
-    virtual bool open_gem_socketing() = 0;
-    virtual bool open_spell_remove(bool pet_owner, size_t slot) = 0;
-    virtual bool path_blocker_of(const tl::core::LevelScript::NodeRecord& n,
-                                 PathBlocker& b) const = 0;
-    virtual bool path_blocker_of(const tl::formats::CmpNode& node, PathBlocker& b) const = 0;
-    virtual void play_fishing_animation(const std::string& name, float rate, bool once,
-                                        const std::string& then) = 0;
-    virtual bool play_music(const std::string& relative, bool loop, const char* because) = 0;
-    virtual bool play_sound_2d(const std::string& name, const char* label = "voice") = 0;
-    virtual void player_levelled_up() = 0;
-    virtual tl::core::PortalLevel portal_level() const = 0;
-    virtual void queue_tip(tl::core::ContextTip tip) = 0;
-    virtual void refresh_game_hud() = 0;
-    virtual void view_skill_effects_changed() = 0;
-    virtual void refresh_waypoint_menu() = 0;
-    virtual void release_quest_pets(const tl::core::QuestCompletion& done) = 0;
-    virtual void reward_player(const tl::core::QuestCompletion& done) = 0;
-    virtual void set_help_open(bool open) = 0;
-    virtual void set_interactive_menu_visible(bool on) = 0;
-    virtual void stop_fishing() = 0;
-    virtual void sync_worn_attachments(int weapon_location) = 0;
-    virtual bool ui_in_cinematic() const = 0;
-    virtual void unequip_weapon() = 0;
-    virtual bool unit_in_view(const tl::core::LevelScript& machine, int64_t node) = 0;
-    virtual int unit_machine(const std::string& unit, int64_t& node) const = 0;
-    virtual void update_automap_icons() = 0;
-    virtual void update_character_preview(float delta) = 0;
-    virtual void update_menu() = 0;
-    virtual void update_npc_icons() = 0;
-    virtual bool use_item_on_pet(const tl::core::ItemStats& item, int stack, bool by_player,
-                                 tl::core::ItemUseResult& used) = 0;
-    virtual bool use_player_item(size_t slot, bool from_tray = false) = 0;
-    virtual bool wear_player_item(size_t slot) = 0;
-    virtual bool logic_trace_on() const = 0;
-    virtual bool place_particle(const tl::formats::CmpScene& layout,
-                                const tl::formats::CmpNode& node, const ogre::Vector3& position,
-                                const ogre::Quaternion& orientation) = 0;
-    virtual void view_automap_add_tile(int type, const ogre::Vector3& at, const ogre::Vector3& dir,
-                                       bool a, bool b) = 0;
-    virtual void view_automap_player(const ogre::Vector3& at) = 0;
-    virtual void view_place_viewer(const tl::formats::CmpScene& layout,
-                                   const ogre::Vector3& origin) = 0;
-    virtual void view_place_meshes(const std::vector<MeshPlacement>& placements,
-                                   size_t& animated_props, size_t& idled) = 0;
-    virtual void view_own_trigger_particles(size_t before, int64_t node, const NodeMap& sink) = 0;
-    virtual void view_settle_link_particles(size_t systems_before, int64_t owner,
-                                            const std::string& reference,
-                                            const ogre::Vector3& origin,
-                                            const ogre::Quaternion& basis,
-                                            LinkParticleSettle what) = 0;
-    virtual bool view_caching_particles() const = 0;
-    virtual unsigned long view_milliseconds() const = 0;
+    /// `CParticle::Start` on one of a character's own particles: each of
+    /// its sounds on the particle's bank (+0x90), then the view starts it.
+    void start_slot_particle(const tl::core::UnitStats& unit, int slot, const ogre::Vector3& at,
+                             CharacterRef who);
+    /// `CParticle::Start`'s sounds: each of the file's on the particle's bank.
+    void play_particle_sounds(const std::string& file, const ogre::Vector3& at);
+    /// A particle link's `Start Particle` (-> `CParticle::Start`).
+    void particle_link_started(const tl::core::ScriptEvent& event);
     /// `CGameUI::updateLoading`: the loading screen refreshed between
     /// `CLevel::populate`'s phases, ten times a floor, at the console's own points. Nothing by default.
     virtual void view_update_loading() {}
-    virtual void view_automap_create() = 0;
-    virtual size_t view_level_particle_node(size_t systems_before) = 0;
-    virtual void view_stand_subject(const ogre::Vector3& at, const ogre::Vector3& facing) = 0;
-    virtual void bake_static_scenery() = 0;
-    virtual void view_prepare_mesh(const std::string& mesh_path) = 0;
-    virtual bool ground_under(const ogre::Vector3& from, float& surface_y) const = 0;
-    virtual void logic_trace_text(const char* text) = 0;
-    virtual void flush_logic_trace(tl::core::LevelScript& machine) = 0;
-    virtual void apply_environment(const std::string& layout_path) = 0;
-    virtual tl::core::SoundBankHost node_sound_host() = 0;
-    virtual std::vector<std::pair<std::string, float>> animation_catalog(
-        const std::string& unit) = 0;
-    virtual float scene_animation_length(const std::string& unit, const std::string& animation) = 0;
 
     /// `onClick` on the menu's unit for the
     /// player's talk: its flag back and the broadcasts on it; `OK` on a
@@ -284,9 +57,13 @@ public:
     bool complete_quest_by_dialog(const std::string& name);
     /// What follows any completion here: the payout, the gates, the icons.
     void quest_completed(const std::string& name);
+    /// A `Quest Controller`'s `QuestChanged` event past the machines: the quest log's half.
+    void quest_controller_changed(const tl::core::ScriptEvent& event);
     /// Carry out every queued `CQuestManager::completeQuest`:
     /// journal, `[REWARD]` (`rewardPlayer`), "Quest Complete", take-backs.
     void pay_quest_completions();
+    /// One completion's payout: the journal count and `rewardPlayer`.
+    void pay_quest_completion(const tl::core::QuestCompletion& done);
     /// A quest's reward in `calculateRewards`' order:
     /// `[UNITREWARD]` units, then `TREASURECLASS` (`tl::core::quest_treasure_roll`).
     std::vector<std::string> quest_reward_items(const tl::core::QuestDefinition& quest, int level,
@@ -298,20 +75,12 @@ public:
     /// A quest's seed from an NPC (`CQuest +0x1c`, drawn by `initializeQuestWithNPC`
     /// on the volatile stream, `QuestLog::offered`).
     /// INVENTED: a quest no NPC initialised gets a seed from its GUID.
-    int32_t offer_seed(const tl::core::QuestDefinition& quest) const {
-        const tl::core::QuestLog::Offered* rolled = quest_log.offered(quest);
-        if (rolled != nullptr && rolled->seed != -1) return rolled->seed;
-        return static_cast<int32_t>(static_cast<uint32_t>(quest.guid) ^ 0x9e3779b9u);
-    }
+    int32_t offer_seed(const tl::core::QuestDefinition& quest) const;
     /// The level a quest's rewards are worked at (`CQuest +0x1ec`, `QuestLog::offer_level`),
     /// else `quest_level_for_offer`.
-    int quest_level_of(const tl::core::QuestDefinition& quest) const {
-        return quest_log.offer_level(quest, quest_level_for_offer);
-    }
+    int quest_level_of(const tl::core::QuestDefinition& quest) const;
     /// The quest given to the player unless its log is full for it.
-    bool take_quest(const tl::core::QuestDefinition& quest, int level, uint32_t seed) {
-        return !quest_log.log_full_for(quest) && quest_log.accept(quest, level, seed, stat_graphs);
-    }
+    bool take_quest(const tl::core::QuestDefinition& quest, int level, uint32_t seed);
     /// Fill an accepted quest's `reward_item` / `reward_icon`.
     void resolve_reward_item(tl::core::QuestEntry& entry);
     /// Say so when a quest that a *gate in this level* was waiting on changes.
@@ -334,9 +103,7 @@ public:
                           bool back_edge);
     /// Any of the screens Start leads to is up - the Pause Menu, Options or the
     /// debug menu - and the level stands still under it.
-    bool start_menu_up() const {
-        return debug_menu_open || pause_menu.open || settings_menu.open || !settings_menu.finished;
-    }
+    bool start_menu_up() const;
     /// `CGameClient::getIsPaused` on the console: a full-screen menu
     /// covers a side (`rightCovered`, `leftCovered`) or a modal menu
     /// is up. The PC's needs both sides covered.
@@ -357,19 +124,18 @@ public:
     void ensure_skill_index();
     void ensure_player_skill_files();
     void ensure_effect_data();
-    /// What `CEquipment::unitInit`'s rolls read (`core/item_roll.h`).
+    /// What `CEquipment::unitInit`'s rolls read (`core/item_roll.h`), and `CSkill::CSkill`'s.
     tl::core::ItemRollContext item_roll_context();
-    /// What an item's own effect manager is built with: the effect and graph
-    /// tables and no owner (an item is not a character).
+    tl::core::SkillConstruction skill_construction();
+    /// What an item's own effect manager is built with: the effect and graph tables and no
+    /// owner (an item is not a character).
     const tl::core::EffectManager::Context& item_effect_context();
     /// Hands the player's inventory (and the pet's bag) the tables its effect
     /// half reads, and recalculates (`Inventory::set_effect_context`).
     void refresh_inventory_effects();
     /// `CCharacter::getEffectValue`'s two halves for the player: its own
     /// manager and its inventory's totals (`core/character_effects.h`).
-    tl::core::CharacterEffects player_total() const {
-        return tl::core::CharacterEffects(&player_effects, &player_inventory);
-    }
+    tl::core::CharacterEffects player_total() const;
     void load_recharge_rates();
     /// `CCharacter::updateHP` and
     /// `updateMana` for the player.
@@ -389,9 +155,7 @@ public:
     /// bag, then of a pet's that is not in town, used on the item at `slot`.
     bool identify_player_item(size_t slot);
     /// `CCharacter::getEffectValue`'s two halves for the pet.
-    tl::core::CharacterEffects pet_total() const {
-        return tl::core::CharacterEffects(&pet.effects(), &pet.bag());
-    }
+    tl::core::CharacterEffects pet_total() const;
     /// The pet's manager's tables, and its spell book's effect totals.
     void refresh_pet_effects();
     /// The pet as the item use path reads it.
@@ -445,13 +209,10 @@ public:
     /// `CCharacter::updateSkill(float)` -> `CInventory::updateSkillManagers`,
     /// inline in `CCharacter::updateAnimation`:
     /// each location's item runs `CSkillManager::update`.
-    ///
     void update_worn_skill_managers(float delta);
-    /// The runner a skill of that name runs on (the player's, else a worn item's), where its
-    /// later events go.
+    /// The runner a skill of that name runs on (the player's, else a worn item's).
     tl::core::SkillRunner& skill_runner_running(const std::string& name);
-    /// Rebuild `player_skills` for `player_class` at the class's starting
-    /// levels, points and mapping cleared.
+    /// Rebuild `player_skills` for `player_class` at its starting levels, points and mapping cleared.
     void build_player_skills();
     /// A saved item made again (`createUnit` with `from_save`, then its
     /// `applySaveState`); nothing for a name the item index does not know.
@@ -461,12 +222,15 @@ public:
     tl::formats::ItemSaveState item_save_state(const tl::core::InventorySlot& held, int32_t slot);
     void set_big_text(const std::string& text, float seconds);
     void set_small_text(const std::string& text, float seconds);
-    /// `CGameClient::loadLevel`: the level's name big and "Floor N" small, for 1.0
-    /// second.
+    /// `CGameClient::loadLevel`: the level's name big and "Floor N" small, 1.0 s.
     void raise_arrival_banner();
-    /// `CParticlePreloader::GetParticle` by name: its `FILE` in
-    /// `media/particles/preload.dat`, empty for none.
+    /// `CParticlePreloader::GetParticle`: its `FILE` in `preload.dat`, empty for none.
     std::string preloaded_particle_file(const std::string& name);
+    /// `CSoundBank::playSample` on a unit's own bank.
+    bool play_bank_sample(const std::string& name, const ogre::Vector3& at);
+    /// `playSample(slot)` on a bank slot that may hold no sound: the slot's chance rolls first.
+    bool play_bank_slot(const tl::core::UnitStats& stats, tl::core::SoundSlot slot,
+                        const ogre::Vector3& at);
     void set_talk_target(const std::string& unit);
     void clear_talk_target();
     bool script_dialog_open() const { return dialog_machine() != kNoMachine; }
@@ -538,23 +302,13 @@ public:
     void play_skill_cue(const tl::core::SkillAnimationCue& cue);
     /// `CCharacter::setTarget` for the living
     /// player: the target, and the target item let go.
-    void set_player_target(int64_t node) {
-        player_target_node = node;
-        player_skill_item = 0;
-    }
+    void set_player_target(int64_t node);
     // PORT: the level a placed unit was made at (`CLevel +0x1a8` for a populated floor's,
     // `spawn_unit()`), else the player's `character_level`.
-    int effective_monster_level(int64_t node) const {
-        const auto found = unit_spawn_level.find(node);
-        if (found != unit_spawn_level.end() && found->second.level > 0) return found->second.level;
-        return character_level;
-    }
+    int effective_monster_level(int64_t node) const;
     /// Whether this node was promoted at spawn through `CHAMPIONSPAWNCLASS`
     /// (`apply_champion_curves()`; apart from `UnitStats::is_champion`).
-    bool spawn_marked_champion(int64_t node) const {
-        const auto found = unit_spawn_level.find(node);
-        return found != unit_spawn_level.end() && found->second.champion;
-    }
+    bool spawn_marked_champion(int64_t node) const;
     void load_game_speed();
     /// `CCharacter::rollAttack`: a player blow leaving the target dying or dead
     /// slows the game for half a second.
@@ -579,25 +333,10 @@ public:
     /// How fast a swing plays, as a multiple of real time (the blow's frame sets the cadence).
     // INVENTED: `ATTACKSPEED` over 100; the console's attack animation speed is not
     // transcribed here.
-    float swing_rate() const {
-        return player_stats.attack_speed > 0.0f ? player_stats.attack_speed / 100.0f : 1.0f;
-    }
+    float swing_rate() const;
     /// What the character should be playing this frame: its swing while one is
     /// running, and otherwise whatever its movement says.
-    std::string wanted_player_animation() const {
-        if (player_death.dying) {
-            return player_death.animation.empty() ? player_animation : player_death.animation;
-        }
-        if (fishing_state != tl::core::FishingState::Off && !fishing_animation.empty()) {
-            return fishing_animation;
-        }
-        // An `Animation Controller` holding the player (`setAIPlayAnimation`,
-        // state 0x10): the scene's animation, over whatever it was doing.
-        if (!scripted_player_animation.empty()) return scripted_player_animation;
-        if (skill_playback.active) return skill_playback.animation;
-        if (swing.active) return swing.animation;
-        return player.animation();
-    }
+    std::string wanted_player_animation() const;
     void load_stat_graphs();
     void load_camera_shake_graphs();
     size_t load_graph_directory(const std::string& directory, tl::core::StatBook& book) const;
@@ -614,6 +353,8 @@ public:
     std::string resolve_unit_link(const std::string& wanted, const std::string& first_root,
                                   bool is_first) const;
     const tl::core::AnimationManifest& manifest_for(const std::string& mesh_path);
+    /// A model's animation set (`load_animation_set`), read once per mesh.
+    const tl::core::AnimationSet& animation_set_for(const std::string& mesh_path);
     /// Read the playable classes, once.
     void load_player_classes();
     /// A mod's class's portrait, from its mod's `charactercreate.layout`.
@@ -663,6 +404,10 @@ public:
     /// restored Transmuter.
     void restore_combiner(const tl::formats::CharacterSaveState& saved);
     tl::core::CreateLootUnit loot_unit_maker();
+    /// A character `loot_unit_maker` made, put in the level at `where` facing `from`.
+    void add_loot_creature(const std::string& unit,
+                           const tl::core::LevelScript::UnitCreation& creation,
+                           const ogre::Vector3& where, const tl::core::Vec3& from);
     /// `CQuestManager::populate` for the level just built.
     void populate_quests();
     /// An item's `+0x170` / `+0x178` as a tag; empty for -1.
@@ -690,21 +435,11 @@ public:
     float missile_reflect_share(int64_t unit);
     /// A skill event's caster's level (X360 `+0xf0`) for `CEffect::setOwner`'s
     /// `USEOWNERLEVEL`: the placed character's, or the player's for null; empty if unrun.
-    std::optional<int32_t> event_caster_level(tl::core::LevelScript* machine, int64_t node) const {
-        if (machine == nullptr) return player_character.level();
-        int level = 0;
-        if (!machine->unit_level(node, level)) return std::nullopt;
-        return level;
-    }
+    std::optional<int32_t> event_caster_level(tl::core::LevelScript* machine, int64_t node) const;
     /// How much life a placed unit has, creating the entry the first time.
     Health& health_of(int64_t node, const std::string& unit);
     /// A floor-rolled level (`unit_spawn_level`) handed to the machine's `setLevel`.
-    void apply_spawn_level(int64_t node) {
-        const auto found = unit_spawn_level.find(node);
-        if (found != unit_spawn_level.end() && found->second.level > 0) {
-            script.set_unit_level(node, found->second.level);
-        }
-    }
+    void apply_spawn_level(int64_t node);
     /// `CCharacter::applyDamage`, its tail: a
     /// living victim answers with `DAMAGE REFLECTION` (0x30) plus `PERCENT DAMAGE REFLECTED`
     /// (0x20), through the attacker's armour. Node 0 is the player.
@@ -744,28 +479,24 @@ public:
     void lift_path_blockers();
     /// `CBaseUnit::addToAvoidanceMap` for every
     /// `ISA(INTERACTABLE)` `Unit Trigger` placed (`door_trigger_nodes`, drained): its collision
-    /// model into the map grid; recorded in `door_avoidance_added` for `TriggerState`.
-    void register_door_avoidance();
+    /// model into the map grid; recorded in `door_avoidance_added` for `TriggerState`, from `from`.
+    void register_door_avoidance(size_t from = 0);
+    /// A room's triggers queued at the load go onto the map at the first `step_level_items`: the
+    /// console adds them on their first update, after the load's spawner releases have searched.
+    bool door_avoidance_deferred = false;
+    void level_npc_icons();  ///< `CLevel::updateNPCIcons`' quest draws (world_level.cpp)
     /// Load the authored numbers of every unit this layout places.
     void load_unit_stats(const tl::formats::CmpScene& layout, const std::set<int64_t>& gated);
     /// Read one unit's authored numbers into the book; false when nothing is called that.
     bool index_unit(const std::string& name);
     /// This unit's authored numbers, or the defaults when nothing loaded them. A reference
     /// into the book: good until the book is cleared.
-    const tl::core::UnitStats& stats_for_unit(const std::string& unit) const {
-        static const tl::core::UnitStats kDefaults{};
-        if (const tl::core::UnitStats* found = unit_book.find(unit)) return *found;
-        return kDefaults;
-    }
+    const tl::core::UnitStats& stats_for_unit(const std::string& unit) const;
     /// `CCharacter::setAlignment`: red outline and highlight for a hostile
     /// (`+0x280` 2 or 4) unless a mimic (`ISA 0xa7`).
-    bool outline_hostile(const tl::core::UnitStats& stats) const {
-        return stats.hostile() && !unit_types.isa(stats.unittype, tl::core::unit_type::kMimic);
-    }
+    bool outline_hostile(const tl::core::UnitStats& stats) const;
     // PORT: whether a unit is on the hostile side (`unit_side`).
-    bool unit_hostile(int64_t node, const tl::core::UnitStats& stats) const {
-        return unit_side(node, stats) == tl::core::UnitStats::Alignment::Hostile;
-    }
+    bool unit_hostile(int64_t node, const tl::core::UnitStats& stats) const;
     /// Index every monster unit by its `NAME`, once.
     void ensure_monster_index();
     /// Resolve a `Unit Spawner`'s `RESOURCE` to a unit name (a unit, or a `Spawn Class` table
@@ -826,8 +557,9 @@ public:
     /// target (`machine` null: the player).
     bool skill_event_sight_blocked(const SkillEventSource& src, tl::core::LevelScript* machine,
                                    int64_t node);
-    /// `CBaseUnit::unitInit`: a unit's
-    /// `[SKILL]` blocks.
+    /// `applyWeaponDamage` for an item a skill's damage shape reaches.
+    bool skill_event_item_blow(const SkillEventSource& src, const tl::core::DamageShapeItem& item);
+    /// `CBaseUnit::unitInit`: a unit's `[SKILL]` blocks.
     std::vector<tl::core::LevelScript::UnitSkill> unit_skill_list(const std::string& unit);
     const tl::core::AnimationCatalog* unit_catalog(const std::string& mesh);
     /// A placed unit's skill by name, for its runner's lookups.
@@ -879,15 +611,7 @@ public:
     /// `CGameGlobals +0x2c0 .. +0x2c8` (`reload`).
     tl::core::LevelMemoryRules level_memory_rules() const;
     /// Increment a journal statistic on the player and log it (except steps).
-    void count_journal(tl::core::JournalStatistic stat, int32_t amount = 1) {
-        if (amount == 0) return;
-        player_character.journal().increment(stat, amount);
-        if (stat != tl::core::JournalStatistic::StepsTaken) {
-            const int32_t total = player_character.journal().value(stat);
-            TL_LOG_INFO("journal: %s +%d = %d", tl::core::journal_statistic_name(stat), amount,
-                        total);
-        }
-    }
+    void count_journal(tl::core::JournalStatistic stat, int32_t amount = 1);
     std::string rules_path_for(const std::string& layout_path);
     static std::string backdrop_key(const std::string& layout_path);
     bool read_rules(const std::string& layout_path, tl::formats::AdmFile& out, bool quiet);
@@ -996,8 +720,7 @@ public:
     /// `CCharacter::unitInit`'s Merchant branch for any
     /// unstocked merchant, then every merchant's clock.
     void step_merchants(float delta);
-    /// The merchant a vendor screen was opened on, by its unit name; null for
-    /// none.
+    /// The merchant a vendor screen was opened on, by its unit name; null for none.
     MerchantState* merchant_named(const std::string& unit);
     /// The Transmuter placed as `unit` (ISA 0x86); null for none.
     CombinerState* combiner_named(const std::string& unit);
@@ -1104,6 +827,10 @@ public:
     /// the up vector (`+0x9c`), from `centre`.
     void start_death_shake(const char* name, float duration, float magnitude,
                            const ogre::Vector3& centre);
+    /// `CCharacter::die`'s test for a burst death: not a champion,
+    /// not frozen (that shatters), an explode particle (slot 10) and the blood shown.
+    bool bursts_on_death(tl::core::LevelScript& owner, int64_t node, const std::string& unit);
+    void burst_visuals(tl::core::LevelScript& owner, int64_t node, const std::string& unit);
     void ensure_item_index();
     /// `CBaseUnit::addToAvoidanceMap` / `removeFromAvoidanceMap`
     /// for a breakable: radius + 0.4 on the grid.
@@ -1144,7 +871,20 @@ public:
     /// placed character.
     void unit_instant_effect(tl::core::LevelScript* machine, int64_t node,
                              const tl::core::Effect& effect, float value);
+    /// `CSkillManager::stopSkillsByName(name, true)` on a placed character.
+    void stop_unit_skills_by_name(tl::core::LevelScript& machine, int64_t node,
+                                  const std::string& name);
+    /// `CDamageShape::doDamageToCharacter`'s hit not over time on a placed
+    /// character: the ownerless instant `DAMAGE` effect through `unit_effect_on_unit`.
+    void shape_hit_unit(tl::core::LevelScript& machine, int64_t node, float amount,
+                        int32_t damage_type, const tl::core::Vec3& direction);
     void update_unit_effects(float dt);
+    /// One placed character's effects ticked, as update_unit_effects() does each.
+    void update_unit_effects_of(const MachineView& view, int64_t node, float dt);
+    /// `CCharacter::updateEffects` on a placed character;
+    /// true when a `SUMMON DURATION` ran out.
+    bool unit_update_effects(tl::core::LevelScript* machine, int64_t node, float dt,
+                             std::vector<tl::core::ScriptEvent>& events);
     ProcTarget proc_target_breakable(int index);
     /// `CCharacter::executeProcs(type, target)`, placed unit.
     void unit_execute_procs(tl::core::LevelScript& machine, int64_t node, int type,
@@ -1163,8 +903,12 @@ public:
     /// `displayDamageAbsorbed(delta)` on the player: the red number, when due.
     void display_player_damage(float delta);
     /// `CCharacter::applyInstantEffect`, case
-    /// `DAMAGE`, on the player.
-    void player_instant_damage(const tl::core::Effect& effect);
+    /// `DAMAGE`, on the player; `rolled` is a value already rolled (HP RECHARGE's below 0).
+    void player_instant_damage(const tl::core::Effect& effect, const float* rolled = nullptr);
+    /// `applyInstantEffect` on the player, as `player_cast_context` hands it.
+    void player_instant_effect(const tl::core::Effect& effect);
+    /// `CCharacter::interrupt(bool hit)` on the player.
+    void interrupt_player(bool hit);
     /// `CCharacter::modifyDamage` when a `SHIELD BUFFER` took the hit:
     /// `Absorbed!` over the character and `SHIELDBLOCK` (slot 7).
     void show_absorbed(const ogre::Vector3& at, const tl::core::UnitStats& stats);
@@ -1174,8 +918,7 @@ public:
     void add_combat_text(tl::core::CombatText what, const ogre::Vector3& unit_at, int amount = 0);
     /// Where a unit of the level stands; false when nothing draws it.
     bool unit_node_position(int64_t node, ogre::Vector3& at);
-    /// `CCharacter::playHitParticle` on the
-    /// unit struck.
+    /// `CCharacter::playHitParticle` on the unit struck.
     void play_hit_particle(const tl::core::UnitStats& victim, const ogre::Vector3& from,
                            const ogre::Vector3& at, CharacterRef who);
     /// `CCharacter::playStrikeParticle` of
@@ -1196,9 +939,15 @@ public:
     bool award_player_fame(int amount);
     /// `CSkillEvent::startEvent`, the layout half: `FILE`
     /// on the caster (or target, `PLACEONTARGET`) facing its way, timelines played.
+    void start_event_slowdown(const tl::core::SkillProperty* slowing);
+    SkillEventSource skill_event_source_of(const tl::core::KnownSkill& skill, uint32_t level,
+                                           int group, const tl::formats::AdmSection& event,
+                                           const tl::core::SkillEventTarget& target,
+                                           const tl::core::SkillEventSpec& spec);
     void start_skill_event(const tl::core::KnownSkill& skill, uint32_t level, int group,
                            const tl::formats::AdmSection& event,
                            const tl::core::SkillEventTarget& target);
+    void caster_updates_at_event_start();
     /// `CSkillEvent::updateEvent`, the `ATTACHOWNER` half,
     /// once a frame.
     void update_live_skill_events(float delta);
@@ -1296,6 +1045,26 @@ public:
     /// `getCharacterCanBeHarmedByMissile`: true when the missile stops on `unit`.
     bool missile_harm(const SkillEventSource& source, int64_t unit, float soak_scale,
                       const ogre::Vector3& at, float damage_scale, float yaw);
+    /// A character as the skill event's tests see it: centre height, HP, side, unit, pet.
+    struct SkillEventWho {
+        float centre_y = 0.0f;
+        float hp = 0.0f;
+        tl::core::UnitStats::Alignment side = tl::core::UnitStats::Alignment::Neutral;
+        std::string unit;
+        bool pet = false;
+    };
+    /// False for an unrun unit; a null machine is the player.
+    bool skill_event_who(const tl::core::DamageShapeUnit& who, SkillEventWho& out);
+    /// The event's `TARGET_SPECIFIC_UNITS`, upper-cased unit names.
+    static std::vector<std::string> skill_event_specific_units(
+        const tl::formats::AdmSection* event);
+    /// `CSkillEvent::getCharacterCanBeAffectedByDamageShape(who, owner, shape, corpses,
+    /// missile)`; `shape_y` the shape's height when
+    /// `by_shape` (null: unknown), `turned_back` the missile's `+0x28c`.
+    bool skill_event_can_affect(const SkillEventSource& src,
+                                const std::vector<std::string>& specific,
+                                const tl::core::DamageShapeUnit& who, bool corpses, bool by_shape,
+                                const float* shape_y, bool turned_back);
     /// `CSkillEvent::canEffectPosObject(at, unit)`: centre
     /// within 3.0 of `at` in height; null machine is the player.
     bool skill_event_reaches_height(const ogre::Vector3& at, tl::core::LevelScript* machine,
@@ -1319,7 +1088,7 @@ public:
     bool break_breakable(size_t index, bool by_player);
     void cast_prop_trap(const std::string& unit, const std::string& name, uint32_t level,
                         const ogre::Vector3& skill_at, const ogre::Quaternion& facing,
-                        bool by_player);
+                        bool by_player, int64_t prop_id);
     tl::core::ItemActiveRangeInput item_range_input(const ogre::Vector3& at, bool interactable,
                                                     bool casts_shadows) const;
     /// `CLevel::updateNearUnitList`'s item
@@ -1339,6 +1108,10 @@ public:
     /// grounds it and its sparkle; the drop sound when `drop_sound`.
     void place_gold(const tl::core::GoldPile& pile, const ogre::Vector3& at,
                     const tl::core::ItemStats* item = nullptr, bool drop_sound = true);
+    /// The population's item: a spawn class's pick that names an item, made and added.
+    tl::core::PopulatedUnit create_populated_item(const std::string& unit, int64_t handle,
+                                                  std::map<int64_t, tl::core::ItemStats>& made);
+    bool add_populated_item(const tl::core::ItemStats& item, const ogre::Vector3& at, int& count);
     /// `CItem::snapToGround`: down from 100 to -100; a miss
     /// retries at `randomOpenPosition(p, 4)`, 30 times.
     ogre::Vector3 snap_item_to_ground(const ogre::Vector3& at);
@@ -1355,7 +1128,7 @@ public:
     ogre::Vector3 dropped_to_ground(const ogre::Vector3& at) const;
     /// `CLevel::addCharacter`'s `CCharacter::dropToGround(level, 4.0, ..., false)`: the search
     /// (core/item_drop.h, `drop_character_to_ground`).
-    ogre::Vector3 character_to_ground(const ogre::Vector3& at);
+    ogre::Vector3 character_to_ground(const ogre::Vector3& at, float collision_radius);
     /// The sound tables a gold pile's bank reads and `g_Rand` (`make_gold_pile`).
     tl::core::GoldPileSounds gold_sounds();
     void create_quest_unit(const tl::core::QuestObjective& objective,
@@ -1395,10 +1168,98 @@ public:
     bool begin_swing(int64_t target);
     /// Advance the player's swing and land it when the authored frame passes.
     void step_swing(float delta);
-    /// A placed unit's life has run out: fall over, stop hunting, stop being hunted.
-    void kill_unit(int64_t node, const std::string& unit, bool fall = true, int64_t attacker = 0);
+    /// A unit's life ran out (fall, stop hunting); no `pays_experience` for a `KILL` effect's `die`.
+    void kill_unit(int64_t node, const std::string& unit, bool fall = true, int64_t attacker = 0,
+                   bool pays_experience = true);
+    void kill_quest_event(int64_t node, const std::string& unit);
+    void desummon_on_death(int64_t node, const std::string& unit);
+    void kill_pays_experience(int64_t node, const std::string& unit,
+                              const tl::core::UnitStats& stats, int64_t attacker);
     /// `CPlayer::storeLevelSavedState` over this level.
     void store_level_state();
+    /// `applyEffectOnUnit`, `applyInstantEffect` and `updateEffects` in parts.
+    bool effect_valid_for_placed_unit(tl::core::LevelScript* machine, int64_t node,
+                                      const std::string& unit, tl::core::EffectManager* own,
+                                      const tl::core::Effect& effect);
+    void provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
+                              const tl::core::Effect& effect, bool copy,
+                              const tl::core::EffectManager* own,
+                              std::vector<tl::core::ScriptEvent>& events);
+    void play_instant_strike(tl::core::LevelScript* machine, int64_t node, const std::string& unit);
+    void unit_instant_damage(tl::core::LevelScript* machine, int64_t node,
+                             const tl::core::Effect& effect, float value, const std::string& unit);
+    void convert_held_statuses(int32_t ai, tl::core::EffectManager* effects,
+                               const std::string& unit);
+    void update_unit_hp_of(const MachineView& view, int64_t node, tl::core::EffectManager* effects,
+                           const std::string& unit, float dt,
+                           std::vector<tl::core::ScriptEvent>& events);
+    /// `restoreLevelState`'s steps (world_session.cpp).
+    void name_saved_units(tl::formats::LevelSaveState& state);
+    void restore_pending_formations(const tl::formats::LevelSaveState& state);
+    /// One put-back's working figures: the state, the turns its created items take, the counts.
+    struct RestorePass {
+        const tl::formats::LevelSaveState* state = nullptr;
+        const tl::formats::LevelSaveState* found = nullptr;  ///< the state as stored, unrenamed
+        uint64_t base = 0;                                   ///< `items_made` as the pass began
+        int32_t stored_offset = 0;
+        size_t placed = 0, created = 0, opened = 0, breakables = 0, triggers = 0;
+        std::map<int64_t, std::pair<tl::core::LevelScript*, int64_t>> by_saved_id;
+        std::map<tl::core::LevelScript*, std::set<int64_t>> kept;
+        uint64_t turn(const tl::formats::ItemSaveState& item) const {
+            return base + 1 + static_cast<uint64_t>(&item - state->items.data());
+        }
+    };
+    void saved_character_hands(const tl::formats::CharacterSaveState& saved,
+                               tl::core::LevelScript::CharacterRecord& record);
+    void make_saved_inventory(const tl::formats::CharacterSaveState& saved);
+    void restore_saved_effects(const tl::formats::CharacterSaveState& saved,
+                               tl::core::LevelScript& machine, int64_t node);
+    void rejoin_saved_master(const tl::formats::CharacterSaveState& saved,
+                             tl::core::LevelScript& machine, int64_t node, NodeMap& nodes,
+                             RestorePass& pass);
+    void restore_saved_character(const tl::formats::CharacterSaveState& saved,
+                                 std::vector<MachineView>& views, RestorePass& pass);
+    void rejoin_saved_spawner(int64_t unit_id, int64_t spawner_id, bool character = false);
+    /// The loader's link state outside a nested layout, put back by leave_nested_link().
+    struct NestedLinkFrame {
+        int64_t owner = 0;
+        int64_t link = 0;
+        int64_t turn_link = 0;
+        std::string link_name;
+        bool particle = false;
+    };
+    NestedLinkFrame enter_nested_link(int64_t owner, int64_t link, const std::string& link_name,
+                                      bool particle, bool owns_a_script);
+    void leave_nested_link(const NestedLinkFrame& outer);
+    bool saved_map_portal(const tl::formats::ItemSaveState& item);
+    void restore_map_portals(const tl::formats::LevelSaveState& state);
+    int32_t stored_trigger_offset(const tl::formats::LevelSaveState& state);
+    void restore_layout_items(std::vector<MachineView>& views, RestorePass& pass);
+    void restore_created_trigger(const tl::formats::ItemSaveState& item, const TriggerProp& prop,
+                                 RestorePass& pass);
+    void restore_saved_gold(const tl::formats::ItemSaveState& item, const RestorePass& pass);
+    void restore_ground_item(const tl::formats::ItemSaveState& item, RestorePass& pass);
+    /// `storeLevelSavedState`'s steps (world_session.cpp).
+    using PopulatedItems = std::vector<std::pair<uint64_t, tl::formats::ItemSaveState>>;
+    using StoredUnits = std::vector<std::pair<tl::core::LevelScript*, int64_t>>;
+    void store_pending_formations(tl::formats::LevelSaveState& state);
+    std::vector<MachineView> with_stored_layouts(const std::vector<MachineView>& views);
+    std::vector<std::pair<size_t, tl::core::LevelScript::NodeRecord>> made_trigger_nodes(
+        const std::vector<MachineView>& views);
+    void store_layout_item(const MachineView& view, const tl::core::LevelScript::NodeRecord& n,
+                           tl::formats::LevelSaveState& state, PopulatedItems& populated);
+    void store_portal_items(std::vector<tl::formats::ItemSaveState>& out);
+    void store_standing_breakables(PopulatedItems& populated);
+    tl::formats::CharacterSaveState character_save_state(
+        const MachineView& view, const tl::core::LevelScript::CharacterRecord& c);
+    void order_stored_characters(tl::formats::LevelSaveState& state, StoredUnits& stored_units);
+    void store_character_effects(tl::formats::LevelSaveState& state,
+                                 const StoredUnits& stored_units);
+    std::vector<MachineView> logic_store_views(const std::vector<MachineView>& views);
+    void store_logic_nodes(const std::vector<MachineView>& stored_views,
+                           tl::formats::LevelSaveState& state);
+    /// Its items lying in the level, gold and the rest, into `state`.
+    void store_dropped_items(std::vector<std::pair<uint64_t, tl::formats::ItemSaveState>>& made);
     /// `CGameClient::restoreLevelState`, if remembered.
     void restore_level_state();
     /// The skill texts' context (`skill_effects`) and the player's applied manager from the
@@ -1406,11 +1267,17 @@ public:
     void refresh_skill_effects();
     /// Hand a level script everything it asks the renderer for.
     void wire_script(tl::core::LevelScript& machine);
+    void wire_level_items();
     /// One layout file placed: its gates and random groups rolled, its nodes made into
     /// placements, machines, particles and units, nested links placed in turn; at depth 0
     /// the level's script, grids and viewer too.
     bool place_layout(const std::string& reference, const ogre::Vector3& origin,
                       const ogre::Quaternion& basis, int depth, uint32_t load_seed_arg = 0);
+    /// A skill event's `FILE` placed (`placing_skill_event_layout` while it is).
+    /// A loaded floor's player stood at its start and dropped to the ground.
+    void drop_player_at_start();
+    bool place_skill_event_layout(const std::string& reference, const ogre::Vector3& origin,
+                                  const ogre::Quaternion& basis);
     /// A mod's `Merge/` layouts beside `path`, placed with it (place_layout).
     void place_merge_layouts(const std::string& path, const ogre::Vector3& origin,
                              const ogre::Quaternion& basis, int depth);
@@ -1436,12 +1303,16 @@ public:
     /// ... and each of them made beside `master`, added to the level under
     /// `owner` and made its pet.
     void place_unit_minions(int64_t master, int64_t owner, const std::vector<std::string>& minions);
+    /// The same round a point, the pets' master to be added after; the ids made.
+    std::vector<int64_t> place_unit_minions_at(const tl::core::Vec3& from, int64_t owner,
+                                               const std::vector<std::string>& minions,
+                                               int64_t master = 0);
     int populate_units(const std::string& spawn_class, uint32_t wanted, int level,
                        tl::core::Randomizer& sections, const PopulatePhase& phase);
     /// A `CFormationNode` over `reference` at `at` (`setLayoutFile`);
     /// false when the layout is not in the archive.
     bool add_pending_formation(const std::string& reference, const ogre::Vector3& at,
-                               int monster_level);
+                               int monster_level, const ogre::Vector3& placed);
     /// `CLevel::populate(true)`: formations, counts, the five
     /// unit phases and gold. `placed_pieces` takes the formations placed.
     void populate_level(const tl::core::LevelTemplate& level_template, int level,
@@ -1454,24 +1325,8 @@ public:
                             int64_t group = 0, const ogre::Vector3* piece_at = nullptr,
                             bool recalculate = false);
 
-    /// A collision mesh as add_collision_mesh() folds it in, in its own space, read once per
-    /// level; each placement transforms its points with the same `Matrix4 * Vector3`.
-    /// Defaults: `CCollisionModel::CCollisionModel`.
-    struct CollisionModel {
-        enum class State { Loaded, Threw, Missing } state = State::Missing;
-        /// The load's exception, repeated for every placement as it was before.
-        std::string error;
-        struct Submesh {
-            /// `tl::core::collision_material` of the submesh's name and index.
-            uint32_t material = 0;
-            std::vector<ogre::Vector3> points;
-            /// Three per triangle, each already checked against `points`.
-            std::vector<uint32_t> corners;
-        };
-        std::vector<Submesh> submeshes;
-        bool has_bounds = false;
-        tl::core::Vec3 low, high;
-    };
+    /// A collision mesh as add_collision_mesh() folds it in (core/collision_model.h).
+    using CollisionModel = LevelCollisionModel;
     /// By the path add_collision_mesh() was handed; per level.
     std::unordered_map<std::string, CollisionModel> collision_models;
     const CollisionModel& collision_model(const std::string& path);
@@ -1494,6 +1349,19 @@ public:
     /// Fill `tables.context`. `items_by_type` backs a `UNITTYPE` pick with the item index
     /// (`CUnitResourceList::getDataGroupsByUnitType`).
     void build_spawn_context(SpawnTables& tables, bool items_by_type);
+
+    /// A `Unit Spawner` as the level sees it (core/world_spawners.h).
+    class SpawnerHost;
+
+    /// An input reaching a spawner (`CUnitSpawnerDescriptor::InputLogicEvent`).
+    void spawner_input(const tl::core::ScriptEvent& event);
+    /// `CUnitSpawnerDescriptor::update` for every machine's spawners.
+    void step_spawners(float delta);
+    /// The end of `CGameClient::loadLevel`: `CLevel::updateLayouts(0.001)` on the new level.
+    void settle_loaded_level();
+    /// `CUnitSpawner::unitStateChange` for a released item:
+    /// 3 when picked up.
+    void spawned_item_state(int64_t id, int state);
 };
 
 }  // namespace tl::core

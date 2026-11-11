@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h b/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
-index e44dab5..748804f 100644
+index e44dab5..3501b17 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseSystemManager.h
 @@ -39,6 +39,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -11,7 +11,20 @@ index e44dab5..748804f 100644
  #include "ParticleUniverseCameraDependency.h"
  #include "ParticleUniverseSystemTokens.h"
  #include "ParticleUniverseTechniqueTokens.h"
-@@ -179,6 +181,10 @@ namespace ParticleUniverse
+@@ -165,10 +167,8 @@ namespace ParticleUniverse
+ 			typedef map<String, ParticleSystem*> ParticleSystemTemplateMap;
+ 			ParticleSystemTemplateMap mParticleSystemTemplates;
+ 
+-			/*	The ParticleSystems map contains a list with all particle systems that are created by the manager.
+-			*/
+-			typedef map<String, ParticleSystem*> ParticleSystemMap;
+-			ParticleSystemMap mParticleSystems;
++			// Torchlight's manager keeps no map of the systems it creates
++			// (`ParticleSystemManager::createParticleSystem`).
+ 
+ 			// Factory used to create ParticleSystems
+ 			ParticleSystemFactory* mParticleSystemFactory;
+@@ -179,6 +179,10 @@ namespace ParticleUniverse
  			// Factory used to create SphereSets
  			SphereSetFactory* mSphereSetFactory;
  
@@ -22,7 +35,46 @@ index e44dab5..748804f 100644
  			// Parse functions on ParticleSystemManager level
  			ParticleSystemManagerWriter mParticleSystemManagerWriter;
  
-@@ -584,6 +590,16 @@ namespace ParticleUniverse
+@@ -220,9 +224,10 @@ namespace ParticleUniverse
+ 	        */
+ 			void removeAndDestroyDanglingSceneNodes(Ogre::SceneNode* sceneNode);
+ 
+-			/** Remove all registered templates 
++			/** Torchlight: delete every template, then every alias
++				(`ParticleSystemManager::removeAllParticleSystemTemplates`).
+ 			*/ 
+-			void destroyAllParticleSystemTemplates(void);
++			void removeAllParticleSystemTemplates(void);
+ 
+ 			/** Create a BoxSet. This is similar to a BillboardSet, instead it uses boxes.
+ 			*/
+@@ -533,10 +538,6 @@ namespace ParticleUniverse
+ 			ParticleSystem* createParticleSystem(const String& name, 
+ 				Ogre::SceneManager* sceneManager);
+ 
+-			/** Get a ParticleSystem by name.
+-	        */
+-			ParticleSystem* getParticleSystem(const String& name);
+-
+ 			/** This is the function that must be used by the client application that wants to delete a ParticleSystem. 
+ 	        */
+ 			void destroyParticleSystem(ParticleSystem* particleSystem, Ogre::SceneManager* sceneManager);
+@@ -548,14 +549,6 @@ namespace ParticleUniverse
+ 	        */
+ 			void destroyParticleSystem(const String& particleSystemName, Ogre::SceneManager* sceneManager);
+ 
+-			/** Destroy all registered particle systems.
+-			@remarks
+-				Particle Systems are NOT automatically destroyed if the ParticleSystemManager is destroyed.
+-				The reason is, that the ParticleSystemManager is destroyed when the plugin is unloaded, which is too late.
+-				Before a scene is cleared, all particle systems must be deleted first (manually).
+-			*/ 
+-			void destroyAllParticleSystems(Ogre::SceneManager* sceneManager);
+-
+ 			/** Add an alias to this ParticleSystemManager.
+ 			@remarks
+ 				An alias is a ParticleTechnique, ParticleEmitter, ParticleAffector, etc. and forms the
+@@ -584,6 +577,16 @@ namespace ParticleUniverse
  			/** Override standard Singleton retrieval.
  	        */
  			static ParticleSystemManager& getSingleton (void);
@@ -39,7 +91,7 @@ index e44dab5..748804f 100644
  			
  			/** Override standard Singleton retrieval.
  			*/
-@@ -673,6 +689,71 @@ namespace ParticleUniverse
+@@ -673,6 +676,71 @@ namespace ParticleUniverse
  				This function gives more control over loading the materials.
  	        */
  			void setAutoLoadMaterials(bool autoLoadMaterials);
@@ -111,8 +163,16 @@ index e44dab5..748804f 100644
  	};
  
  	//-----------------------------------------------------------------------
+@@ -686,6 +754,7 @@ namespace ParticleUniverse
+ 		
+ 		public:
+ 			ParticleSystemFactory(void) {};
++			// Torchlight: `ParticleSystemFactory::~ParticleSystemFactory`.
+ 			~ParticleSystemFactory(void) {};
+ 		
+ 			static String PU_FACTORY_TYPE_NAME;
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
-index cb1eae3..ae64ee0 100644
+index cb1eae3..4c9db79 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseSystemManager.cpp
 @@ -29,6 +29,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -246,7 +306,7 @@ index cb1eae3..ae64ee0 100644
  	{
  		// Initialise script deserialisation
  		ScriptCompilerManager::getSingleton().addScriptPattern("*.pua");
-@@ -73,6 +181,13 @@ namespace ParticleUniverse
+@@ -73,16 +181,21 @@ namespace ParticleUniverse
  
  		mSphereSetFactory = PU_NEW SphereSetFactory();
  		Ogre::Root::getSingleton().addMovableObjectFactory(mSphereSetFactory);
@@ -259,22 +319,22 @@ index cb1eae3..ae64ee0 100644
 +		setMaxNumberOfParticles(1000);
  	}
  	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::~ParticleSystemManager`: the
++	// templates and then the aliases go first (`removeAllParticleSystemTemplates`), then the
++	// ParticleSystem, BoxSet and SphereSet factories, and the particle store last.
  	ParticleSystemManager::~ParticleSystemManager (void)
-@@ -80,6 +195,13 @@ namespace ParticleUniverse
- 		// Remove all template + aliasses
- 		destroyAllParticleSystemTemplates();
+ 	{
+-		// Remove all template + aliasses
+-		destroyAllParticleSystemTemplates();
+-
+-		/** Clear the aliasmap and destroy the objects in it 
+-		*/ 
+-		destroyAllAliasses(); 
++		removeAllParticleSystemTemplates();
  
-+		vector<VisualParticle*>::iterator itStore;
-+		for (itStore = mVisualParticleStore.begin(); itStore != mVisualParticleStore.end(); ++itStore)
-+		{
-+			PU_DELETE_T(*itStore, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
-+		}
-+		mVisualParticleStore.clear();
-+
- 		/** Clear the aliasmap and destroy the objects in it 
- 		*/ 
- 		destroyAllAliasses(); 
-@@ -118,6 +240,13 @@ namespace ParticleUniverse
+ 		// Delete the Serializer
+ 		if (mParticleScriptSerializer)
+@@ -118,6 +231,21 @@ namespace ParticleUniverse
  			PU_DELETE mSphereSetFactory;
  			mSphereSetFactory = 0;
  		}
@@ -285,10 +345,18 @@ index cb1eae3..ae64ee0 100644
 +			PU_DELETE mTorchlightRibbonTrailFactory;
 +			mTorchlightRibbonTrailFactory = 0;
 +		}
++
++		vector<VisualParticle*>::iterator itStore;
++		for (itStore = mVisualParticleStore.begin(); itStore != mVisualParticleStore.end(); ++itStore)
++		{
++			PU_DELETE_T(*itStore, VisualParticle, MEMCATEGORY_SCENE_OBJECTS);
++		}
++		mVisualParticleStore.clear();
++		mMaxNumberOfParticles = 0;
  	}
  	//-----------------------------------------------------------------------
  	void ParticleSystemManager::removeAndDestroyDanglingSceneNodes(Ogre::SceneNode* sceneNode)
-@@ -125,6 +254,23 @@ namespace ParticleUniverse
+@@ -125,6 +253,23 @@ namespace ParticleUniverse
  		// Only destroy the SceneNodes that start with "ParticleUniverse"
  		if (sceneNode)
  		{
@@ -312,7 +380,7 @@ index cb1eae3..ae64ee0 100644
  			Ogre::SceneNode::ChildNodeIterator iterator = sceneNode->getChildIterator();
  			while(iterator.hasMoreElements())
  			{
-@@ -135,6 +281,7 @@ namespace ParticleUniverse
+@@ -135,20 +280,25 @@ namespace ParticleUniverse
  					sceneNode->removeAndDestroyChild(name);
  				}
  			}
@@ -320,7 +388,85 @@ index cb1eae3..ae64ee0 100644
  		}
  	}
  	//-----------------------------------------------------------------------
-@@ -250,6 +397,8 @@ namespace ParticleUniverse
+-	void ParticleSystemManager::destroyAllParticleSystemTemplates() 
+-	{ 
+-		// Delete all Particle System Templates 
++	// Torchlight: `ParticleSystemManager::removeAllParticleSystemTemplates`:
++	// the library's template loop, then `destroyAllAliasses`.
++	void ParticleSystemManager::removeAllParticleSystemTemplates()
++	{
++		// Delete all Particle System Templates
+ 		ParticleSystemTemplateMap::iterator t;
+ 		for (t = mParticleSystemTemplates.begin(); t != mParticleSystemTemplates.end(); ++t)
+ 		{
+ 			PU_DELETE t->second;
+ 		}
+ 		mParticleSystemTemplates.clear();
++		destroyAllAliasses();
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createBoxSet` is the library's.
+ 	BoxSet* ParticleSystemManager::createBoxSet(const String& name,
+ 		Ogre::SceneManager* sceneManager,
+ 		const uint poolSize)
+@@ -161,11 +311,13 @@ namespace ParticleUniverse
+ 			&params));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyBoxSet` is the library's.
+ 	void ParticleSystemManager::destroyBoxSet(BoxSet* boxSet, Ogre::SceneManager* sceneManager)
+ 	{
+ 		sceneManager->destroyMovableObject(boxSet);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createSphereSet` is the library's.
+ 	SphereSet* ParticleSystemManager::createSphereSet(const String& name,
+ 		Ogre::SceneManager* sceneManager,
+ 		const uint poolSize)
+@@ -178,22 +330,26 @@ namespace ParticleUniverse
+ 			&params));
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroySphereSet` is the library's.
+ 	void ParticleSystemManager::destroySphereSet(SphereSet* sphereSet, Ogre::SceneManager* sceneManager)
+ 	{
+ 		sceneManager->destroyMovableObject(sphereSet);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::registerAttachable` is the library's.
+ 	void ParticleSystemManager::registerAttachable(Attachable* attachable, Ogre::SceneManager* sceneManager)
+ 	{
+ 		sceneManager->injectMovableObject(attachable);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::unregisterAttachable` is the library's.
+ 	void ParticleSystemManager::unregisterAttachable(Attachable* attachable, Ogre::SceneManager* sceneManager)
+ 	{
+ 		// Note, that the Attachable is not destroyed
+ 		sceneManager->extractMovableObject(attachable);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addEmitterFactory` is the library's.
+ 	void ParticleSystemManager::addEmitterFactory(ParticleEmitterFactory* factory)
+ 	{
+ 		String type = factory->getEmitterType();
+@@ -223,6 +379,7 @@ namespace ParticleUniverse
+ 		mEmitterFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyEmitterFactory` is the library's.
+ 	void ParticleSystemManager::destroyEmitterFactory(const String& emitterType)
+ 	{
+ 		EmitterFactoryMap::iterator it = mEmitterFactories.find(emitterType);
+@@ -236,6 +393,7 @@ namespace ParticleUniverse
+ 		mEmitterFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createEmitter` is the library's.
+ 	ParticleEmitter* ParticleSystemManager::createEmitter(const String& emitterType)
+ 	{
+ 		// Locate emitter type
+@@ -250,6 +408,8 @@ namespace ParticleUniverse
  		return it->second->createEmitter();
  	}
  	//-----------------------------------------------------------------------
@@ -329,7 +475,33 @@ index cb1eae3..ae64ee0 100644
  	ParticleEmitter* ParticleSystemManager::cloneEmitter(ParticleEmitter* emitter)
  	{
  		if (!emitter)
-@@ -281,6 +430,8 @@ namespace ParticleUniverse
+@@ -260,6 +420,8 @@ namespace ParticleUniverse
+ 		return clonedEmitter;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyEmitter`: the emitter's
++	// parent technique is cleared before it is deleted, as in `destroyAffector`.
+ 	void ParticleSystemManager::destroyEmitter(ParticleEmitter* emitter)
+ 	{
+ 		// Locate emitter type
+@@ -267,13 +429,15 @@ namespace ParticleUniverse
+ 
+ 		if (it == mEmitterFactories.end())
+ 		{
+-			EXCEPT(Exception::ERR_INVALIDPARAMS, "PU: Cannot find requested emitter type.", 
++			EXCEPT(Exception::ERR_INVALIDPARAMS, "PU: Cannot find requested emitter type.",
+ 				"ParticleSystemManager::destroyEmitter");
+ 		}
+ 
++		emitter->setParentTechnique(0);
+ 		it->second->destroyEmitter(emitter);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createTechnique` is the library's.
+ 	ParticleTechnique* ParticleSystemManager::createTechnique(void)
+ 	{
+ 		ParticleTechnique* technique = PU_NEW_T(ParticleTechnique, MEMCATEGORY_SCENE_OBJECTS)();
+@@ -281,6 +445,8 @@ namespace ParticleUniverse
  		return technique;
  	}
  	//-----------------------------------------------------------------------
@@ -338,7 +510,38 @@ index cb1eae3..ae64ee0 100644
  	ParticleTechnique* ParticleSystemManager::cloneTechnique(ParticleTechnique* technique)
  	{
  		if (!technique)
-@@ -353,6 +504,8 @@ namespace ParticleUniverse
+@@ -291,12 +457,14 @@ namespace ParticleUniverse
+ 		return clonedTechnique;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyTechnique` is the library's.
+ 	void ParticleSystemManager::destroyTechnique(ParticleTechnique* technique)
+ 	{
+ 		// Deletion must be done by the same object that also created it
+ 		PU_DELETE_T(technique, ParticleTechnique, MEMCATEGORY_SCENE_OBJECTS);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addAffectorFactory` is the library's.
+ 	void ParticleSystemManager::addAffectorFactory(ParticleAffectorFactory* factory)
+ 	{
+ 		String type = factory->getAffectorType();
+@@ -326,6 +494,7 @@ namespace ParticleUniverse
+ 		mAffectorFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyAffectorFactory` is the library's.
+ 	void ParticleSystemManager::destroyAffectorFactory(const String& affectorType)
+ 	{
+ 		AffectorFactoryMap::iterator it = mAffectorFactories.find(affectorType);
+@@ -339,6 +508,7 @@ namespace ParticleUniverse
+ 		mAffectorFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createAffector` is the library's.
+ 	ParticleAffector* ParticleSystemManager::createAffector(const String& affectorType)
+ 	{
+ 		// Locate affector type
+@@ -353,6 +523,8 @@ namespace ParticleUniverse
  		return it->second->createAffector();
  	}
  	//-----------------------------------------------------------------------
@@ -347,7 +550,7 @@ index cb1eae3..ae64ee0 100644
  	ParticleAffector* ParticleSystemManager::cloneAffector(ParticleAffector* affector)
  	{
  		if (!affector)
-@@ -363,6 +516,11 @@ namespace ParticleUniverse
+@@ -363,6 +535,11 @@ namespace ParticleUniverse
  		return clonedAffector;
  	}
  	//-----------------------------------------------------------------------
@@ -359,7 +562,7 @@ index cb1eae3..ae64ee0 100644
  	void ParticleSystemManager::destroyAffector(ParticleAffector* affector)
  	{
  		// Locate affector type
-@@ -370,10 +528,11 @@ namespace ParticleUniverse
+@@ -370,13 +547,15 @@ namespace ParticleUniverse
  
  		if (it == mAffectorFactories.end())
  		{
@@ -372,7 +575,19 @@ index cb1eae3..ae64ee0 100644
  		it->second->destroyAffector(affector);
  	}
  	//-----------------------------------------------------------------------
-@@ -433,6 +592,8 @@ namespace ParticleUniverse
++	// Torchlight: `ParticleSystemManager::addObserverFactory` is the library's.
+ 	void ParticleSystemManager::addObserverFactory(ParticleObserverFactory* factory)
+ 	{
+ 		String type = factory->getObserverType();
+@@ -419,6 +598,7 @@ namespace ParticleUniverse
+ 		mObserverFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createObserver` is the library's.
+ 	ParticleObserver* ParticleSystemManager::createObserver(const String& observerType)
+ 	{
+ 		// Locate Observer type
+@@ -433,6 +613,8 @@ namespace ParticleUniverse
  		return it->second->createObserver();
  	}
  	//-----------------------------------------------------------------------
@@ -381,7 +596,31 @@ index cb1eae3..ae64ee0 100644
  	ParticleObserver* ParticleSystemManager::cloneObserver(ParticleObserver* observer)
  	{
  		if (!observer)
-@@ -514,6 +675,8 @@ namespace ParticleUniverse
+@@ -443,6 +625,7 @@ namespace ParticleUniverse
+ 		return clonedObserver;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyObserver` is the library's.
+ 	void ParticleSystemManager::destroyObserver(ParticleObserver* observer)
+ 	{
+ 		// Locate Observer type
+@@ -457,6 +640,7 @@ namespace ParticleUniverse
+ 		it->second->destroyObserver(observer);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addEventHandlerFactory` is the library's.
+ 	void ParticleSystemManager::addEventHandlerFactory(ParticleEventHandlerFactory* factory)
+ 	{
+ 		String type = factory->getEventHandlerType();
+@@ -499,6 +683,7 @@ namespace ParticleUniverse
+ 		mEventHandlerFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createEventHandler` is the library's.
+ 	ParticleEventHandler* ParticleSystemManager::createEventHandler(const String& eventHandlerType)
+ 	{
+ 		// Locate EventHandler type
+@@ -514,6 +699,8 @@ namespace ParticleUniverse
  		return it->second->createEventHandler();
  	}
  	//-----------------------------------------------------------------------
@@ -390,7 +629,39 @@ index cb1eae3..ae64ee0 100644
  	ParticleEventHandler* ParticleSystemManager::cloneEventHandler(ParticleEventHandler* eventHandler)
  	{
  		if (!eventHandler)
-@@ -602,6 +765,11 @@ namespace ParticleUniverse
+@@ -524,6 +711,7 @@ namespace ParticleUniverse
+ 		return clonedEventHandler;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyEventHandler` is the library's.
+ 	void ParticleSystemManager::destroyEventHandler(ParticleEventHandler* eventHandler)
+ 	{
+ 		// Locate EventHandler type
+@@ -539,6 +727,7 @@ namespace ParticleUniverse
+ 		it->second->destroyEventHandler(eventHandler);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addRendererFactory` is the library's.
+ 	void ParticleSystemManager::addRendererFactory(ParticleRendererFactory* factory)
+ 	{
+ 		String type = factory->getRendererType();
+@@ -568,6 +757,7 @@ namespace ParticleUniverse
+ 		mRendererFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyRendererFactory` is the library's.
+ 	void ParticleSystemManager::destroyRendererFactory(const String& rendererType)
+ 	{
+ 		RendererFactoryMap::iterator it = mRendererFactories.find(rendererType);
+@@ -581,6 +771,7 @@ namespace ParticleUniverse
+ 		mRendererFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createRenderer` is the library's.
+ 	ParticleRenderer* ParticleSystemManager::createRenderer(const String& rendererType)
+ 	{
+ 		// Locate renderer type
+@@ -602,9 +793,15 @@ namespace ParticleUniverse
  
  		ParticleRenderer* clonedRenderer = createRenderer(renderer->getRendererType());
  		renderer->copyAttributesTo(clonedRenderer);
@@ -402,7 +673,35 @@ index cb1eae3..ae64ee0 100644
  		return clonedRenderer;
  	}
  	//-----------------------------------------------------------------------
-@@ -675,6 +843,8 @@ namespace ParticleUniverse
++	// Torchlight: `ParticleSystemManager::destroyRenderer` is the library's.
+ 	void ParticleSystemManager::destroyRenderer(ParticleRenderer* renderer)
+ 	{
+ 		// Locate renderer type
+@@ -619,6 +816,7 @@ namespace ParticleUniverse
+ 		it->second->destroyRenderer(renderer);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addExternFactory` is the library's.
+ 	void ParticleSystemManager::addExternFactory(ExternFactory* factory)
+ 	{
+ 		String type = factory->getExternType();
+@@ -648,6 +846,7 @@ namespace ParticleUniverse
+ 		mExternFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyExternFactory` is the library's.
+ 	void ParticleSystemManager::destroyExternFactory(const String& externType)
+ 	{
+ 		ExternFactoryMap::iterator it = mExternFactories.find(externType);
+@@ -661,6 +860,7 @@ namespace ParticleUniverse
+ 		mExternFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createExtern` is the library's.
+ 	Extern* ParticleSystemManager::createExtern(const String& externType)
+ 	{
+ 		// Locate Extern type
+@@ -675,6 +875,8 @@ namespace ParticleUniverse
  		return it->second->createExtern();
  	}
  	//-----------------------------------------------------------------------
@@ -411,7 +710,39 @@ index cb1eae3..ae64ee0 100644
  	Extern* ParticleSystemManager::cloneExtern(Extern* externObject)
  	{
  		if (!externObject)
-@@ -755,6 +925,8 @@ namespace ParticleUniverse
+@@ -685,6 +887,7 @@ namespace ParticleUniverse
+ 		return clonedExtern;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyExtern` is the library's.
+ 	void ParticleSystemManager::destroyExtern(Extern* externObject)
+ 	{
+ 		// Locate extern type
+@@ -699,6 +902,7 @@ namespace ParticleUniverse
+ 		it->second->destroyExtern(externObject);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addBehaviourFactory` is the library's.
+ 	void ParticleSystemManager::addBehaviourFactory(ParticleBehaviourFactory* factory)
+ 	{
+ 		String type = factory->getBehaviourType();
+@@ -728,6 +932,7 @@ namespace ParticleUniverse
+ 		mBehaviourFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyBehaviourFactory` is the library's.
+ 	void ParticleSystemManager::destroyBehaviourFactory(const String& behaviourType)
+ 	{
+ 		BehaviourFactoryMap::iterator it = mBehaviourFactories.find(behaviourType);
+@@ -741,6 +946,7 @@ namespace ParticleUniverse
+ 		mBehaviourFactories.erase(it);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createBehaviour` is the library's.
+ 	ParticleBehaviour* ParticleSystemManager::createBehaviour(const String& behaviourType)
+ 	{
+ 		// Locate Behaviour type
+@@ -755,6 +961,8 @@ namespace ParticleUniverse
  		return it->second->createBehaviour();
  	}
  	//-----------------------------------------------------------------------
@@ -420,3 +751,281 @@ index cb1eae3..ae64ee0 100644
  	ParticleBehaviour* ParticleSystemManager::cloneBehaviour(ParticleBehaviour* behaviour)
  	{
  		if (!behaviour)
+@@ -765,6 +973,7 @@ namespace ParticleUniverse
+ 		return clonedBehaviour;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyBehaviour` is the library's.
+ 	void ParticleSystemManager::destroyBehaviour(ParticleBehaviour* behaviour)
+ 	{
+ 		// Locate Behaviour type
+@@ -779,26 +988,21 @@ namespace ParticleUniverse
+ 		it->second->destroyBehaviour(behaviour);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createParticleSystemTemplate`: a
++	// name already in use throws, where the library makes a "CopyOf" copy. The last created name is
++	// the library's own (its script translators read it).
+ 	ParticleSystem* ParticleSystemManager::createParticleSystemTemplate(const String& name, const String& resourceGroupName)
+ 	{
+-		// Validate name and add a prefix if needed.
+-		String expName = name;
+-		if (mParticleSystemTemplates.find(expName) != mParticleSystemTemplates.end())
++		if (mParticleSystemTemplates.find(name) != mParticleSystemTemplates.end())
+ 		{
+-			String message = "ParticleUniverse: Particle System template '" + expName + "' already exists; ";
+-#ifdef REPLACE_TEMPLATE_IF_EXISTING
+-			// Not defined, so delete the old template
+-			destroyParticleSystemTemplate(expName);
+-			LogManager::getSingleton().logMessage(message + "old template deleted.");
+-#else
+-			LogManager::getSingleton().logMessage(message + "create copy.");
+-			expName = String("CopyOf") + expName;
+-#endif
++			EXCEPT(Exception::ERR_DUPLICATE_ITEM,
++				"PU: ParticleSystem template with name '" + name + "' already exists.",
++				"ParticleSystemManager::createParticleSystemTemplate");
+ 		}
+ 
+-		ParticleSystem* particleSystemTemplate = PU_NEW ParticleSystem(expName, resourceGroupName);
+-		addParticleSystemTemplate(expName, particleSystemTemplate);
+-		mLastCreatedParticleSystemTemplateName = expName;
++		ParticleSystem* particleSystemTemplate = PU_NEW ParticleSystem(name, resourceGroupName);
++		addParticleSystemTemplate(name, particleSystemTemplate);
++		mLastCreatedParticleSystemTemplateName = name;
+ 
+ 		return particleSystemTemplate;
+ 	}
+@@ -818,6 +1022,7 @@ namespace ParticleUniverse
+ 		return mLastCreatedParticleSystemTemplateName;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addParticleSystemTemplate` is the library's.
+ 	void ParticleSystemManager::addParticleSystemTemplate(const String& name, ParticleSystem* systemTemplate)
+ 	{
+ 		// Validate name
+@@ -832,6 +1037,7 @@ namespace ParticleUniverse
+ 		LogManager::getSingleton().logMessage("ParticleUniverse: Particle System Template '" + name + "' registered");
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::getParticleSystemTemplate` is the library's.
+ 	ParticleSystem* ParticleSystemManager::getParticleSystemTemplate(const String& templateName)
+ 	{
+ 		ParticleSystemTemplateMap::iterator i = mParticleSystemTemplates.find(templateName);
+@@ -853,6 +1059,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::particleSystemTemplateNames` is the library's.
+ 	void ParticleSystemManager::particleSystemTemplateNames(vector<String>& v)
+ 	{
+ 		ParticleSystemTemplateMap::iterator it;
+@@ -863,119 +1070,53 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createParticleSystem` (with a template;
++	// without): the movable object made and handed its scene manager. No name
++	// is checked and no map of systems kept (the library's `getParticleSystem` and
++	// `destroyAllParticleSystems` are not in Torchlight's), and the template's name is not stored.
+ 	ParticleSystem* ParticleSystemManager::createParticleSystem(const String& name,
+ 		const String& templateName,
+ 		Ogre::SceneManager* sceneManager)
+ 	{
+-		// Validate name
+-		if (mParticleSystems.find(name) != mParticleSystems.end())
+-		{
+-			EXCEPT(Exception::ERR_DUPLICATE_ITEM, 
+-				"PU: ParticleSystem with name '" + name + "' already exists.", 
+-				"ParticleSystemManager::createParticleSystem");
+-		}
+-
+ 		Ogre::NameValuePairList params;
+ 		params["templateName"] = templateName;
+-	
++
+ 		ParticleSystem* system = static_cast<ParticleSystem*>(
+ 			sceneManager->createMovableObject(name, ParticleSystemFactory::PU_FACTORY_TYPE_NAME,
+ 			&params));
+ 		system->setSceneManager(sceneManager);
+-		system->setTemplateName(templateName);
+-		mParticleSystems[name] = system;
+ 		return system;
+ 	}
+ 	//-----------------------------------------------------------------------
+ 	ParticleSystem* ParticleSystemManager::createParticleSystem(const String& name,
+ 		Ogre::SceneManager* sceneManager)
+ 	{
+-		// Validate name
+-		if (mParticleSystems.find(name) != mParticleSystems.end())
+-		{
+-			EXCEPT(Exception::ERR_DUPLICATE_ITEM, 
+-				"PU: ParticleSystem with name '" + name + "' already exists.", 
+-				"ParticleSystemManager::createParticleSystem");
+-		}
+-
+ 		Ogre::NameValuePairList params;
+ 		ParticleSystem* system = static_cast<ParticleSystem*>(
+-		sceneManager->createMovableObject(name, ParticleSystemFactory::PU_FACTORY_TYPE_NAME, 
++		sceneManager->createMovableObject(name, ParticleSystemFactory::PU_FACTORY_TYPE_NAME,
+ 			&params));
+ 		system->setSceneManager(sceneManager);
+-		mParticleSystems[name] = system;
+ 		return system;
+ 	}
+ 	//-----------------------------------------------------------------------
+-	ParticleSystem* ParticleSystemManager::getParticleSystem(const String& name)
+-	{
+-		if (name == BLANK_STRING)
+-			return 0;
+-
+-		ParticleSystemMap::iterator i = mParticleSystems.find(name);
+-		if (i != mParticleSystems.end())
+-		{
+-			return i->second;
+-		}
+-	
+-		return 0;
+-	}
+-	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyParticleSystem`: the
++	// scene manager destroys it, unchecked.
+ 	void ParticleSystemManager::destroyParticleSystem(ParticleSystem* particleSystem, Ogre::SceneManager* sceneManager)
+ 	{
+-		if (!particleSystem)
+-			return;
+-
+-		ParticleSystemMap::iterator i = mParticleSystems.find(particleSystem->getName());
+-		if (i != mParticleSystems.end())
+-		{
+-			mParticleSystems.erase(i);
+-		}
+-
+-		// First determine whether the Particle System still exists, before it is really destroyed.
+-		if (sceneManager->hasMovableObject(particleSystem->getName(), ParticleSystemFactory::PU_FACTORY_TYPE_NAME))
+-		{
+-			sceneManager->destroyMovableObject(particleSystem);
+-		}
++		sceneManager->destroyMovableObject(particleSystem);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: by name, only if the scene manager still has it.
+ 	void ParticleSystemManager::destroyParticleSystem(const String& particleSystemName, Ogre::SceneManager* sceneManager)
+ 	{
+-		// Remove it from the map although it doesn�t exist anymore
+-		ParticleSystemMap::iterator i = mParticleSystems.find(particleSystemName);
+-		if (i != mParticleSystems.end())
+-		{
+-			mParticleSystems.erase(i);
+-		}
+-
+-		// First determine whether the Particle System still exists, before it is really destroyed.
+ 		if (sceneManager->hasMovableObject(particleSystemName, ParticleSystemFactory::PU_FACTORY_TYPE_NAME))
+ 		{
+ 			sceneManager->destroyMovableObject(particleSystemName, ParticleSystemFactory::PU_FACTORY_TYPE_NAME);
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
+-	void ParticleSystemManager::destroyAllParticleSystems(Ogre::SceneManager* sceneManager)
+-	{
+-		// Changed function in V1.3.1
+-		// Delete all Particle Systems in the specified sceneManager. This doesn�t include the templates
+-		// changed this function.
+-		ParticleSystemMap::iterator t = mParticleSystems.begin();
+-		while ( t != mParticleSystems.end() )
+-		{
+-			ParticleSystem* particleSystem = t->second;
+-			if (sceneManager->hasMovableObject(particleSystem->getName(), ParticleSystemFactory::PU_FACTORY_TYPE_NAME))
+-			{
+-				sceneManager->destroyMovableObject(particleSystem);
+-				mParticleSystems.erase( t++ ); // PU 1.4
+-			}
+-			else
+-			{
+-				++t;
+-			}
+-		}
+-	}
+-	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::_createSystemImpl`
++	// is the library's.
+ 	ParticleSystem* ParticleSystemManager::_createSystemImpl(const String& name)
+ 	{
+ 		ParticleSystem* sys = PU_NEW ParticleSystem(name);
+@@ -999,11 +1140,13 @@ namespace ParticleUniverse
+ 		return sys;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::_destroySystemImpl` is the library's.
+ 	void ParticleSystemManager::_destroySystemImpl(ParticleSystem* particleSystem)
+ 	{
+ 		PU_DELETE particleSystem;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::addAlias` is the library's.
+ 	void ParticleSystemManager::addAlias (IAlias* alias)
+ 	{
+ 		String name = alias->getAliasName();
+@@ -1011,6 +1154,7 @@ namespace ParticleUniverse
+ 		LogManager::getSingleton().logMessage("ParticleUniverse: Alias '" + name + "' registered");
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::getAlias` is the library's.
+ 	IAlias* ParticleSystemManager::getAlias (const String& aliasName)
+ 	{
+ 		AliasMap::iterator it = mAliasMap.find(aliasName);
+@@ -1023,6 +1167,7 @@ namespace ParticleUniverse
+ 		return it->second;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyAlias` is the library's.
+ 	void ParticleSystemManager::destroyAlias(IAlias* alias)
+ 	{
+ 		switch (alias->getAliasType())
+@@ -1090,6 +1235,7 @@ namespace ParticleUniverse
+ 		}
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::destroyAllAliasses` is the library's.
+ 	void ParticleSystemManager::destroyAllAliasses(void)
+ 	{
+ 		AliasMap::iterator it;
+@@ -1110,6 +1256,7 @@ namespace ParticleUniverse
+ 		return msSingleton;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::getSingleton` is the library's.
+ 	ParticleSystemManager& ParticleSystemManager::getSingleton(void)
+ 	{
+ 		assert( msSingleton );  return ( *msSingleton );
+@@ -1130,6 +1277,7 @@ namespace ParticleUniverse
+ 		return mParticleScriptSerializer;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemManager::createCameraDependency` is the library's.
+ 	CameraDependency* ParticleSystemManager::createCameraDependency(void)
+ 	{
+ 		mCameraDependency.setThreshold(1000);
+@@ -1432,6 +1580,8 @@ namespace ParticleUniverse
+ 	//-----------------------------------------------------------------------
+ 	String ParticleSystemFactory::PU_FACTORY_TYPE_NAME = "PUParticleSystem";
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemFactory::createInstanceImpl` is the library's, but reads
++	// the list without testing it for null (every caller passes one).
+ 	Ogre::MovableObject* ParticleSystemFactory::createInstanceImpl( const String& name, 
+ 		const Ogre::NameValuePairList* params)
+ 	{
+@@ -1451,11 +1601,13 @@ namespace ParticleUniverse
+ 		return ParticleSystemManager::getSingleton()._createSystemImpl(name);
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemFactory::getType` is the library's.
+ 	const String& ParticleSystemFactory::getType(void) const
+ 	{
+ 		return PU_FACTORY_TYPE_NAME;
+ 	}
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleSystemFactory::destroyInstance` is the library's.
+ 	void ParticleSystemFactory::destroyInstance(Ogre::MovableObject* obj)
+ 	{
+ 		// Use manager

@@ -11,6 +11,7 @@
 #include "core/input.h"
 
 #include "core/gamepad.h"
+#include "core/log.h"
 #include "platform/desktop/typed_keys.h"
 
 #if defined(_WIN32)
@@ -33,8 +34,11 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
+#include <vector>
 #endif
 
 #include <cmath>
@@ -92,14 +96,17 @@ enum class Key {
     KeypadMinus,
     P,
     C,
-    O
+    O,
+    J,
+    Alt
 };
 
-constexpr int kKeyCount = static_cast<int>(Key::O) + 1;
+constexpr int kKeyCount = static_cast<int>(Key::Alt) + 1;
 
 bool focused();
 bool key_down(Key key);
 bool read_pad(PadReading& pad);
+void read_pointer(InputState& in);
 
 /// Typed since the last take, as UTF-8, while a line is being typed.
 std::string g_typed;
@@ -211,7 +218,47 @@ void map_keyboard_buttons(InputState& in) {
     in.pet_stance = in.pet_stance || key_down(Key::O);
 }
 
+// The PC's keys, by its default bindings. Under the mouse controls the letters are these
+// and not a pad's: the arrows still walk the console's menus, Enter is A, Backspace B,
+// Escape START, Tab BACK, Q and E the triggers, X and Y the two face buttons.
+void map_pc_keyboard(InputState& in, float& x, float& y) {
+    if (key_down(Key::Left)) x -= 1.0f, in.stick_x -= 1.0f;
+    if (key_down(Key::Right)) x += 1.0f, in.stick_x += 1.0f;
+    if (key_down(Key::Down)) y -= 1.0f, in.stick_y -= 1.0f;
+    if (key_down(Key::Up)) y += 1.0f, in.stick_y += 1.0f;
+    in.confirm = in.confirm || key_down(Key::Return);
+    in.skip = in.skip || key_down(Key::Backspace);
+    in.attack = in.attack || key_down(Key::X);
+    in.action_y = in.action_y || key_down(Key::Y) || key_down(Key::Delete);
+    in.quit = in.quit || key_down(Key::Escape);
+    in.inventory = in.inventory || key_down(Key::Tab);
+    in.menu_prev = in.menu_prev || key_down(Key::Q);
+    in.menu_next = in.menu_next || key_down(Key::E);
+    in.map_toggle = in.map_toggle || key_down(Key::M);
+    in.fps_toggle = in.fps_toggle || key_down(Key::F);
+    // `KEYMAP_AUTOMAPZOOMIN` and `ZOOMOUT` are the two brackets, as the pad's stand-ins are.
+    in.map_zoom_in = key_down(Key::BracketRight);
+    in.map_zoom_out = key_down(Key::BracketLeft);
+    if (key_down(Key::C)) in.dpad_x = 1.0f;
+    const auto bit = [&](Key key, std::uint32_t flag) {
+        if (key_down(key)) in.pc_keys |= flag;
+    };
+    bit(Key::I, pc_key::kInventory);
+    bit(Key::C, pc_key::kStats);
+    bit(Key::S, pc_key::kSkills);
+    bit(Key::Q, pc_key::kQuests);
+    bit(Key::J, pc_key::kJournal);
+    bit(Key::P, pc_key::kPet);
+    bit(Key::W, pc_key::kWeaponSet);
+    bit(Key::A, pc_key::kAutomap);
+    bit(Key::Space, pc_key::kCloseAll);
+    bit(Key::Plus, pc_key::kZoomIn);
+    bit(Key::Minus, pc_key::kZoomOut);
+    bit(Key::Alt, pc_key::kShowItems);
+}
+
 void map_keyboard(InputState& in, float& x, float& y) {
+    if (mouse_controls()) return map_pc_keyboard(in, x, y);
     map_keyboard_movement(in, x, y);
     map_keyboard_buttons(in);
 }
@@ -224,10 +271,11 @@ bool focused() { return GetActiveWindow() != nullptr; }
 
 bool key_down(Key key) {
     static constexpr int kVirtualKeys[] = {
-        'A',       'D',         'S',      'W',          VK_LEFT,     VK_RIGHT, VK_DOWN,  VK_UP,
-        VK_PRIOR,  VK_NEXT,     VK_SPACE, VK_RETURN,    VK_BACK,     'X',      'Y',      VK_DELETE,
-        VK_ESCAPE, 'I',         VK_TAB,   'Q',          'E',         VK_OEM_4, VK_OEM_6, 'M',
-        'F',       VK_OEM_PLUS, VK_ADD,   VK_OEM_MINUS, VK_SUBTRACT, 'P',      'C',      'O'};
+        'A',         'D',       'S',       'W',      VK_LEFT,     VK_RIGHT, VK_DOWN,
+        VK_UP,       VK_PRIOR,  VK_NEXT,   VK_SPACE, VK_RETURN,   VK_BACK,  'X',
+        'Y',         VK_DELETE, VK_ESCAPE, 'I',      VK_TAB,      'Q',      'E',
+        VK_OEM_4,    VK_OEM_6,  'M',       'F',      VK_OEM_PLUS, VK_ADD,   VK_OEM_MINUS,
+        VK_SUBTRACT, 'P',       'C',       'O',      'J',         VK_MENU};
     return (GetAsyncKeyState(kVirtualKeys[static_cast<int>(key)]) & 0x8000) != 0;
 }
 
@@ -270,6 +318,34 @@ bool read_pad(PadReading& pad) {
 
 /// WM_CHAR arrives through the event pump instead (note_typed_unit).
 void read_key_events() {}
+
+/// The pointer over the game's window, its buttons, Shift and the digit keys.
+void read_pointer(InputState& in) {
+    HWND window = GetActiveWindow();
+    POINT at{};
+    RECT client{};
+    if (window == nullptr || GetCursorPos(&at) == 0 || ScreenToClient(window, &at) == 0 ||
+        GetClientRect(window, &client) == 0 || client.right <= 0 || client.bottom <= 0) {
+        return;
+    }
+    const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+    in.hold_position = down(VK_SHIFT);
+    in.control = down(VK_CONTROL);
+    for (int digit = 0; digit < 10; ++digit) {
+        if (down('0' + digit)) {
+            in.slot_keys |= static_cast<std::uint16_t>(1u << (digit == 0 ? 9 : digit - 1));
+        }
+    }
+    if (at.x < 0 || at.y < 0 || at.x >= client.right || at.y >= client.bottom) return;
+    in.pointer = true;
+    in.pointer_x = static_cast<float>(at.x) / static_cast<float>(client.right);
+    in.pointer_y = static_cast<float>(at.y) / static_cast<float>(client.bottom);
+    // The buttons as the user's settings have them: a left-handed mouse swaps the two.
+    const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+    in.pointer_left = down(swapped ? VK_RBUTTON : VK_LBUTTON);
+    in.pointer_right = down(swapped ? VK_LBUTTON : VK_RBUTTON);
+    in.pointer_middle = down(VK_MBUTTON);
+}
 
 #else
 
@@ -336,7 +412,7 @@ bool key_down(Key key) {
         XK_BackSpace, XK_x,     XK_y,      XK_Delete,      XK_Escape,       XK_i,
         XK_Tab,       XK_q,     XK_e,      XK_bracketleft, XK_bracketright, XK_m,
         XK_f,         XK_equal, XK_KP_Add, XK_minus,       XK_KP_Subtract,  XK_p,
-        XK_c,         XK_o};
+        XK_c,         XK_o,     XK_j,      XK_Alt_L};
     Display* display = x_display();
     if (display == nullptr) return false;
     // One query a frame would do, but the keymap is a single round trip; kept simple.
@@ -344,6 +420,46 @@ bool key_down(Key key) {
     XQueryKeymap(display, keys);
     const KeyCode code = XKeysymToKeycode(display, kSyms[static_cast<int>(key)]);
     return code != 0 && (keys[code / 8] & (1 << (code % 8))) != 0;
+}
+
+/// The pointer over the game's window, its buttons, Shift and the digit keys.
+void read_pointer(InputState& in) {
+    Display* display = x_display();
+    if (display == nullptr || g_window == 0) return;
+    char keys[32] = {};
+    XQueryKeymap(display, keys);
+    const auto down = [&](KeySym sym) {
+        const KeyCode code = XKeysymToKeycode(display, sym);
+        return code != 0 && (keys[code / 8] & (1 << (code % 8))) != 0;
+    };
+    in.hold_position = down(XK_Shift_L) || down(XK_Shift_R);
+    in.control = down(XK_Control_L) || down(XK_Control_R);
+    for (int digit = 0; digit < 10; ++digit) {
+        if (down(XK_0 + static_cast<KeySym>(digit))) {
+            in.slot_keys |= static_cast<std::uint16_t>(1u << (digit == 0 ? 9 : digit - 1));
+        }
+    }
+    Window root = 0, child = 0;
+    int root_x = 0, root_y = 0, x = 0, y = 0;
+    unsigned mask = 0;
+    if (XQueryPointer(display, g_window, &root, &child, &root_x, &root_y, &x, &y, &mask) == 0) {
+        return;
+    }
+    Window geometry_root = 0;
+    int left = 0, top = 0;
+    unsigned width = 0, height = 0, border = 0, depth = 0;
+    if (XGetGeometry(display, g_window, &geometry_root, &left, &top, &width, &height, &border,
+                     &depth) == 0 ||
+        width == 0 || height == 0) {
+        return;
+    }
+    if (x < 0 || y < 0 || x >= static_cast<int>(width) || y >= static_cast<int>(height)) return;
+    in.pointer = true;
+    in.pointer_x = static_cast<float>(x) / static_cast<float>(width);
+    in.pointer_y = static_cast<float>(y) / static_cast<float>(height);
+    in.pointer_left = (mask & Button1Mask) != 0;
+    in.pointer_right = (mask & Button3Mask) != 0;
+    in.pointer_middle = (mask & Button2Mask) != 0;
 }
 
 // --- Linux: evdev for the pad ----------------------------------------------------------------
@@ -375,29 +491,66 @@ bool reports_by_place(int fd) {
     return id.vendor == 0x054c || id.vendor == 0x057e;
 }
 
-/// The first /dev/input/event* that is a gamepad (it has BTN_SOUTH), opened without blocking.
+/// Another client holds the device exclusively (EVIOCGRAB): its events reach nobody else. Steam
+/// grabs a physical pad to run its desktop layout or Steam Input, and feeds games a virtual
+/// X-Box 360 pad instead; the grabbed node is a pad that answers nothing. Probed by taking the
+/// grab for an instant and letting it go.
+bool grabbed_elsewhere(int fd) {
+    if (ioctl(fd, EVIOCGRAB, 1) < 0) return errno == EBUSY;
+    (void)ioctl(fd, EVIOCGRAB, 0);
+    return false;
+}
+
+bool is_gamepad(int fd) {
+    unsigned long keys[(KEY_CNT + sizeof(unsigned long) * 8 - 1) / (sizeof(unsigned long) * 8)] =
+        {};
+    return ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) >= 0 && has_bit(keys, BTN_SOUTH);
+}
+
+std::string device_name(int fd) {
+    char name[128] = {};
+    if (ioctl(fd, EVIOCGNAME(sizeof name - 1), name) < 0) return "?";
+    return name;
+}
+
+/// The first /dev/input/event* that is a gamepad (it has BTN_SOUTH) and that nobody holds
+/// exclusively, opened without blocking. Walked in number order: readdir's order is the
+/// filesystem's, and a choice between two pads is to be the same on every launch.
 int open_gamepad(input_absinfo* axes) {
     DIR* dir = opendir("/dev/input");
     if (dir == nullptr) return -1;
-    int found = -1;
+    std::vector<int> numbers;
     while (dirent* entry = readdir(dir)) {
         const std::string name = entry->d_name;
-        if (name.rfind("event", 0) != 0) continue;
-        const int fd = open(("/dev/input/" + name).c_str(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0) continue;
-        unsigned long
-            keys[(KEY_CNT + sizeof(unsigned long) * 8 - 1) / (sizeof(unsigned long) * 8)] = {};
-        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) >= 0 && has_bit(keys, BTN_SOUTH)) {
-            for (int axis : {ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y}) {
-                (void)ioctl(fd, EVIOCGABS(axis), &axes[axis]);
-            }
-            found = fd;
-            break;
-        }
-        close(fd);
+        if (name.rfind("event", 0) != 0 || name.size() == 5) continue;
+        char* end = nullptr;
+        const long number = std::strtol(name.c_str() + 5, &end, 10);
+        if (end == nullptr || *end != '\0') continue;
+        numbers.push_back(static_cast<int>(number));
     }
     closedir(dir);
-    return found;
+    std::sort(numbers.begin(), numbers.end());
+    for (const int number : numbers) {
+        const std::string path = "/dev/input/event" + std::to_string(number);
+        const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+        if (fd < 0) continue;
+        if (!is_gamepad(fd)) {
+            close(fd);
+            continue;
+        }
+        if (grabbed_elsewhere(fd)) {
+            TL_LOG_INFO("pad %s (%s) is held by another program; skipped", path.c_str(),
+                        device_name(fd).c_str());
+            close(fd);
+            continue;
+        }
+        for (int axis : {ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y}) {
+            (void)ioctl(fd, EVIOCGABS(axis), &axes[axis]);
+        }
+        TL_LOG_INFO("pad: %s (%s)", path.c_str(), device_name(fd).c_str());
+        return fd;
+    }
+    return -1;
 }
 
 /// An axis as a signed 16-bit stick value; `flip` for the vertical ones, which evdev counts down.
@@ -472,12 +625,21 @@ void apply_event(EvdevPad& pad, const input_event& event) {
     }
 }
 
-/// The pad's state, events read since the last frame folded in. A pad unplugged is let go and
-/// looked for again every couple of seconds, as the Windows build looks for its XInput pad.
+/// The pad's state, events read since the last frame folded in. A pad unplugged, or taken by
+/// another program since it was opened, is let go and looked for again every couple of seconds,
+/// as the Windows build looks for its XInput pad.
 bool read_pad(PadReading& out) {
     EvdevPad& pad = evdev_pad();
+    const auto now = std::chrono::steady_clock::now();
+    if (pad.fd >= 0 && now >= pad.next_search) {
+        pad.next_search = now + std::chrono::seconds(2);
+        if (grabbed_elsewhere(pad.fd)) {
+            TL_LOG_INFO("pad taken by another program; looking for another");
+            close(pad.fd);
+            pad.fd = -1;
+        }
+    }
     if (pad.fd < 0) {
-        const auto now = std::chrono::steady_clock::now();
         if (now < pad.next_search) return false;
         pad.next_search = now + std::chrono::seconds(2);
         pad.fd = open_gamepad(pad.axes);
@@ -504,6 +666,9 @@ bool read_pad(PadReading& out) {
 /// The keys were typing a line and some are still down: the Enter that ended it is not also A.
 bool g_keys_typing = false;
 
+/// The wheel's turns since the last poll.
+int g_wheel = 0;
+
 }  // namespace
 
 InputState poll_platform_input() {
@@ -522,6 +687,9 @@ InputState poll_platform_input() {
         g_keys_typing = false;
     }
     if (!g_keys_typing) map_keyboard(in, x, y);
+    if (mouse_controls() && !g_keys_typing) read_pointer(in);
+    in.pointer_wheel = g_wheel;
+    g_wheel = 0;
 
     // Clamp to the unit disc so a diagonal is not 1.41 times as fast, as the console's round stick.
     const float m = std::sqrt(x * x + y * y);
@@ -546,6 +714,8 @@ bool text_entry(const std::string& /*title*/, const std::string& /*guide*/, std:
 }
 
 bool typing_in_window() { return true; }
+
+void note_wheel(int units) { g_wheel += units; }
 
 std::string take_platform_typed_text() {
     read_key_events();

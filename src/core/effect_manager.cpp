@@ -2,6 +2,7 @@
 // of the engine asks it for. See `effect_manager.h`.
 #include "core/effect_manager.h"
 #include "core/item_use.h"
+#include "core/random.h"
 #include "core/unit_themes.h"
 
 #include <algorithm>
@@ -138,7 +139,11 @@ bool EffectManager::offer_effect(const Effect& effect, const std::string& affix,
         return true;
     }
     Effect copy = effect;
-    if (!context_.on_unit(copy)) return false;
+    // An affix of this manager's own is added as it is, unrolled.
+    offering_copy_ = affix.empty();
+    const bool taken = context_.on_unit(copy);
+    offering_copy_ = false;
+    if (!taken) return false;
     add_effect(clone_effect(copy), affix, skill);
     return true;
 }
@@ -183,6 +188,7 @@ LiveEffect& EffectManager::add_effect(const Effect& effect, const std::string& a
     // `CEffectManager::addNewEffect(CEffect*)`,
     // with the value `CEffect::calculateBaseValue(Roll)`
     // stores computed here.
+    made_ = true;
     retire_matching(effect);
 
     LiveEffect live;
@@ -228,6 +234,7 @@ void EffectManager::add_affix(const Affix& affix, uint32_t level, float duration
     // countdown (`+0xc4`), then `setLevel` unless the level is -1,
     // the affix onto the list, `setOwner`, `addEffectsToEffectManager` and
     // `calculateEffectValues`.
+    made_ = true;
     LiveAffix live;
     live.name = affix.name;
     live.skill = skill;
@@ -261,7 +268,11 @@ void EffectManager::add_affix(const Affix& affix, uint32_t level, float duration
     affixes_.push_back(std::move(live));
     for (size_t slot = 0; slot < scaled.effects.size(); ++slot) {
         const Effect& effect = scaled.effects[slot];
-        if (!offer_effect(effect, affix.name, skill)) continue;
+        // `addEffectsToEffectManager` clones each (`cloneEffect`), sets its affix
+        // owner and activates it (`CBaseUnit::activateEffect`) - never through `applyEffectOnUnit`,
+        // whose value re-roll and provocation are a skill event's (`offer_effect`): a `MONSTER_HUNT`
+        // added to a unit whose manager the World hooks provoked it (MAIN:19, 2026-11-10).
+        add_effect(clone_effect(effect), affix.name, skill);
         LiveEffect& held = list_for(effect.activation).back();
         held.affix_id = id;
         held.affix_slot = static_cast<uint32_t>(slot);
@@ -489,6 +500,12 @@ void EffectManager::clear_effects(bool remove_effects) {
     themes_.clear();
 }
 
+void EffectManager::destroy(const EffectRolls& rolls) {
+    // `CEffectManager::~CEffectManager()`: `clearEffects(false)` first.
+    for (LiveAffix& affix : affixes_) affix.rolls = rolls;
+    clear_effects(false);
+}
+
 void EffectManager::calculate_effect_values() {
     // `CEffectManager::calculateEffectValues()`:
     // one float per effect type, summed over
@@ -612,11 +629,11 @@ float EffectManager::effect_value(int type, const std::string& name) const {
 }
 
 bool EffectManager::has_effect(int type) const {
-    // `CEffectManager::hasEffect(EEFFECT_TYPE)`.
-    //
-    for (const std::vector<LiveEffect>& list : lists_) {
-        for (const LiveEffect& live : list) {
-            if (live.effect.type == type && !live.expired()) return true;
+    // `CEffectManager::hasEffect(EEFFECT_TYPE)`: the passive and
+    // dynamic lists, the type alone; a dead or run-out effect still counts until it is removed.
+    for (size_t index = 0; index < 2; ++index) {
+        for (const LiveEffect& live : lists_[index]) {
+            if (live.effect.type == type) return true;
         }
     }
     return false;
@@ -640,8 +657,9 @@ int EffectManager::spend_shield_buffers(int damage, int damage_type, bool& absor
                 const auto set_first_value = [this, &live](float value) {
                     live.effect.values[0] = value;
                     if (context_.graphs != nullptr) {
-                        live.value = effect_base_value(live.effect, EffectCalculate::Roll,
-                                                       *context_.graphs, context_.owner);
+                        live.value =
+                            effect_base_value(live.effect, EffectCalculate::Roll, *context_.graphs,
+                                              context_.owner, &volatile_random());
                     }
                 };
                 if (hit <= held) {

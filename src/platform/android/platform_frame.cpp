@@ -42,10 +42,12 @@ void platform_window_params(std::map<std::string, std::string>& params) {
     params["externalWindowHandle"] = std::to_string(reinterpret_cast<std::size_t>(glue->window));
     params["androidConfig"] = std::to_string(reinterpret_cast<std::size_t>(glue->config));
     params["preserveContext"] = "true";
-    // OGRE's Android window caps the depth buffer at 16 bits by default; a particle's
-    // `DEPTH BIAS` is scaled for 24, and at 16 it pulls a glow 256 times as far, in front of
-    // the walls and pillars around it.
+    // OGRE's Android window caps the depth buffer at 16 bits and the stencil at 0 by
+    // default, and a config over either cap is refused: the 24-bit depth configs carry 8
+    // stencil bits, so without the stencil cap raised the window still got 16 bits, and a
+    // particle's `DEPTH BIAS` reached through walls.
     params["maxDepthBufferSize"] = "24";
+    params["maxStencilBufferSize"] = "8";
     if (const char* factor = android::content_scaling_factor()) {
         params["contentScalingFactor"] = factor;
     }

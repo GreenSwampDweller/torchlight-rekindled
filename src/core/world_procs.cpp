@@ -300,4 +300,150 @@ void World::unit_execute_procs(tl::core::LevelScript& machine, int64_t node, int
         });
 }
 
+bool World::skill_event_effects_on(const SkillEventSource& src, tl::core::LevelScript* machine,
+                                   int64_t node) {
+    if (src.event == nullptr) return false;
+    // Out of sight: nothing is applied, and the call still answers true.
+    if (skill_event_sight_blocked(src, machine, node)) return true;
+    if (machine == nullptr) {
+        // `applyEffects` on the player: its own manager.
+        tl::core::SkillCastContext context = player_cast_context();
+        if (src.caster_machine != nullptr || src.prop_owner) {
+            // A placed unit's or a prop's event: the player is its target, not its caster.
+            context.target_is_caster = false;
+            // A prop is no character: `no_caster_character` below passes every filter.
+            context.target_is_enemy =
+                src.caster_machine != nullptr &&
+                src.caster_machine->unit_is_enemy_of(src.caster_node, nullptr, 0);
+            context.target_is_casters_pet = false;
+        }
+        // `addListenerToUnit` from `applyAffixesAndEffects`: the skill watches the player.
+        context.observe_target = [this, &src](const std::string& skill) {
+            unit_observers.add({nullptr, 0}, skill_observer_for(src.caster_machine, src.caster_node,
+                                                                skill, src.run));
+        };
+        // `setOwner(effect, caster)`: the event's caster owns what lands.
+        context.source = tl::core::EffectSource{
+            true, src.caster_machine, src.caster_machine != nullptr ? src.caster_node : 0};
+        context.owner_level = event_caster_level(src.caster_machine, src.caster_node);
+        const tl::core::EffectRolls ownerless{&stat_graphs, &tl::core::volatile_random(), {}};
+        if (src.prop_owner) {
+            context.source = tl::core::EffectSource{};
+            context.owner_level = src.prop_level;
+            context.no_caster_character = true;
+            context.observe_target = nullptr;
+            context.ownerless_rolls = &ownerless;
+            context.ownerless_owned = &prop_effect_owners[{src.prop_id, src.event}];
+        }
+        tl::core::LevelScript* const saved_machine = instant_caster_machine;
+        const int64_t saved_node = instant_caster_node;
+        const bool saved_none = instant_caster_none;
+        instant_caster_machine = src.caster_machine;
+        instant_caster_node = src.caster_node;
+        instant_caster_none = src.prop_owner;
+        const bool on_player = tl::core::apply_event_effects(
+            *src.event, context, src.skill, src.property, src.unauthored, src.duration_override);
+        // `CCharacter::updateEffects(target, 0)`: a status laid becomes its affix
+        // at once. Its visuals wait for the frame's update.
+        player_effects.update_effects(0.0f);
+        convert_held_statuses(player_health.dead ? tl::core::ai_state::kDead : 0, &player_effects,
+                              "the player");
+        instant_caster_machine = saved_machine;
+        instant_caster_node = saved_node;
+        instant_caster_none = saved_none;
+        return on_player;
+    }
+    // `applyEffects` on a placed character, through its
+    // `applyEffectOnUnit` (`unit_effect_on_unit`).
+    const tl::core::UnitStats::Alignment side =
+        machine->unit_side(node).value_or(tl::core::UnitStats::Alignment::Neutral);
+    tl::core::EffectManager* manager = unit_effect_manager(machine, node);
+    if (manager == nullptr) return false;
+    tl::core::SkillCastContext context;
+    context.target = manager;
+    context.types = &effect_types;
+    context.unit_types = &unit_types;
+    context.affix = [this](const std::string& name) -> const tl::core::Affix* {
+        return affixes.get_affix(name);
+    };
+    context.target_is_caster = false;
+    context.target_is_enemy = side == tl::core::UnitStats::Alignment::Hostile;
+    context.target_is_casters_pet = machine->unit_is_player_pet(node);
+    // `addListenerToUnit` from `applyAffixesAndEffects`: the skill watches the unit.
+    context.observe_target = [this, &src, machine, node](const std::string& skill) {
+        unit_observers.add({machine, node},
+                           skill_observer_for(src.caster_machine, src.caster_node, skill, src.run));
+    };
+    // `setOwner(effect, caster)`: the event's caster owns what lands.
+    context.source = tl::core::EffectSource{true, src.caster_machine,
+                                            src.caster_machine != nullptr ? src.caster_node : 0};
+    context.owner_level = event_caster_level(src.caster_machine, src.caster_node);
+    const tl::core::EffectRolls ownerless{&stat_graphs, &tl::core::volatile_random(), {}};
+    if (src.prop_owner) {
+        context.source = tl::core::EffectSource{};
+        context.owner_level = src.prop_level;
+        context.no_caster_character = true;
+        context.observe_target = nullptr;
+        context.ownerless_rolls = &ownerless;
+        context.ownerless_owned = &prop_effect_owners[{src.prop_id, src.event}];
+    } else if (src.caster_machine != nullptr) {
+        // From the caster's side (`CCharacter::isEnemy`).
+        // INVENTED: a placed unit's own pets are not known.
+        context.target_is_caster = machine == src.caster_machine && node == src.caster_node;
+        context.target_is_enemy = !context.target_is_caster && src.caster_machine->unit_is_enemy_of(
+                                                                   src.caster_node, machine, node);
+        context.target_is_casters_pet = false;
+    }
+    tl::core::LevelScript* const saved_machine = instant_caster_machine;
+    const int64_t saved_node = instant_caster_node;
+    const bool saved_none = instant_caster_none;
+    instant_caster_machine = src.caster_machine;
+    instant_caster_node = src.caster_node;
+    instant_caster_none = src.prop_owner;
+    // The direction `applyEffects` hands on. INVENTED:
+    // caster to target; the original's is from the event's object (`startEvent`),
+    // a shape's (`characterEffectedByDamageShape`)
+    // or the missile's (`missileApplyingEffects`).
+    const bool saved_set = effect_direction_set;
+    const std::array<float, 3> saved_direction = effect_direction;
+    {
+        tl::core::Vec3 from;
+        tl::core::Vec3 to;
+        bool known = machine->unit_position(node, to);
+        if (src.caster_machine != nullptr) {
+            known = known && src.caster_machine->unit_position(src.caster_node, from);
+        } else {
+            from = player.position();
+        }
+        const float dx = to.x - from.x;
+        const float dy = to.y - from.y;
+        const float dz = to.z - from.z;
+        const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+        effect_direction_set = known && 1e-08f < length;
+        if (effect_direction_set) effect_direction = {dx / length, dy / length, dz / length};
+    }
+    // `alive()`: a body with hit points after gets up (`HP()`,
+    // `setAIState(2)`).
+    const bool was_alive = !machine->unit_is_dead(node);
+    const bool applied = tl::core::apply_event_effects(*src.event, context, src.skill, src.property,
+                                                       src.unauthored, src.duration_override);
+    effect_direction_set = saved_set;
+    effect_direction = saved_direction;
+    instant_caster_machine = saved_machine;
+    instant_caster_node = saved_node;
+    instant_caster_none = saved_none;
+    std::vector<tl::core::ScriptEvent> events;
+    // `updateEffects(target, 0.0f)` straight: a status lands as its
+    // affix now, not on the unit's next update.
+    unit_update_effects(machine, node, 0.0f, events);
+    if (machine->unit_gets_up(node, was_alive, quest_log.state(), events)) {
+        TL_LOG_INFO("skill event: %s gets up (%s)", machine->unit_of(node).c_str(),
+                    src.skill.c_str());
+    }
+    if (NodeMap* nodes = nodes_of(machine); nodes != nullptr && !events.empty()) {
+        apply_script_events(events, *nodes);
+    }
+    return applied;
+}
+
 }  // namespace tl::core

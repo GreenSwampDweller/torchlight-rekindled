@@ -226,6 +226,19 @@ bool World::cast_unit_skill(tl::core::LevelScript& machine, int64_t node,
 
     tl::core::SkillCastContext context =
         unit_cast_context(machine, node, target_machine, target_node, has_target);
+    // `performSkill`: the target, else the target item (+0x28c).
+    if (const int64_t item = machine.unit_target_item(node); !has_target && item != 0) {
+        for (const BreakableWorld& b : breakables) {
+            if (b.id != item || b.node == nullptr) continue;
+            const ogre::Vector3 p = view_position(b.node);
+            tl::core::SkillTargetUnit aimed;
+            aimed.position = {p.x, p.y, p.z};
+            aimed.is_item = true;
+            unit_cast_caster.target_unit = aimed;
+            context.event_target.item = item;
+            break;
+        }
+    }
     aim_unit_position_skill(machine, node, s.known);
     float spent = 0.0f;
     const UnitEventCaster saved = unit_event_caster;
@@ -292,8 +305,13 @@ void World::fire_unit_skills_on_create(tl::core::LevelScript& machine, int64_t n
     // CSkillManager::fireSkillsOnCreate, from
     // CCharacter::unitInit: every EVENT_UNIT_CREATE skill
     // (group 10) executed without a target, then group 10 fired.
+    machine.ensure_unit_skills(node);
     tl::core::LevelScript::UnitCasting* k = machine.unit_casting(node);
     if (k == nullptr || k->skills.empty()) return;
+    // Once per unit: a spawner's release fires them as the unit is made, the renderer's first step
+    // of the unit's skills otherwise.
+    if (k->create_fired) return;
+    k->create_fired = true;
     const auto has_unit_create = [](const tl::core::KnownSkill& skill) {
         const tl::core::SkillProperty* property = skill.property(skill.effective);
         if (property == nullptr || property->section == nullptr) return false;
@@ -303,9 +321,13 @@ void World::fire_unit_skills_on_create(tl::core::LevelScript& machine, int64_t n
         return false;
     };
     bool any = false;
+    size_t undefined = 0;
     for (const tl::core::LevelScript::UnitSkill& s : k->skills) {
+        if (s.known.def == nullptr) ++undefined;
         if (s.known.def != nullptr && has_unit_create(s.known)) any = true;
     }
+    TL_LOG_DEBUG("skills: %s is made with %zu skill(s), %zu undefined, create events %s",
+                 machine.unit_of(node).c_str(), k->skills.size(), undefined, any ? "yes" : "no");
     if (!any) return;
     tl::core::SkillCastContext context = unit_cast_context(machine, node, nullptr, 0, false);
     const auto lookup = [this, &machine, node](const std::string& n) {
@@ -318,6 +340,9 @@ void World::fire_unit_skills_on_create(tl::core::LevelScript& machine, int64_t n
         if (k->runner.execute(s.known, s.known.effective, unit_cast_caster, context)) {
             TL_LOG_INFO("skills: %s is made and starts '%s'", machine.unit_of(node).c_str(),
                         s.known.entry.name.c_str());
+        } else {
+            TL_LOG_DEBUG("skills: %s is made but '%s' did not start", machine.unit_of(node).c_str(),
+                         s.known.entry.name.c_str());
         }
     }
     constexpr int kUnitCreate = 10;
@@ -341,6 +366,10 @@ tl::core::LevelScript::UnitSkills World::unit_skill_hooks() {
         return scene != nullptr && tl::core::layout_adds_sound_sample(*scene, sound_info);
     };
     hooks.load_event_file = [this](const std::string& file) { count_layout_load(file); };
+    hooks.shape_hit = [this](tl::core::LevelScript& machine, int64_t node, float amount,
+                             int32_t damage_type, const tl::core::Vec3& direction) {
+        shape_hit_unit(machine, node, amount, damage_type, direction);
+    };
     hooks.procs = [this](tl::core::LevelScript& machine, int64_t node, int type,
                          tl::core::LevelScript* target_machine, int64_t target_node,
                          bool has_target) {
@@ -370,17 +399,40 @@ tl::core::LevelScript::UnitSkills World::unit_skill_hooks() {
             force, /*passives=*/false);
         unit_event_caster = saved;
     };
+    // `CLevel::findItemWithinView` from `castSkill`'s frame,
+    // newest first.
+    hooks.item_within_view = [this](tl::core::LevelScript&, int64_t, const tl::core::Vec3& at,
+                                    const tl::core::Vec3& forward, float angle,
+                                    float reach) -> int64_t {
+        const tl::core::ViewFrame frame = tl::core::view_frame_along(at, forward);
+        for (size_t i = breakables.size(); i-- > 0;) {
+            const BreakableWorld& b = breakables[i];
+            if (b.node == nullptr) continue;
+            if (!tl::core::breakable_candidate(b.state, b.entity != nullptr && b.presence.visible))
+                continue;
+            const ogre::Vector3 p = view_position(b.node);
+            if (!tl::core::item_within_view(frame, {p.x, p.y, p.z}, angle, reach)) continue;
+            // `sightUnobstructed(from, to, false)`, both ends 5 up, the objects tested too.
+            tl::core::CollisionHit hit;
+            if (collision.ray_collision({at.x, at.y + 5.0f, at.z}, {p.x, p.y + 5.0f, p.z}, true,
+                                        hit))
+                continue;
+            return b.id;
+        }
+        return 0;
+    };
+    hooks.item_position = [this](int64_t item, tl::core::Vec3& at) {
+        for (const BreakableWorld& b : breakables) {
+            if (b.id != item || b.node == nullptr) continue;
+            const ogre::Vector3 p = view_position(b.node);
+            at = {p.x, p.y, p.z};
+            return true;
+        }
+        return false;
+    };
     hooks.stop_by_name = [this](tl::core::LevelScript& machine, int64_t node,
                                 const std::string& name) {
-        tl::core::LevelScript::UnitCasting* k = machine.unit_casting(node);
-        if (k == nullptr) return;
-        tl::core::SkillCastContext context = unit_cast_context(machine, node, nullptr, 0, false);
-        const UnitEventCaster saved = unit_event_caster;
-        unit_event_caster = unit_event_caster_for(&machine, node);
-        k->runner.stop_by_name(name, context, [this, &machine, node](const std::string& n) {
-            return unit_skill_named(machine, node, n);
-        });
-        unit_event_caster = saved;
+        stop_unit_skills_by_name(machine, node, name);
     };
     load_recharge_rates();
     hooks.mana_recharge_rate = recharge_rates.mana;
@@ -436,13 +488,8 @@ void World::fire_unit_skills_on_death(tl::core::LevelScript& machine, int64_t no
     };
     const UnitEventCaster saved = unit_event_caster;
     unit_event_caster = unit_event_caster_for(&machine, node);
-    for (const tl::core::LevelScript::UnitSkill& s : k->skills) {
-        if (s.known.def == nullptr || !k->runner.is_running(s.known.entry.name)) continue;
-        const tl::formats::AdmSection* root = s.known.def->base.section;
-        const bool stays = has_caster_die(s.known) ||
-                           (root != nullptr && root->bool_or("DONT_STOP_ON_DEATH", false));
-        if (!stays) k->runner.stop(s.known, context);
-    }
+    k->runner.stop_all(context, lookup, /*force=*/true, /*passives=*/false,
+                       /*keep_on_death=*/true);
     for (const tl::core::LevelScript::UnitSkill& s : k->skills) {
         if (s.known.def == nullptr || !has_caster_die(s.known)) continue;
         const tl::core::SkillProperty* property = s.known.property(s.known.effective);
@@ -482,6 +529,21 @@ void World::fire_unit_skills_on_death(tl::core::LevelScript& machine, int64_t no
     }
     constexpr int kCasterDie = 9;
     k->runner.trigger_event(kCasterDie, context, lookup);
+    unit_event_caster = saved;
+}
+
+// `CSkillManager::stopSkillsByName(name, true)` on a placed
+// character's manager.
+void World::stop_unit_skills_by_name(tl::core::LevelScript& machine, int64_t node,
+                                     const std::string& name) {
+    tl::core::LevelScript::UnitCasting* k = machine.unit_casting(node);
+    if (k == nullptr) return;
+    tl::core::SkillCastContext context = unit_cast_context(machine, node, nullptr, 0, false);
+    const UnitEventCaster saved = unit_event_caster;
+    unit_event_caster = unit_event_caster_for(&machine, node);
+    k->runner.stop_by_name(name, context, [this, &machine, node](const std::string& n) {
+        return unit_skill_named(machine, node, n);
+    });
     unit_event_caster = saved;
 }
 

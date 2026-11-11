@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRendererFactory.h
+index 7d54dcd..32d881e 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseRibbonTrailRendererFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			RibbonTrailRendererFactory(void) {};
++	        // Torchlight: `RibbonTrailRendererFactory::~RibbonTrailRendererFactory` is the library's (the script members apart).
+ 	        virtual ~RibbonTrailRendererFactory(void) {};
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `RibbonTrailRendererFactory::getRendererType` is the library's (the same name).
+ 			String getRendererType(void) const
+ 			{
+ 				return "RibbonTrail";
+ 			}
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `RibbonTrailRendererFactory::createRenderer` is the library's: made, then given its type.
+ 			ParticleRenderer* createRenderer(void)
+ 			{
+ 				return _createRenderer<RibbonTrailRenderer>();

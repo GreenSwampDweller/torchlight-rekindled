@@ -79,10 +79,11 @@ Vec3 snap_item_to_ground(const Vec3& at, const GroundRay& ray,
 
 /// `CCharacter::dropToGround` in its search, as `CLevel::addCharacter` calls it:
 /// the same ray; a miss or a material-100 face moves the point by `random_open_position` within
-/// 0..reach, the reach from 0.1 up by 0.1 to `max_reach`, thirty times. The ground point (the
-/// caller stands the unit its radius above it), or the last point at a height of 100.
-Vec3 drop_character_to_ground(const Vec3& at, float max_reach, const GroundRay& ray,
-                              const std::function<bool(const Vec3&)>& open, RunicRandom& rng);
+/// 0..reach, the reach from 0.1 up by 0.1 to `max_reach`, thirty times. The ground point raised by
+/// the unit's collision radius (`CBaseUnit +0x15C`), or the last point at a height of 100.
+Vec3 drop_character_to_ground(const Vec3& at, float max_reach, float collision_radius,
+                              const GroundRay& ray, const std::function<bool(const Vec3&)>& open,
+                              RunicRandom& rng);
 
 /// A `CPath` of three points, as `drop` builds it: where the item is, a point
 /// over the middle raised by `kDropRiseMin..kDropRiseMax`, and where it lands.

@@ -93,7 +93,9 @@ void drop_to_ground_open(const CollisionWorld& world, MotionState& state, float 
     for (int attempt = 0; attempt != 30; ++attempt) {
         CollisionHit hit;
         const Vec3 to{state.position.x, -100.0f, state.position.z};
-        if (world.ray_collision(state.position, to, false, hit) &&
+        // `li r10, 0`: the objects are tested too. DIVERGENCE: the console's
+        // characters (`CLevel +0x54`, material 200) are not among them; only a `BLOCK` one would be.
+        if (world.ray_collision(state.position, to, /*objects=*/true, hit) &&
             hit.material != kNoCollideMaterial) {
             state.position = {hit.point.x, hit.point.y + state.radius, hit.point.z};
             return;

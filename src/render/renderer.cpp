@@ -2226,6 +2226,7 @@ bool Renderer::init(const RendererConfig& requested) {
         TL_LOG_ERROR("failed to create a render window");
         return false;
     }
+    m.watch_window_surface();  // before anything pumps events: a resize needs the hooks
     m.adopt_window_size();
     if (GlThread::started()) {
         // Before any buffer of the game's exists: see gl_thread.h.
@@ -2246,7 +2247,6 @@ bool Renderer::init(const RendererConfig& requested) {
     viewport->setVisibilityMask(kVisibilityWorld);
     m.apply_scheme(viewport);
     m.fit_camera_to_window();
-    m.watch_window_surface();
 
     // Brightness and contrast: the window's last viewport.
     //
@@ -3370,6 +3370,19 @@ void Renderer::Impl::write_entity_animation(EntityAnimation& model) {
     }
 }
 
+// PORT: the skeleton file named as the animation beside the mesh, else a set's name, matched
+// upper-cased as `animationExists` does, to the file it came from.
+std::string Renderer::Impl::animation_set_path(const std::string& mesh_path,
+                                               const std::string& animation) {
+    std::string direct = archive_path_in_dir(animation + ".SKELETON", dir_of_asset(mesh_path));
+    if (!direct.empty()) return direct;
+    const std::string wanted = lowered(animation);
+    for (const tl::core::AnimationSetEntry& e : animation_set_for(mesh_path)) {
+        if (lowered(e.name) == wanted) return archive_path_in_dir(e.file, dir_of_asset(mesh_path));
+    }
+    return {};
+}
+
 bool Renderer::Impl::play_scene_animation(Ogre::Entity* entity, const std::string& mesh_path,
                                           const std::string& animation, bool loops, float rate,
                                           bool optional, Ogre::AnimationState** started, bool armed,
@@ -3386,7 +3399,7 @@ bool Renderer::Impl::play_scene_animation(Ogre::Entity* entity, const std::strin
     }
 
     const std::string dir = dir_of_asset(mesh_path);
-    std::string path = archive_path_in_dir(animation + ".SKELETON", dir);
+    std::string path = animation_set_path(mesh_path, animation);
     if (path.empty()) {
         // Not under that exact name. A layout, and this engine, name an
         // animation by its *state* - `Idle`, `Die`, `Run` - and a mesh is free

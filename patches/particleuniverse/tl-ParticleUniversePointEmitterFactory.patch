@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitterFactory.h
+index 288b215..30ce8f8 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniversePointEmitterFactory.h
+@@ -40,15 +40,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			PointEmitterFactory(void) {};
++	        // Torchlight: `PointEmitterFactory::~PointEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~PointEmitterFactory(void) {};
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `PointEmitterFactory::getEmitterType` is the library's (the same name).
+ 			String getEmitterType(void) const
+ 			{
+ 				return "Point";
+ 			}
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `PointEmitterFactory::createEmitter` is the library's: made, then given its type.
+ 			ParticleEmitter* createEmitter(void)
+ 			{
+ 				return _createEmitter<PointEmitter>();

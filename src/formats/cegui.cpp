@@ -1,5 +1,7 @@
 #include "formats/cegui.h"
 
+#include "formats/byte_reader.h"
+
 #include <cctype>
 #include <cstdlib>
 
@@ -272,6 +274,13 @@ XmlDocument parse_xml(const uint8_t* data, size_t size) {
         document.error = "empty";
         return document;
     }
+    // The PC's layouts are UTF-16LE with a byte-order mark; the console's exports are UTF-8.
+    if (size >= 2 && data[0] == 0xff && data[1] == 0xfe) {
+        const std::string text = utf16le_to_utf8(data + 2, size - 2);
+        Parser parser(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+        document.ok = parser.parse(document.root, document.error);
+        return document;
+    }
     Parser parser(data, size);
     document.ok = parser.parse(document.root, document.error);
     return document;
@@ -303,6 +312,8 @@ Imageset parse_imageset(const uint8_t* data, size_t size) {
     set.native_height = to_int(document.root.attribute("NativeVertRes", empty), 480);
     const std::string scaled = trim(document.root.attribute("AutoScaled", empty));
     set.auto_scaled = equal_ignoring_case(scaled, "true") || scaled == "1";
+    const std::string tint = trim(document.root.attribute("Tint", empty));
+    if (tint.size() == 6) set.tint = static_cast<uint32_t>(std::strtoul(tint.c_str(), nullptr, 16));
 
     for (const XmlElement& child : document.root.children) {
         if (!equal_ignoring_case(child.name, "Image")) continue;
@@ -313,7 +324,7 @@ Imageset parse_imageset(const uint8_t* data, size_t size) {
         image.y = to_int(child.attribute("YPos", empty), 0);
         image.width = to_int(child.attribute("Width", empty), 0);
         image.height = to_int(child.attribute("Height", empty), 0);
-        if (image.name.empty() || image.width <= 0 || image.height <= 0) continue;
+        if (image.name.empty() || image.width == 0 || image.height == 0) continue;
         set.images.push_back(std::move(image));
     }
 

@@ -229,6 +229,14 @@ void PassabilityMap::open_cells(int x0, int z0, int x1, int z1) {
     }
 }
 
+void PassabilityMap::report_cast(float x, float z, bool hit, const CollisionHit& ground,
+                                 int8_t value) const {
+    if (after_cast) {
+        after_cast(passes_.size(), x, z, hit, hit ? ground.point.y : 0.0f,
+                   hit ? ground.material : 0u, value);
+    }
+}
+
 PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, const Vec3& low,
                                                const Vec3& high, const std::vector<uint8_t>* cached,
                                                bool zero_first) {
@@ -283,6 +291,7 @@ PassabilityMap::Pass PassabilityMap::calculate(const CollisionWorld& world, cons
             }
             cell = value;
             if (value == 0) ++pass.passable;
+            report_cast(px, pz, hit, ground, value);
         }
     }
 

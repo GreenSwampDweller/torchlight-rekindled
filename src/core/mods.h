@@ -1,6 +1,8 @@
 // The game's mods: the folders of a `mods/` directory beside the game data, each laid out as the
 // archive is (`media/...`), whose files are found before the archive's. `CModFileFilter` and
-// `CMod` (the PC releases'; the Xbox 360 build has no mods).
+// `CMod` (the PC releases'; the Xbox 360 build has no mods). A `.zip` in that directory is a
+// mod too, read in place (DIVERGENCE (2026-11-06): the PC reads folders only; asked for by a
+// player who did not want 7,000 files on a phone's storage).
 #pragma once
 
 #include "formats/adm.h"
@@ -15,8 +17,9 @@ namespace tl::core {
 inline constexpr int32_t kNewModPriority = 10000;
 
 struct ModInfo {
-    std::string folder;        ///< its folder's name in the mods directory
-    std::string directory;     ///< `CMod +0x68`: the folder's path, ending in '/'
+    std::string folder;        ///< its folder's (or `.zip`'s) name in the mods directory
+    std::string directory;     ///< `CMod +0x68`: the folder's path, ending in '/'; a zip's path
+    bool archive = false;      ///< a `.zip` read in place, not a folder
     std::string name;          ///< `+0x50`: `mod.dat`'s NAME, else the folder's name
     std::string author;        ///< `+0x58`
     std::string description;   ///< `+0x60`
@@ -40,6 +43,22 @@ struct ModList {
 /// Where a game data folder keeps its mods: its `mods/` (found in any case), or `mods/` under
 /// it when it has none yet.
 std::string mods_directory(const std::string& game_data);
+
+/// How a `.zip` mod is read, installed by a layer that has a zip reader (the renderer's, over
+/// OGRE's): every file entry of the archive at `archive`, named as inside it, and one entry's
+/// bytes. Without one, a `.zip` mod is listed but has no files.
+struct ModArchiveReader {
+    bool (*list)(const std::string& archive, std::vector<std::string>& entries) = nullptr;
+    bool (*read)(const std::string& archive, const std::string& entry,
+                 std::vector<uint8_t>& bytes) = nullptr;
+};
+void set_mod_archive_reader(const ModArchiveReader& reader);
+const ModArchiveReader& mod_archive_reader();
+
+/// The one folder a zip wraps its mod in, with its '/' (`Enhanced/` for `Enhanced/media/...`),
+/// when no entry is `media/...` or `mod.dat` at the root and every entry in a folder is in that
+/// one; else empty. A download is often zipped with its folder.
+std::string mod_archive_prefix(const std::vector<std::string>& entries);
 
 /// The order `CModFileFilter::CModFileFilter` puts the mods in, from `mods.dat`'s root group
 /// (null when there is none) and the folders of the mods directory: `folder` and `priority`
@@ -78,8 +97,8 @@ bool free_camera_mod_on();
 /// Whether an active mod starts the game with the frame-rate overlay (load_game_mods).
 bool fps_overlay_mod_on();
 
-/// The mods files are looked for in, in that order: each one's folder, without the separator.
-/// Not the port's own: they have nothing to look in.
+/// The mods files are looked for in, in that order: each one's folder, without the separator,
+/// or its `.zip`. Not the port's own: they have nothing to look in.
 std::vector<std::string> active_mod_roots(const ModList& list);
 
 /// `CModFileFilter::getEnabledModNames`: what a save records and Load Character compares.

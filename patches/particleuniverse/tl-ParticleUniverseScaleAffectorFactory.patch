@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffectorFactory.h
+index 7a446d5..80c0214 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseScaleAffectorFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			ScaleAffectorFactory(void) {};
++	        // Torchlight: `ScaleAffectorFactory::~ScaleAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~ScaleAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `ScaleAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Scale";
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `ScaleAffectorFactory::createAffector` is the library's: made, then given its type.
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<ScaleAffector>();

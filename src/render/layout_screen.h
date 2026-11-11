@@ -4,7 +4,6 @@
 // (`media/UI/modalmenu_xenon.layout`, `CModalMenu`), which ship in the Xbox archive only.
 #pragma once
 
-#include "core/input.h"
 #include "formats/cegui.h"
 #include "formats/uilayout.h"
 
@@ -13,6 +12,7 @@
 #include <OgrePrerequisites.h>
 #include <OgreTexture.h>
 
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -56,6 +56,40 @@ public:
     bool create_export(const std::string& group, unsigned width, unsigned height,
                        const std::string& layout, const std::string& tag, unsigned short z_order,
                        const std::vector<std::string>& pc_windows = {});
+    /// More imagesets for the next `create*`, after the screen's own: the sheets a
+    /// screen's logic draws from at run time (item and skill icons, the PC's art).
+    void use_imagesets(std::vector<std::string> paths) { extra_sets_ = std::move(paths); }
+    /// A whole PC `.layout` (`bottomhud.layout`, `inventorymenu.layout`, ...): every window's
+    /// `UnifiedPosition` and `UnifiedSize` read as an export's `UnifiedAreaRect`, a button's
+    /// `NormalImage` and `HoverImage` as its art. What a mouse needs of each window - whether
+    /// it lets the pointer through, and its `onClick` - is kept beside it.
+    bool create_pc(const std::string& group, unsigned width, unsigned height,
+                   const std::string& layout, const std::string& tag, unsigned short z_order);
+    /// The topmost shown window under (x, y), 0 to 1 across and down the view, that takes
+    /// the pointer (`MousePassThroughEnabled` is not set); empty when there is none.
+    std::string window_at(float x, float y) const;
+    /// Whether (x, y) is inside a window as it was last laid out, shown or not.
+    bool window_contains(const std::string& widget, float x, float y) const;
+    /// A window's box as it was last laid out, 0 to 1 across and down the view; false
+    /// when there is no such window.
+    bool window_box(const std::string& widget, float& left, float& top, float& width,
+                    float& height) const;
+    /// One image of the screen's imagesets, to be drawn outside it: its material and its
+    /// box in the texture (left, top, right, bottom, 0 to 1). False when there is none.
+    bool art(const std::string& name, Ogre::MaterialPtr& material, std::array<float, 4>& uv) const;
+    /// The share of its parent's size a window's corner stands at, in place of the one it
+    /// authors (a `UnifiedPosition`'s two scales).
+    void set_relative(const std::string& widget, float x, float y);
+    /// A PC window's `onClick`, or empty.
+    std::string on_click(const std::string& widget) const;
+    /// The picture a window draws now; empty for none or for no such window.
+    std::string image(const std::string& widget) const;
+    /// A window's picture, in place of the one it authors.
+    void set_image(const std::string& widget, const std::string& image);
+    /// How much of a bar is drawn, 0 to 1, from its left edge or with `upward` from its
+    /// bottom. Applied to the window as it was last laid out: call it after `refresh()`.
+    void set_fill(const std::string& widget, float amount, bool upward);
+
     void destroy();
     bool ready() const { return built_; }
 
@@ -67,11 +101,6 @@ public:
 
     void resize(unsigned width, unsigned height);
 
-    /// DIVERGENCE (desktop mouse): whether the pointer lies on that window, shown.
-    bool pointed(const tl::core::InputState& in, const std::string& widget) const;
-    /// How far across that window the pointer stands, 0 to 1, clamped; false when it is not shown.
-    bool pointer_along(const tl::core::InputState& in, const std::string& widget,
-                       float& along) const;
     /// Whether the layout has a window of that `WIDGET NAME`.
     bool has(const std::string& widget) const { return find_widget(widget) >= 0; }
     /// A `Text` window's caption.
@@ -174,6 +203,14 @@ private:
     std::vector<Ogre::TexturePtr> textures_;
     std::vector<Ogre::MaterialPtr> materials_;
     std::map<std::string, Sprite> sprites_;
+    /// What a PC window says to a mouse, by its name.
+    struct PcWindow {
+        bool pass_through = false;
+        std::string on_click;
+    };
+    void note_pc_window(const tl::formats::GuiWindow& window);
+    std::map<std::string, PcWindow> pc_windows_;
+    std::vector<std::string> extra_sets_;
     std::vector<Node> nodes_;
 
     Ogre::Overlay* overlay_ = nullptr;

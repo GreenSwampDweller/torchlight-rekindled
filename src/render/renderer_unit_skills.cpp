@@ -32,6 +32,25 @@ Renderer::Impl::SceneUnit* Renderer::Impl::scene_unit_of(tl::core::LevelScript* 
     return nullptr;
 }
 
+namespace {
+
+// The animations the mesh's own skeleton holds before anything is linked onto it, with their
+// lengths.
+void mesh_own_animations(const std::string& mesh, std::vector<std::string>& names,
+                         std::vector<float>& lengths) {
+    try {
+        Ogre::MeshPtr model = Ogre::MeshManager::getSingleton().getByName(mesh, kGameGroup);
+        if (!model || !model->hasSkeleton() || !model->getSkeleton()) return;
+        const Ogre::SkeletonPtr& skeleton = model->getSkeleton();
+        for (unsigned short i = 0; i < skeleton->getNumAnimations(); ++i) {
+            names.push_back(skeleton->getAnimation(i)->getName());
+            lengths.push_back(skeleton->getAnimation(i)->getLength());
+        }
+    } catch (const Ogre::Exception&) {}
+}
+
+}  // namespace
+
 tl::core::AnimationCatalog Renderer::Impl::model_catalog(const std::string& mesh,
                                                          const std::string& dir, size_t* missing) {
     // CGenericModel::loadAnimations: the .ANIMATION
@@ -70,14 +89,8 @@ tl::core::AnimationCatalog Renderer::Impl::model_catalog(const std::string& mesh
     }
     // What the mesh's own skeleton holds before anything is linked onto it.
     std::vector<std::string> has;
-    try {
-        Ogre::MeshPtr model = Ogre::MeshManager::getSingleton().getByName(mesh, kGameGroup);
-        if (model && model->hasSkeleton() && model->getSkeleton()) {
-            for (unsigned short i = 0; i < model->getSkeleton()->getNumAnimations(); ++i) {
-                has.push_back(model->getSkeleton()->getAnimation(i)->getName());
-            }
-        }
-    } catch (const Ogre::Exception&) {}
+    std::vector<float> has_lengths;
+    mesh_own_animations(mesh, has, has_lengths);
     std::string model_stem = mesh;
     if (const size_t slash = model_stem.find_last_of("/\\"); slash != std::string::npos) {
         model_stem = model_stem.substr(slash + 1);
@@ -86,7 +99,11 @@ tl::core::AnimationCatalog Renderer::Impl::model_catalog(const std::string& mesh
     const std::vector<tl::core::LoadedAnimation> list =
         tl::core::load_animation_list(entries, model_stem, has);
 
+    // The set's first names are the mesh's own (one named `*` left out), as the list counts them.
     tl::core::AnimationCatalog catalog;
+    for (size_t i = 0; i < has.size(); ++i) {
+        if (has[i] != "*") catalog.emplace_back(has[i], has_lengths[i]);
+    }
     for (size_t b = 0; b < list.size(); ++b) {
         if (list[b].index < 0) continue;
         const size_t at = static_cast<size_t>(list[b].index);
@@ -204,10 +221,7 @@ void Renderer::Impl::step_unit_skill_manager(tl::core::LevelScript& machine, int
     // fires these as the unit is
     // made; here it is the first frame the unit's skills are stepped,
     // when its model is in the scene for the events to use.
-    if (!k->create_fired) {
-        k->create_fired = true;
-        fire_unit_skills_on_create(*owner, node);
-    }
+    if (!k->create_fired) fire_unit_skills_on_create(*owner, node);
     const std::string name = k->cast.skill;
     const tl::core::SkillRunState* state = k->runner.state(name);
     int64_t upkeep = 0;

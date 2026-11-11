@@ -7,4 +7,7 @@ namespace tl::core {
 /// while a line is being typed (`typing()`).
 void note_typed_unit(unsigned unit);
 
+/// A WM_MOUSEWHEEL's turn, from the same pump: summed until the next poll reads it.
+void note_wheel(int units);
+
 }  // namespace tl::core

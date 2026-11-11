@@ -126,7 +126,7 @@ index 2a276d3..bf48147 100644
  			*/
  			uint16 mParticleTextureCoords;
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
-index 318686d..9a03aed 100644
+index 318686d..d0f9206 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseEmitter.cpp
 @@ -28,6 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

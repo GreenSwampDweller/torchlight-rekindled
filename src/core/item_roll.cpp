@@ -649,6 +649,7 @@ void init_item_copy(ItemStats& item, bool from_save, bool random_enchant_allowed
     if (!from_save || item_isa(item, unit_type::kSocketable, types)) {
         reapply_affixes(item, *context.affixes, false, item_effect_rolls(context));
     }
+    if (context.make_skills) context.make_skills(item);
     item.sockets = item.authored_sockets < 2 ? item.authored_sockets : 2;
     item.affixes_before_combat = item.affixes.size();
     calculate_combat_stats(item, item_isa(item, unit_type::kWeapon, types),
@@ -829,8 +830,8 @@ Vec3 spawned_unit_position(const ItemStats& unit, uint32_t index, const Vec3& at
                            const LootPlacement* place, const UnitTypeHierarchy* unit_types,
                            RunicRandom& volatile_rng) {
     // `createUnitsBySpawnClassAtPositionInLevel`: the
-    // radius is `i / 3` when above 0.5.
-    const float third = static_cast<float>(index) / 3.0f;
+    // radius is `i * 0.33333334f` when above 0.5.
+    const float third = static_cast<float>(index) * 0.33333334f;
     const float radius = 0.5f < third ? third : 0.5f;
     std::function<bool(const Vec3&)> open;
     if (place != nullptr) {

@@ -1,6 +1,7 @@
 // The renderer's resource locations: OGRE's shader library, the game's archive
 // and what is mounted beside it. Split from renderer.cpp.
 #include "render/menu_chrome.h"
+#include "render/mod_archive.h"
 #include "render/renderer_impl.h"
 
 namespace tl::render {
@@ -29,6 +30,7 @@ std::string game_pak(const RendererConfig& config) {
 void mount_console_interface(Ogre::ResourceGroupManager& groups, const std::string& console_ui) {
     const bool console_pak = groups.resourceExists(kGameGroup, "media/UI/hud_xenon.layout");
     set_console_game_data(console_pak);
+    set_pack_imagesets({});
     const bool have_ui = !console_ui.empty() && is_dir(console_ui);
     if (console_pak) {
         TL_LOG_INFO("game data: the Xbox 360 pak, with the console interface in it");
@@ -39,6 +41,12 @@ void mount_console_interface(Ogre::ResourceGroupManager& groups, const std::stri
     } else if (have_ui) {
         TL_LOG_INFO("game data: a PC pak, the console interface from '%s'", console_ui.c_str());
         groups.addResourceLocation(console_ui, "FileSystem", kGameGroup, true);
+        std::vector<std::string> pack_sets;
+        for (int index = 0; index < kMaxPackImagesets; ++index) {
+            const std::string path = pack_imageset_path(index);
+            if (groups.resourceExists(kGameGroup, path)) pack_sets.push_back(path);
+        }
+        set_pack_imagesets(std::move(pack_sets));
     } else {
         TL_LOG_INFO("game data: a PC pak; no --console-ui (without one: no HUD, plain menus)");
     }
@@ -53,15 +61,20 @@ std::string mount_list(const RendererConfig& config) {
     return mounts;
 }
 
-// INVENTED: mod folders (`--mod-data`), the port's own way to load an extracted mod.
+// INVENTED: mod folders (`--mod-data`), the port's own way to load an extracted mod; a `.zip`
+// mod is mounted as the pak is (core/mods.h).
 void mount_mod_data(Ogre::ResourceGroupManager& groups, const std::vector<std::string>& mod_data) {
     for (const std::string& mod : mod_data) {
-        if (!is_dir(mod)) {
+        if (is_dir(mod)) {
+            TL_LOG_INFO("mounting mod folder %s (overrides base files)", mod.c_str());
+            groups.addResourceLocation(mod, "FileSystem", kGameGroup, true);
+        } else if (is_file(mod)) {
+            TL_LOG_INFO("mounting mod archive %s (overrides base files)", mod.c_str());
+            register_mod_zip_archive();
+            groups.addResourceLocation(mod, kModZipArchiveType, kGameGroup, true);
+        } else {
             TL_LOG_INFO("mod media directory not found at '%s'", mod.c_str());
-            continue;
         }
-        TL_LOG_INFO("mounting mod folder %s (overrides base files)", mod.c_str());
-        groups.addResourceLocation(mod, "FileSystem", kGameGroup, true);
     }
     renderer_detail::set_mod_roots(mod_data);
     set_mod_imagesets(renderer_detail::mod_paths_under("media/ui/", ".imageset"));
@@ -123,6 +136,7 @@ bool Renderer::Impl::mount_resources() {
     // override the archive's.
     mount_mod_data(groups, config.mod_data);
     read_mod_copies = renderer_detail::read_mod_copies;
+    mod_answers = renderer_detail::mod_has_file;
 
     const std::string pak = game_pak(config);
     if (!config.pak.empty() && !is_file(pak)) {

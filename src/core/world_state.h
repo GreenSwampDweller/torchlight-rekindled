@@ -104,6 +104,8 @@
 #include "core/weapon_procs.h"
 #include "core/weapon_trail.h"
 #include "core/weapons.h"
+#include "core/world_constants.h"
+#include "core/world_nested.h"
 #include "formats/adm.h"
 #include "formats/cegui.h"
 #include "formats/cmp.h"
@@ -129,35 +131,6 @@
 namespace tl::core {
 
 class World;
-
-/// `CMissile::killMissile`: `+0x1b4`, how long a dead
-/// missile's particles keep releasing before `handleDeathOfMissile` stops them.
-inline constexpr float kMissileParticleStopSeconds = 1.0f;
-
-// The player as a missile meets it: no character id is negative.
-constexpr int64_t kMissilePlayer = -1;
-
-/// The gameplay camera's default distance: `CCameraControl::getDefaultDistanceToDolly()`
-/// (.rodata, 28.5) times `CAMERAMULT`; `CCameraControl::processInput()` clamps
-/// between 14.0 and that. `CCameraControl::updateGameCamera` offsets
-/// `(0.5, 0.75, -0.5)` turned by the camera angle, scaled by the dolly.
-inline constexpr float kDefaultCameraDistance = 28.5f;
-
-/// The default when a level authors no `RIMLIGHT` (`CLevel::addCharacter`).
-constexpr const char* kDefaultRimLight = "media/sharedtextures/rimlight.dds";
-
-/// What a main-menu level plays (`CGameClient::loadMenuLevel` hardcodes it), spelled as
-/// a rules `MUSIC` key.
-constexpr const char* kMenuMusic = "../music/Title.ogg";
-
-/// How long a quest's banner stays up, in seconds.
-constexpr float kQuestBannerSeconds = 2.0f;
-
-/// Where the ids given to spawned units start: a block no layout uses (`0x5350` is "SP").
-constexpr int64_t kSpawnedNodeBase = 0x5350000000000000LL;
-
-/// The animation a unit plays when the layout names nothing else (an engine name, not data).
-constexpr const char* kUnitIdleAnimation = "Idle";
 
 /// An item's record as a spawn class reads it (`CUnitResourceList`'s data of the unit).
 SpawnUnitData spawn_data_of(const ItemStats& item);
@@ -491,6 +464,7 @@ public:
     };
 
     std::map<std::string, ParticleFileExtras> particle_file_extras;
+    std::map<int64_t, std::string> particle_link_files;  ///< a placed link particle's file, by node
 
     /// GUID to mesh paths, from the tileset index: every `FILE` of the record, in order (the
     /// variants one of which each copy rolls, `CRoomPiece::initRoomPiece`).
@@ -523,6 +497,11 @@ public:
     /// The `Unit Trigger` nodes placed with their own collision: candidates for
     /// `CBaseUnit::addToAvoidanceMap` once `passability.bake()` stands; drained after it.
     std::vector<int64_t> door_trigger_nodes;
+    /// While a generated floor loads (`place_dungeon_floor`): its rooms' triggers meet the object
+    /// ray at their stored positions (`load_shifts`, each group's world place less its node's
+    /// own) until the load is over.
+    bool loading_floor = false;
+    std::map<int64_t, ogre::Vector3> load_shifts;
 
     /// Which of `door_trigger_nodes` marked the map (for `CBaseUnit+0x19b`), to take back out
     /// on opening (`CBaseUnit::removeFromAvoidanceMap`).
@@ -677,6 +656,10 @@ public:
 
     std::map<int64_t, SpawnLevel> unit_spawn_level;
 
+    /// Characters a spawn class made for loot (`loot_unit_maker`), made but not yet in the
+    /// level: placed in the order made by the drop's `add_unit`.
+    std::deque<std::pair<std::string, tl::core::LevelScript::UnitCreation>> loot_creatures;
+
     /// The authored stat curves under `media/graphs/stats/`; see `core/stats.h`.
     tl::core::StatBook stat_graphs;
 
@@ -709,6 +692,8 @@ public:
     std::map<std::string, tl::core::AnimationManifest> manifests;
     /// `manifests`' entries by the mesh path asked with (its directory picks the entry).
     std::unordered_map<std::string, const tl::core::AnimationManifest*> manifests_by_mesh;
+    /// `animation_set_for`'s sets, by mesh path.
+    std::unordered_map<std::string, tl::core::AnimationSet> animation_sets;
 
     /// The sleeping mimic the same pass points at, by machine and node. DIVERGENCE: the PC
     /// targets it under the pointer (`CGameClient::updateIngame`); a pad cannot.
@@ -815,8 +800,6 @@ public:
 
     tl::core::InventoryItemEvents housing_item_events;
 
-    int reflect_depth = 0;
-
     /// The player's animal (core/pet.h); its behaviour is the level script's (a character of
     /// the level's machine). This side owns the model, the voice lines and the map icon.
     tl::core::Pet pet;
@@ -915,13 +898,25 @@ public:
         tl::core::SkillTargetFilter unauthored = tl::core::SkillTargetFilter::Enemy;
         int32_t target_alignment = 2;  ///< the skill's `TARGET_ALIGNMENT`
         tl::core::SkillEventSpec spec;
-        int group = 0;            ///< `+0x48`, the event's `EVENT_*` group
-        int32_t target_type = 0;  ///< the level property's `TARGET_TYPE` (`+0x70`)
+        int group = 0;                 ///< `+0x48`, the event's `EVENT_*` group
+        int32_t target_type = 0;       ///< the level property's `TARGET_TYPE` (`+0x70`)
+        std::string target_unit_type;  ///< its `TARGET_UNITTYPE` (X360 `+0x48`)
+        bool single_target = false;    ///< its `SINGLETARGET` (X360 `+0x88`)
+        /// `m_pOriginalTargetSfPtr` (X360 `+0x44`): `startEvent`'s target unit, none for
+        /// `TARGET_POS` (11). A null machine is the player.
+        bool has_original_target = false;
+        const void* original_machine = nullptr;
+        int64_t original_node = 0;
         /// The skill's owner when a placed unit; null is the player.
         tl::core::LevelScript* caster_machine = nullptr;
         int64_t caster_node = 0;
         /// The copy of the skill that fired the event (`SkillRunState::copy`).
         uint32_t run = 0;
+        bool prop_owner = false;  ///< the skill's owner is a prop (a trap), not a character
+        int64_t prop_id = 0;      ///< that prop: its skill keeps its effects' owners between casts
+        /// That prop's level (`+0xf0`), which `setOwner` gives a `USEOWNERLEVEL` effect: a populated
+        /// item's is the floor's monster level (`CResourceManager::createUnit`).
+        int32_t prop_level = 1;
     };
 
     /// Each unit model's animations in manifest order, by mesh.
@@ -1024,39 +1019,16 @@ public:
 
     NodeMap scripted_nodes;
 
-    /// One machine per placed nested layout with a script of its own (a wire never crosses
-    /// a file); each has its own node map, as copies share their layout's node ids.
-    struct NestedScript {
-        std::string reference;
-        int64_t owner = 0;  ///< the `Layout Link` node in the parent
-        /// The `Layout Link` of the parent machine's own file it was reached through (its
-        /// `owner`, or a link above it when the files between own no machine): whose turn of
-        /// the parent's activation activates it.
-        int64_t turn_link = 0;
-        std::string owner_name;
-        /// The node map of the file holding that link (`Play` on the link is
-        /// `CLayout::start` on its layout).
-        const NodeMap* owner_nodes = nullptr;
-        /// In the level's coordinates (`LevelScript::set_frame` before it is built); its
-        /// characters join the level's list (`set_level_machines`).
-        tl::core::LevelScript script;
-        NodeMap nodes;
-
-        bool running = false;
-        bool retired = false;  ///< an ended skill event's: not stepped, off `level_machines`
-
-        /// Where its nodes sit as `CLogicNodeState` records them: the room layout's index in
-        /// `CLevel+0x10` (+0x30) and the parent hierarchy hash (+0x40) (`placing_scene`).
-        uint32_t scene = 0;
-        int64_t hierarchy = 0;
-
-        /// Whether its first action has been logged (once, not every frame).
-        bool reported = false;
-    };
+    /// One machine per placed nested layout with a script of its own (`world_nested.h`).
+    using NestedScript = tl::core::NestedScript;
 
     /// A deque: `node_sink` points into one while its layout is placed, and a push_back
     /// part-way must not move it.
     std::deque<NestedScript> nested_scripts;
+
+    /// A room's linked layout that makes no machine, built only to be stored (`world_nested.h`).
+    using StoredLayout = tl::core::StoredLayout;
+    std::deque<StoredLayout> stored_layouts;
 
     bool level_dont_store = false;
 
@@ -1215,7 +1187,12 @@ public:
         /// Its range and fade, and whether it is on the near item list.
         tl::core::ItemPresence presence;
         bool listed = true;
+        uint64_t made = 0;  ///< its turn in `items_made`
     };
+
+    /// `CLevel::addItem` pushes each item at the front of the
+    /// level's lists: the turn of each item `populate` made, breakables and trigger props alike.
+    uint64_t items_made = 0;
 
     /// In `CLevel::addItem` order, newest first. Level-
     /// local. INVENTED: no `CLevelState` field, so a restored level has none.
@@ -1300,6 +1277,8 @@ public:
         NodeMap* nodes = nullptr;
         uint32_t scene = 0;
         int64_t hierarchy = 0;
+        int64_t owner = 0;      ///< the `Layout Link` it hangs from, 0 for a room's own
+        bool particle = false;  ///< `NestedScript::particle`: no logic state of its own is stored
     };
 
     /// `CCameraControl`'s two shake lists (`+0x58`, `+0x70`), walked by
@@ -1324,6 +1303,9 @@ public:
     tl::core::LevelScript* instant_caster_machine = nullptr;
 
     int64_t instant_caster_node = 0;
+
+    /// A prop's event is applying them: the effects have no owner (`+0x40`, `+0x48` null).
+    bool instant_caster_none = false;
 
     /// The direction that event hands `applyAffixesAndEffects`
     /// for `CAffix::setDirection`; unset is `UNIT_Z`.
@@ -1366,6 +1348,11 @@ public:
     };
 
     std::vector<std::unique_ptr<SkillEventListener>> skill_event_listeners;
+    /// A prop's skill blocks' effects owned (`CEffect +0x40`), by prop and block, given at first
+    /// `applyAffixesAndEffects`, `setOwner(null)` after leaving that owner.
+    std::map<std::pair<int64_t, const tl::formats::AdmSection*>,
+             std::set<std::pair<size_t, size_t>>>
+        prop_effect_owners;
 
     /// Every `Unit Spawner` of a placed skill layout by node id (the file's own, so the latest
     /// cast's is kept), with its event and shape.
@@ -1591,6 +1578,7 @@ public:
         /// item list (`CLevel +0x90`).
         tl::core::ItemPresence presence;
         bool listed = true;
+        uint64_t made = 0;  ///< its turn in `items_made`
     };
 
     /// Level-local: `restart()` replaces `Impl`, so a dropped item does not survive leaving.
@@ -1697,6 +1685,9 @@ public:
         std::string reference;
         /// Each `Monster` node's unit as `setLayoutFile` made it, in node order.
         std::vector<tl::core::LevelScript::UnitCreation> made;
+        /// Where `CFormationNode::setPosition` put the node (its `+0x70`, what the level's state
+        /// keeps); `at` is that place on the ground.
+        ogre::Vector3 placed;
     };
 
     std::vector<PendingFormation> pending_formations;
@@ -1710,28 +1701,24 @@ public:
     struct PopulatedTrigger {
         std::string unit;
         ogre::Quaternion facing = ogre::Quaternion::IDENTITY;
+        uint64_t made = 0;  ///< its turn in `items_made`
     };
-
     /// The trigger props `place_populated_trigger` made, by node (stored as created).
     std::map<int64_t, PopulatedTrigger> populated_triggers;
-
     /// A unit a spawner released: which spawner, for its `unitStateChange`.
     struct SpawnerUnit {
         tl::core::LevelScript* machine = nullptr;
         int64_t spawner = 0;
     };
-
     std::map<int64_t, SpawnerUnit> spawner_units;
-
-    /// The level template's `ACTIVERANGEMOD` and unit active range, which every
-    /// machine's characters use (see apply_environment()).
+    /// The characters the last `restore_level_state` made, by node: newer than all the load made.
+    std::set<int64_t> restore_made_units;
+    /// The level template's `ACTIVERANGEMOD` and unit active range (see apply_environment()).
     float level_active_range_mod = 0.0f;
-    /// Where place_mesh() registers what it places while a scripted nested layout is
-    /// placed; null: the level's own map.
+    /// Where place_mesh() registers what a scripted nested layout places; null: the level's map.
     NodeMap* node_sink = nullptr;
     std::vector<std::pair<Ogre::Entity*, std::string>> pending_trigger_layouts;
-    /// Placed trigger props whose unit authors `LAYOUT_STATE_1`, waiting: a layout cannot
-    /// be placed inside `place_layout`, so the script's step hangs them.
+    /// Trigger props authoring `LAYOUT_STATE_1`, hung by the script's step (not in place_layout).
     std::vector<std::pair<Ogre::Entity*, std::string>> trigger_layout_props;
     /// `--rng-trace`: where every seeding and draw of `g_Rand` (`core::game_random()`) goes.
     std::FILE* rng_trace_file = nullptr;
@@ -1749,6 +1736,7 @@ public:
     /// The `Layout Link` node whose file is currently being placed, and its
     /// name. Saved and restored around the recursive call, like `particle_owner`.
     int64_t nested_link = 0;
+    bool nested_particle = false;  ///< under a `Layout Link Particle`
     /// What a machine made now takes as its `NestedScript::turn_link`.
     int64_t turn_link = 0;
     /// Where the last frame's sound listener stood (`CSoundManager +0x14`..`+0x1C`): a level
@@ -1796,6 +1784,9 @@ public:
     /// `CParticlePreloader::LoadParticle` does, only its
     /// `Particle`, `Sound` and `Camera Shake` objects; no script runs.
     bool cparticle_places_next_layout = false;
+    /// A skill event's `FILE` is being placed: `CSkillEvent::startEvent`
+    /// starts the layout `CSkillEvent::CSkillEvent` made, so its sounds' samples were added then.
+    bool placing_skill_event_layout = false;
     size_t collision_meshes = 0;
     /// While a generated floor's room pieces are placed, their machines wait unactivated:
     /// `CLevel::populate` activates each room scene
@@ -1805,13 +1796,7 @@ public:
     /// The scale `populate` drew for a trigger prop, by its coming node; `place_layout`
     /// draws any other.
     std::map<int64_t, float> made_trigger_scale;
-    /// What `find_chunk_marker` reads besides the marker's place: its facing, and the warper beside it.
-    struct ChunkMarkerExtra {
-        ogre::Vector3 forward = ogre::Vector3::UNIT_Z;
-        bool has_warper = false;
-        ogre::Vector3 warper_position = ogre::Vector3::ZERO;
-        ogre::Vector3 warper_forward = ogre::Vector3::UNIT_Z;
-    };
+    using ChunkMarkerExtra = tl::core::ChunkMarkerExtra;
     ogre::Vector3 dungeon_exit_point = ogre::Vector3::ZERO;
     /// The floor's `ENTRANCE_NODE`: its `Stairs Up` Unit Trigger activates a
     /// Warper with `LEVEL DELTA -1` and no dungeon name.
@@ -1834,6 +1819,7 @@ public:
     bool hold_random_pieces = false;
     struct HeldCollision {
         std::string path;
+        // cppcheck-suppress uninitMemberVarNoCtor
         ogre::Matrix4 to_world;
     };
     std::vector<HeldCollision> held_random_collision;
@@ -1847,6 +1833,9 @@ public:
     };
     std::vector<RoomPieceCollision> room_piece_collision;
     uint64_t room_pieces_made = 0;
+    /// The links being placed, outermost first (`MeshPlacement::link_path`), and how many were made.
+    std::vector<uint64_t> room_link_path;
+    uint64_t room_links_made = 0;
     /// `ELevelEntryType`, which `CLevel::loadRoomLayout`
     /// picks the start by: 3 from `setGameState`, else `core::warp_entry_type`.
     int level_entry_type = 3;
@@ -1864,23 +1853,20 @@ public:
     /// The level of the player a warp brings in, 0 for none: `CGameClient::loadLevel`
     /// reads `CPlayer +0x100`, but the sheet arrives later here.
     int32_t arriving_player_level = 0;
-    /// One unit phase of `CLevel::populate`: monsters..
-    /// props, sections picked on `g_Rand`, each a
-    /// `populateSectionOfLevel`. `owner`: the characters' list; `label`: the log's word.
-    struct PopulatePhase {
-        int64_t owner = 0;
-        const char* label = "";
-        bool champion = false;      ///< `populateSectionOfLevel`'s fourth argument
-        bool markers = false;       ///< its fifth: the NPCs stand on `CLevel +0xf0`
-        bool empty_counts = false;  ///< an empty roll counts as one: all but the monsters
-        bool props = false;         ///< the props phase, for the log
-    };
+    using PopulatePhase = tl::core::PopulatePhase;
     /// `CLevel::populate`'s sections: one box
     /// per collision-enabled room piece, in the order the pieces were placed.
     std::vector<tl::core::PopulateSection> population_sections;
     /// The floor's chunks where its layout put them, in the layout's order (`CLevel +0x16c`'s
     /// instances, `CChunkInstance +0x28`).
     std::vector<ogre::Vector3> level_chunk_origins;
+    /// `CLevel +0x1e8`: the layout's pieces, in its order (`loadRoomLayout`), by `CChunk +0x20`,
+    /// the piece's path; empty on a level that is no generated floor.
+    std::vector<std::string> level_chunk_names;
+    /// PORT: told as each step of `store_level_state` begins; nothing listens in the game.
+    std::function<void(tl::core::StoreStep)> store_step_listener;
+    /// PORT: told as `restore_level_state` starts putting a state back (true) and ends (false).
+    std::function<void(bool)> restore_listener;
 };
 
 }  // namespace tl::core

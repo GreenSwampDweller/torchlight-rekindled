@@ -10,50 +10,6 @@
 #include <chrono>
 
 namespace tl::render {
-bool Renderer::place_player_at(float x, float z, const float* feet_if_no_ground) {
-    Impl& m = *impl_;
-    if (!m.player_control) {
-        TL_LOG_ERROR("place_player_at needs player control enabled");
-        return false;
-    }
-
-    const tl::core::Vec3 was = m.player.position();
-
-    float surface = 0.0f;
-    // `CCharacter::dropToGround`'s ray runs +100 to -100 about the unit; casting
-    // from 200 above left ground at or below the start height out of reach.
-    if (!m.collision.empty() && !m.collision.ground_under(x, z, was.y + 100.0f, surface)) {
-        if (feet_if_no_ground == nullptr) {
-            TL_LOG_WARN("no ground at (%.2f, %.2f); leaving the character where it was", x, z);
-            return false;
-        }
-        surface = *feet_if_no_ground;
-        TL_LOG_INFO("no ground at (%.2f, %.2f); standing at the given height %.3f", x, z,
-                    static_cast<double>(surface));
-    }
-
-    m.player.place({x, surface, z}, m.player.facing());
-    m.step_player(0.0f, tl::core::InputState{});
-
-    // The pet comes too: the original moves a character's pets whenever it moves the
-    // character itself (CGameClient on every level change).
-    m.place_pet_beside_player();
-    // ... and so do the characters that took the player as their master
-    // (`CCharacter +0x648`), beside them as `bring_player_pets` puts them.
-    int n = 0;
-    for (const Impl::MachineView& view : m.machines()) {
-        for (const int64_t id : view.script->player_pets()) {
-            if (view.script == &m.script && id == m.pet_node_id) continue;  // the animal, above
-            ++n;
-            Ogre::Vector3 at(x - 1.6f * static_cast<float>(n), surface, z);
-            at = m.dropped_to_ground(at);
-            view.script->move_unit(id, tl::core::Vec3{at.x, at.y, at.z});
-        }
-    }
-    TL_LOG_INFO("character moved to (%.2f, %.2f, %.2f)", x, surface, z);
-    return true;
-}
-
 void Renderer::probe_ground(float x, float z) {
     Impl& m = *impl_;
     float top = 100.0f;
@@ -241,6 +197,7 @@ bool Renderer::simulate_walk(float seconds) {
     return true;
 }
 
+// PORT: a headless verification switch (`--talk-to`): walked to the unit, A pressed on it.
 bool Renderer::talk_to_unit(const std::string& name, float timeout) {
     Impl& m = *impl_;
     Ogre::Vector3 at;
@@ -249,9 +206,8 @@ bool Renderer::talk_to_unit(const std::string& name, float timeout) {
         TL_LOG_WARN("this level places no unit matching '%s'", name.c_str());
         return false;
     }
-
-    // Route at the unit itself: find_path snaps the goal to the nearest walkable cell,
-    // where pressing A ends up too. CCharacter::approachAI's reach (see step_pending_talk).
+    // Route at the unit itself (find_path snaps the goal to a walkable cell); the approach's
+    // own reach is `step_pending_talk`'s.
     constexpr float kReach = 2.0f;
     const tl::core::Vec3 me = m.player.position();
     const float dx0 = at.x - me.x, dz0 = at.z - me.z;
@@ -578,7 +534,7 @@ bool Renderer::walk_route_to(float x, float z, float timeout) {
 
     const tl::core::Vec3 from = m.player.position();
     const tl::core::Vec3 to{x, from.y, z};
-    const std::vector<tl::core::Vec3> route = m.nav.find_path(from, to);
+    const std::vector<tl::core::Vec3> route = m.nav.find_path(from, to, m.passability);
     if (route.empty()) {
         TL_LOG_WARN("no route from (%.2f, %.2f) to (%.2f, %.2f)", from.x, from.z, x, z);
         return false;
@@ -671,6 +627,18 @@ bool Renderer::set_quest(const std::string& specification) {
     return true;
 }
 
+namespace {
+// A `CDataValue` of type 5 or 8, a string; any other names nothing.
+std::string string_value(const tl::formats::AdmRecord& record) {
+    const bool text = record.type == tl::formats::AdmType::String ||
+                      record.type == tl::formats::AdmType::Translate;
+    return text ? record.text : std::string();
+}
+}  // namespace
+
+// CPlayer::setQuestManager: each `QUESTS` string, upper-cased,
+// `giveQuest(quest, nullptr, false)` and `setQuestAccepted`. Not yet its last step, the retiree
+// quest given and completed under the settings' `GAME_COMPLETED_ONCE`.
 void Renderer::give_starting_quests() {
     Impl& m = *impl_;
     // The class's file, found the way load_player_stats() finds it: by the
@@ -701,10 +669,9 @@ void Renderer::give_starting_quests() {
     for (const tl::formats::AdmSection& child : file.root.children) {
         if (child.name != "QUESTS") continue;
         for (const tl::formats::AdmRecord& record : child.records) {
-            const tl::core::QuestDefinition* quest = m.quest_book.find(record.text);
+            const tl::core::QuestDefinition* quest = m.quest_book.find(string_value(record));
             if (quest == nullptr) continue;
-            // Given with no NPC: `CQuest +0x1c` stays -1, as in
-            // apply_floor_quests().
+            // Given with no NPC: `CQuest +0x1c` stays -1.
             const uint32_t seed = static_cast<uint32_t>(-1);
             if (!m.quest_log.accept(*quest, m.quest_level_of(*quest), seed, m.stat_graphs))
                 continue;
@@ -1178,41 +1145,6 @@ void Renderer::log_quest_progress() {
     }
 }
 
-void Renderer::bring_player_pets(const CarriedPlayer& carried) {
-    Impl& m = *impl_;
-    if (m.subject_node == nullptr) return;
-    // CGameClient::loadLevel adds each back with the player; CPlayer::levelResetting
-    // puts each pet by its master:
-    // teleportToMaster(count * 0.25), landing at randomOpenPosition(8).
-    const Ogre::Vector3 master = m.subject_node->getPosition();
-    const float facing = m.subject_node->getOrientation().getYaw().valueRadians();
-    const size_t pets = carried.companions.size() + (m.pet.alive() ? 1 : 0);
-    const float distance = static_cast<float>(pets) * 0.25f;
-    for (const CarriedPlayer::CarriedCompanion& companion : carried.companions) {
-        Ogre::Vector3 at = master;
-        if (m.spawn_unit(companion.unit, at, /*owner=*/0, companion.level, false, false,
-                         m.subject_node->getOrientation()) == nullptr) {
-            TL_LOG_WARN("pet: %s could not be brought along", companion.unit.c_str());
-            continue;
-        }
-        const int64_t node = m.spawned[0].back().id;
-        m.script.add_spawned_unit(node, companion.unit, tl::core::Vec3{at.x, at.y, at.z},
-                                  /*hunts=*/false, facing);
-        if (companion.level > 0) m.script.set_unit_level(node, companion.level);
-        m.script.set_unit_experience(node, companion.experience);
-        if (companion.hp > 0.0f) m.script.set_unit_hp(node, companion.hp);
-        std::vector<tl::core::ScriptEvent> events;
-        m.script.make_player_pet(node, m.quest_log.state(), events);
-        if (!events.empty()) m.apply_script_events(events, m.scripted_nodes);
-        m.script.put_pet_by_master(node, tl::core::Vec3{master.x, master.y, master.z}, distance);
-        tl::core::Vec3 placed;
-        if (m.script.unit_position(node, placed)) at = Ogre::Vector3(placed.x, placed.y, placed.z);
-        TL_LOG_INFO("pet: %s brought along to (%.2f, %.2f, %.2f)", companion.unit.c_str(),
-                    static_cast<double>(at.x), static_cast<double>(at.y),
-                    static_cast<double>(at.z));
-    }
-}
-
 bool Renderer::accept_offer() {
     Impl& m = *impl_;
     if (m.offered_quest == nullptr) {
@@ -1390,6 +1322,7 @@ bool Renderer::give_player_item(const std::string& item_name, bool enchant) {
     return true;
 }
 
+// PORT: a headless verification switch (`--pet-item`): an item put straight into the pet's bag.
 bool Renderer::give_pet_item(const std::string& item_name, int count) {
     Impl& m = *impl_;
     if (!m.pet.alive()) return false;
@@ -1402,7 +1335,7 @@ bool Renderer::give_pet_item(const std::string& item_name, int count) {
     }
     m.load_unit_types();
     if (!m.pet.bag().add_item(m.create_item(*item, false, true), count, m.unit_types)) {
-        // `CCharacter::getItem`.
+        // CCharacter::getItem: the bag-full voice.
         m.play_voice(tl::core::SoundSlot::VoicePetInventoryFull);
         return false;
     }
@@ -1708,7 +1641,7 @@ MenuAction Renderer::run_main_menu(const std::string& dump_png, bool auto_new_ga
     // Headless: there is nobody to press anything, and sitting in the loop
     // below would never finish. The dump above is the whole point of the run.
     if (m.config.headless) {
-        m.menu.destroy();
+        m.menu.finish_headless();
         return MenuAction::Quit;
     }
 
@@ -1755,15 +1688,15 @@ MenuAction Renderer::run_main_menu(const std::string& dump_png, bool auto_new_ga
             // none): nothing moved the menu's focus.
             const bool start_edge = input.quit && !m.quit_held;
             const bool back_edge = input.inventory && !m.inventory_button_held;
-            m.drive_howto_menu(input, delta, start_edge, back_edge);
+            m.drive_howto_menu(m.menu_pointer(input), delta, start_edge, back_edge);
             m.menu.hold(input);
             action = MenuAction::None;
         } else if (m.settings_menu.open || !m.settings_menu.finished) {
-            if (m.settings_menu.open) m.drive_settings_menu(input);
+            if (m.settings_menu.open) m.drive_settings_menu(m.menu_pointer(input));
             m.menu.hold(input);
             action = MenuAction::None;
         } else {
-            action = m.menu.update(input);
+            action = m.menu.update(m.menu.with_pointer(input));
         }
         if (action == MenuAction::Help) {
             TL_LOG_INFO("main menu: help");
@@ -1871,8 +1804,8 @@ Renderer::DungeonTransition Renderer::dungeon_transition() const {
     t.pending = m.dungeon_transition_pending;
     if (!t.pending) return t;
     if (m.death_town_pending || m.portal_warp_pending) {
-        // `warpLevels("Town", -99)`, from the death screen or a portal, and
-        // `performWarp`'s choice of where that leads.
+        // `warpLevels("Town", -99)`, from the death screen or a portal, and `performWarp`'s
+        // choice of where that leads.
         t.portal_warp = true;
         tl::core::TravelRecord none;
         const tl::core::TownPortalWarp to = tl::core::town_portal_destination(
@@ -2813,16 +2746,17 @@ tl::core::HeirloomHandOff Renderer::take_heirloom() {
     return out;
 }
 
+// CGameClient::loadLevel, a retired character's heir.
 void Renderer::receive_heirloom(const tl::core::HeirloomHandOff& handoff) {
     Impl& m = *impl_;
     m.load_stat_graphs();
     m.load_unit_types();
-    // `+0xa10` = `+0x3908`; the fame figure is taken now and the
-    // generation cleared.
+    // `+0x9a0` = the client's generation; the fame figure is
+    // taken now and the generation cleared.
     m.player_character.set_generation(handoff.generation);
     const int fame = tl::core::heirloom_fame(handoff.generation, m.stat_graphs);
-    // pickupEquipment(+0x3900, true). DIVERGENCE: an item that would not fit
-    // goes down at the player's feet.
+    // pickupEquipment(heirloom, true). DIVERGENCE: an item
+    // that would not fit goes down at the player's feet.
     if (handoff.item) {
         if (m.player_inventory.pickup(*handoff.item, 1, m.unit_types) < 0) {
             m.drop_item_near_player(*handoff.item, 1);
@@ -2830,7 +2764,7 @@ void Renderer::receive_heirloom(const tl::core::HeirloomHandOff& handoff) {
         m.player_inventory.calculate_effect_values();
         m.update_menu();
     }
-    // `awardFame(level, player, fame, false)` once the level is up.
+    // `awardFame(level, player, fame, false)`, the level up.
     if (fame != 0 && m.award_player_fame(fame)) {
         m.play_voice(tl::core::SoundSlot::VoiceFameUp);
     }
@@ -2927,7 +2861,7 @@ MenuAction Renderer::run_character_create(const std::string& dump_png, std::stri
         pet = m.create_screen.pet();
         m.created_player_name = m.create_screen.player_name();
         m.created_pet_name = m.create_screen.pet_name();
-        m.create_screen.destroy();
+        m.create_screen.finish_headless();
         TL_LOG_INFO("character creation: headless, taking %s", chosen.c_str());
         return MenuAction::NewGame;
     }
@@ -2948,7 +2882,7 @@ MenuAction Renderer::run_character_create(const std::string& dump_png, std::stri
         last = now;
 
         const tl::core::InputState input = tl::core::poll_input();
-        action = m.create_screen.update(input);
+        action = m.create_screen.update(m.create_screen.with_pointer(input));
 
         // A different class means a different body on the backdrop. Done here
         // rather than inside the screen, which knows nothing about the scene.
@@ -3022,7 +2956,7 @@ MenuAction Renderer::run_difficulty_menu(tl::core::DifficultyMenu& state,
         const float delta = std::min(static_cast<float>(now - last) * 0.001f, 0.1f);
         last = now;
 
-        action = m.menu.update(tl::core::poll_input());
+        action = m.menu.update(m.menu.with_pointer(tl::core::poll_input()));
 
         m.advance(delta);
         if (!m.root->renderOneFrame()) break;
@@ -3438,7 +3372,7 @@ bool Renderer::spawn_pu_smoke() {
 
 void Renderer::advance_scene(float seconds) {
     Impl& m = *impl_;
-    if (!(seconds > 0.0f) || !m.root) return;
+    if (!(seconds > 0.0f) || !m.root || m.play_scripted_mouse(seconds)) return;
 
     // The same fixed 60 Hz step as simulate_walk(), so both targets agree.
     constexpr float kStep = 1.0f / 60.0f;
@@ -3859,5 +3793,10 @@ bool Renderer::dump_frame(const std::string& png_path) {
     if (inv_was_up) m.inventory_menu.show();
     return true;
 }
+
+// PORT: the renderer's interface to `main.cpp`.
+void Renderer::toggle_automap() { impl_->automap.cycle_mode(); }
+void Renderer::automap_zoom_in() { impl_->automap.zoom_in(); }
+void Renderer::automap_zoom_out() { impl_->automap.zoom_out(); }
 
 }  // namespace tl::render

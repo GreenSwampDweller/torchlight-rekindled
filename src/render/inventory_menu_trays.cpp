@@ -3,21 +3,22 @@
 #include "render/inventory_menu.h"
 
 #include "core/inventory_screen.h"
-#include "core/skills.h"
-#include "render/menu_pointer.h"
+#include "render/menu_chrome.h"
+#include "render/text_layout.h"
 
-#include <OgrePanelOverlayElement.h>
+#include <OgreFontManager.h>
 
 #include <algorithm>
-#include <cstdio>
+#include <cmath>
+#include <vector>
 
 namespace tl::render {
 
 void InventoryMenu::focus_next_tray(int direction) {
     if (vendor_ == VendorScreen::None || direction == 0) return;
-#if defined(TL_PLATFORM_IOS) || defined(TL_PLATFORM_MACOS)
-    // DIVERGENCE (platform): the touch pad's LB (and the Mac's) rotates over the vendor's
-    // tray, the bag and the pet's, and on the enchanter swaps the bag and the pet's.
+#if defined(TL_PLATFORM_IOS)
+    // DIVERGENCE (platform): the touch pad's LB rotates over the vendor's tray, the
+    // bag and the pet's, and on the enchanter swaps the bag and the pet's.
     if (enchanter_screen()) {
         if (!pet_tray_available_) return;
         focus_ = focus_ == Tray::Pet ? Tray::Bag : Tray::Pet;
@@ -94,32 +95,49 @@ int InventoryMenu::selected_pet_slot() const {
 
 void InventoryMenu::step_tray_tab(int direction) {
     if (vendor_ == VendorScreen::None || direction == 0) return;
-    const auto tab_of = [this](Tray tray) -> int& {
-        return tray == Tray::Vendor ? vendor_tab_ : tray == Tray::Pet ? pet_tab_ : current_tab_;
-    };
-    const auto start = [this](Tray tray) {
-        if (tray == Tray::Vendor) vendor_selected_ = 0;
-        else if (tray == Tray::Pet) pet_selected_ = 0;
-        else selected_index_ = 0;
-    };
-    const int leave = tl::core::step_tray_tab(
-        tab_of(focus_), direction, focus_ == Tray::Vendor && vendor_ == VendorScreen::Combine);
-    start(focus_);
+    const bool on_vendor = focus_ == Tray::Vendor;
+    int& tab = on_vendor ? vendor_tab_ : current_tab_;
+    const int leave =
+        tl::core::step_tray_tab(tab, direction, on_vendor && vendor_ == VendorScreen::Combine);
+    if (on_vendor) {
+        vendor_selected_ = 0;
+    } else {
+        selected_index_ = 0;
+    }
     if (leave == 0) return;
-    // (leave, true)`: the tray it lands on starts at the edge it
-    // came in from - tab 0 moving right, tab 5 moving left. INVENTED (DIVERGENCE, platform:
-    // the Mac and the touch pad): the trays in the order they stand on the screen - the
-    // vendor's, the bag, the pet's when it is here - wrapping, so none is passed over.
-    std::vector<Tray> order{Tray::Vendor, Tray::Bag};
 #if defined(TL_PLATFORM_IOS) || defined(TL_PLATFORM_MACOS)
+    // INVENTED (DIVERGENCE, platform: the Mac and the touch pad): the trays in the order they
+    // stand on the screen - the vendor's, the bag, the pet's when it is here - wrapping, so
+    // none is passed over.
+    std::vector<Tray> order{Tray::Vendor, Tray::Bag};
     if (pet_tray_available_ && !enchanter_screen()) order.push_back(Tray::Pet);
-#endif
     const auto at = std::find(order.begin(), order.end(), focus_);
     const int here = at == order.end() ? 0 : static_cast<int>(at - order.begin());
     const int count = static_cast<int>(order.size());
     focus_ = order[static_cast<size_t>(((here + leave) % count + count) % count)];
-    tab_of(focus_) = leave > 0 ? 0 : tl::core::kInventoryFilterCount - 1;
-    start(focus_);
+    int& landed = focus_ == Tray::Vendor ? vendor_tab_
+                  : focus_ == Tray::Pet  ? pet_tab_
+                                         : current_tab_;
+    landed = leave > 0 ? 0 : tl::core::kInventoryFilterCount - 1;
+    if (focus_ == Tray::Vendor) {
+        vendor_selected_ = 0;
+    } else if (focus_ == Tray::Pet) {
+        pet_selected_ = 0;
+    } else {
+        selected_index_ = 0;
+    }
+#else
+    // (leave, true)`: the tray it lands on starts at the edge it
+    // came in from - tab 0 moving right, tab 5 moving left.
+    focus_next_tray(leave);
+    int& landed = focus_ == Tray::Vendor ? vendor_tab_ : current_tab_;
+    landed = leave > 0 ? 0 : tl::core::kInventoryFilterCount - 1;
+    if (focus_ == Tray::Vendor) {
+        vendor_selected_ = 0;
+    } else {
+        selected_index_ = 0;
+    }
+#endif
 }
 
 void InventoryMenu::cycle_vendor_tab(int direction) {
@@ -138,157 +156,50 @@ int InventoryMenu::selected_vendor_slot() const {
     return static_cast<int>(vendor_rows_[static_cast<size_t>(vendor_selected_)]);
 }
 
-// DIVERGENCE (desktop mouse): the pointer's hit tests, over the windows `update` placed.
-InventoryMenu::PointerHit InventoryMenu::pointer_hit(const tl::core::InputState& in) {
-    PointerHit hit;
-    if (!visible_ || !in.pointer) return hit;
-    // By the rectangle `layout()` gave the window, a little grown: the tabs are small.
-    const auto over = [&](const std::string& widget) {
-        const int index = find_node_index_by_widget(widget);
-        if (index < 0 || is_node_hidden(index)) return false;
-        const Node& node = nodes_[static_cast<size_t>(index)];
-        constexpr float kSlack = 0.004f;
-        return in.pointer_x >= node.left - kSlack && in.pointer_x < node.left + node.width + kSlack &&
-               in.pointer_y >= node.top - kSlack && in.pointer_y < node.top + node.height + kSlack;
+void InventoryMenu::set_tray_legend(const std::string& prefix, const std::string& a,
+                                    const std::string& x, const std::string& y) {
+    set_widget_visible(prefix + "buttonB", false);
+    const std::string captions[3][2] = {{"buttonA", a}, {"buttonX", x}, {"buttonY", y}};
+    for (const auto& button : captions) {
+        set_widget_text(prefix + button[0] + "text", button[1]);
+        set_widget_visible(prefix + button[0], !button[1].empty());
+    }
+
+    // the row centred in `buttontray` by the captions' widths, in pixels.
+    // Each button is `buttonA`'s width plus its caption's extent and a pad (2.5
+    // for A and X, none for Y, nothing for an empty caption); a shown one gets a share of
+    // what is left of 0.9 of the tray. The order across is A, Y, X.
+    Node* button_a = find_node_by_widget(prefix + "buttonA");
+    Node* tray = find_node_by_widget(prefix + "buttontray");
+    Ogre::FontPtr font = Ogre::FontManager::getSingleton().getByName(kFontName);
+    if (button_a == nullptr || tray == nullptr || !font || scale_ <= 0.0f) return;
+    if (!font->isLoaded()) font->load();
+    const float across = static_cast<float>(width_ > 0 ? width_ : 1);
+    const float down = static_cast<float>(height_ > 0 ? height_ : 1);
+    const float icon = button_a->wide * scale_;
+    const auto extent = [&](const char* button, const std::string& caption, float pad) {
+        const Node* text = find_node_by_widget(prefix + button + "text");
+        if (caption.empty() || text == nullptr) return 0.0f;
+        const float line = text->points * ui_points_to_pixels() * scale_ / down;
+        return measure_text(font, caption, line, across, down) * across + pad;
     };
-    if (over("master/lefttrigger") || over("master/lefttriggerbutton")) {
-        hit.kind = PointerHit::Kind::Ring;
-        hit.tab = -1;
-        return hit;
-    }
-    if (over("master/righttrigger") || over("master/righttriggerbutton")) {
-        hit.kind = PointerHit::Kind::Ring;
-        hit.tab = 1;
-        return hit;
-    }
-    if (menu_mode_ == MenuMode::Quest) {
-        for (int i = 0; i < tl::core::kQuestLogSize; ++i) {
-            if (!over("quest/ItemTray" + std::to_string(i))) continue;
-            hit.kind = PointerHit::Kind::Quest;
-            hit.row = i;
-            return hit;
-        }
-        return hit;
-    }
-    if (menu_mode_ != MenuMode::Inventory) return hit;
-
-    static constexpr const char* kFilters[] = {"weapons", "armor",  "jewelry",
-                                               "potions", "spells", "fish"};
-    struct Shown {
-        Tray tray;
-        const char* prefix;
-        int tab;
-        size_t rows;
+    const float wa = extent("buttonA", a, 2.5f) + icon;
+    const float wx = extent("buttonX", x, 2.5f) + icon;
+    const float wy = extent("buttonY", y, 0.0f) + icon;
+    const float spare = std::fma(tray->wide * scale_, 0.9f, -((wy + wx) + wa)) * 0.15f;
+    const float gap = spare >= 0.0f ? spare : 0.0f;
+    const float ga = (a.empty() ? 0.0f : gap) + wa;
+    const float gy = (y.empty() ? 0.0f : gap) + wy;
+    const float gx = (x.empty() ? 0.0f : gap) + wx;
+    const float half_gap = gap * 0.5f;
+    const float half_row = ((gy + gx) + ga) * 0.5f;
+    const auto place = [&](const char* button, float px) {
+        if (Node* node = find_node_by_widget(prefix + button)) node->off_x = px / scale_;
     };
-    std::vector<Shown> trays;
-    trays.push_back({Tray::Bag, "inv/", current_tab_, filtered_indices_.size()});
-    if (vendor_ != VendorScreen::None) {
-        trays.push_back({Tray::Vendor, "vendor/", vendor_tab_, vendor_rows_.size()});
-    }
-    if (pet_tray_available_) trays.push_back({Tray::Pet, "pet/", pet_tab_, pet_rows_.size()});
-    for (const Shown& tray : trays) {
-        for (int tab = 0; tab < tl::core::kInventoryFilterCount; ++tab) {
-            if (!over(std::string(tray.prefix) + "inventory_filter_" + kFilters[tab])) continue;
-            hit.kind = PointerHit::Kind::Tab;
-            hit.tray = tray.tray;
-            hit.tab = tab;
-            return hit;
-        }
-        const auto scrolled = tray_scrolls_.find(tray.prefix + std::to_string(tray.tab));
-        const int scroll = tray.rows > 5 && scrolled != tray_scrolls_.end() ? scrolled->second : 0;
-        for (int n = 0; n < 5; ++n) {
-            if (!over(std::string(tray.prefix) + "ItemTray" + std::to_string(n))) continue;
-            if (static_cast<size_t>(scroll + n) >= tray.rows) return hit;
-            hit.kind = PointerHit::Kind::Row;
-            hit.tray = tray.tray;
-            hit.tab = tray.tab;
-            hit.row = scroll + n;
-            return hit;
-        }
-    }
-    return hit;
-}
-
-bool InventoryMenu::pointer_on_menu(const tl::core::InputState& in) const {
-    if (!visible_ || !in.pointer) return false;
-    for (const Node& node : nodes_) {
-        if (node.panel == nullptr || (node.width > 0.95f && node.height > 0.95f)) continue;
-        if (pointer_over(in, node.panel)) return true;
-    }
-    return false;
-}
-
-void InventoryMenu::point_at(Tray tray, int tab, int row) {
-    if (menu_mode_ != MenuMode::Inventory) return;
-    if (vendor_ == VendorScreen::None) {
-        if (tray == Tray::Vendor) return;
-        if ((tray == Tray::Pet) != (focus_ == Tray::Pet)) swap_bag_focus(0);
-        if ((tray == Tray::Pet) != (focus_ == Tray::Pet)) return;
-    } else {
-        if (tray == Tray::Pet && !pet_tray_available_) return;
-        focus_ = tray;
-    }
-    int& shown_tab =
-        tray == Tray::Vendor ? vendor_tab_ : tray == Tray::Pet ? pet_tab_ : current_tab_;
-    int& selected = tray == Tray::Vendor ? vendor_selected_
-                    : tray == Tray::Pet  ? pet_selected_
-                                         : selected_index_;
-    if (shown_tab != tab) shown_tab = tab;
-    selected = std::max(row, 0);
-}
-
-}  // namespace tl::render
-
-namespace tl::render {
-
-// DIVERGENCE (desktop mouse): the cell under the pointer takes the skills tab's cursor.
-bool InventoryMenu::point_skill(const tl::core::InputState& in) {
-    if (!visible_ || menu_mode_ != MenuMode::Skills || skill_map_open_ || !in.pointer) return false;
-    const auto over = [&](const char* name) {
-        const int index = find_node_index_by_widget(name);
-        if (index < 0 || is_node_hidden(index)) return false;
-        const Node& node = nodes_[static_cast<size_t>(index)];
-        return in.pointer_x >= node.left && in.pointer_x < node.left + node.width &&
-               in.pointer_y >= node.top && in.pointer_y < node.top + node.height;
-    };
-    char name[48];
-    for (int pane = 0; pane < tl::core::kSkillPanes; ++pane) {
-        for (int row = 0; row < tl::core::kSkillRows; ++row) {
-            for (int column = 0; column < tl::core::kSkillColumns; ++column) {
-                std::snprintf(name, sizeof(name), "skills/skillbg%d_%d_%d", pane, row, column);
-                if (!over(name)) continue;
-                skill_cursor_.in_spells = false;
-                skill_cursor_.pane = pane;
-                skill_cursor_.row = row;
-                skill_cursor_.column = column;
-                return true;
-            }
-        }
-    }
-    for (int i = 0; i < tl::core::kSkillSpellSlots; ++i) {
-        std::snprintf(name, sizeof(name), "skills/spellbg%d", i);
-        if (!over(name)) continue;
-        skill_cursor_.in_spells = true;
-        skill_cursor_.spell = i;
-        return true;
-    }
-    return false;
-}
-
-int InventoryMenu::skill_slot_at(const tl::core::InputState& in) const {
-    if (!visible_ || menu_mode_ != MenuMode::Skills || !in.pointer) return -1;
-    for (int slot = 2; slot < tl::core::kSkillFunctionSlots; ++slot) {
-        for (const char* row : {"skills/SkillSlot", "skillmap/MapSkillSlot"}) {
-            const int index = find_node_index_by_widget(row + std::to_string(slot + 1));
-            if (index < 0 || is_node_hidden(index)) continue;
-            const Node& node = nodes_[static_cast<size_t>(index)];
-            if (in.pointer_x >= node.left && in.pointer_x < node.left + node.width &&
-                in.pointer_y >= node.top && in.pointer_y < node.top + node.height) {
-                return slot;
-            }
-        }
-    }
-    return -1;
+    place("buttonA", (half_gap - half_row) + 5.0f);
+    place("buttonB", ((((half_gap + gy) + gx) + ga) - half_row) + 5.0f);
+    place("buttonX", (((half_gap + gy) + ga) - half_row) + 5.0f);
+    place("buttonY", ((half_gap + ga) - half_row) + 5.0f);
 }
 
 }  // namespace tl::render

@@ -57,6 +57,85 @@ struct Pad {
 
 Pad g_pad;
 
+/// A mouse and a keyboard (a DeX dock's, Bluetooth ones), for the mouse controls: the
+/// pointer in the window's pixels, its buttons, the wheel since the last poll, and the
+/// keys the PC's scheme reads.
+struct Mouse {
+    bool present = false;
+    float x = 0.0f, y = 0.0f;
+    bool left = false, right = false, middle = false;
+    int wheel = 0;
+    bool shift = false, control = false;
+    std::uint16_t slot_keys = 0;
+};
+
+Mouse g_mouse;
+
+/// A mouse's motion events: where it is, what is held, and the wheel.
+bool handle_mouse(const AInputEvent* event) {
+    if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_MOTION ||
+        (AInputEvent_getSource(event) & AINPUT_SOURCE_MOUSE) != AINPUT_SOURCE_MOUSE) {
+        return false;
+    }
+    const int32_t masked = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
+    g_mouse.present = masked != AMOTION_EVENT_ACTION_HOVER_EXIT;
+    g_mouse.x = AMotionEvent_getX(event, 0);
+    g_mouse.y = AMotionEvent_getY(event, 0);
+    const int32_t buttons = AMotionEvent_getButtonState(event);
+    g_mouse.left = (buttons & AMOTION_EVENT_BUTTON_PRIMARY) != 0;
+    g_mouse.right = (buttons & AMOTION_EVENT_BUTTON_SECONDARY) != 0;
+    g_mouse.middle = (buttons & AMOTION_EVENT_BUTTON_TERTIARY) != 0;
+    if (masked == AMOTION_EVENT_ACTION_SCROLL) {
+        // A notch is 1.0 here and 120 in the units the game's wheel is read in.
+        g_mouse.wheel += static_cast<int>(
+            AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_VSCROLL, 0) * 120.0f);
+    }
+    return true;
+}
+
+/// A keyboard's keys the mouse controls read: Shift, Ctrl and the ten digits.
+bool handle_keyboard(const AInputEvent* event) {
+    if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_KEY) return false;
+    const int32_t key = AKeyEvent_getKeyCode(event);
+    const bool down = AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN;
+    if (key == AKEYCODE_SHIFT_LEFT || key == AKEYCODE_SHIFT_RIGHT) {
+        g_mouse.shift = down;
+        return true;
+    }
+    if (key == AKEYCODE_CTRL_LEFT || key == AKEYCODE_CTRL_RIGHT) {
+        g_mouse.control = down;
+        return true;
+    }
+    if (key < AKEYCODE_0 || key > AKEYCODE_9) return false;
+    // `1`..`9` are slots 0..8, `0` the tenth.
+    const int digit = key - AKEYCODE_0;
+    const auto bit = static_cast<std::uint16_t>(1U << (digit == 0 ? 9 : digit - 1));
+    if (down) {
+        g_mouse.slot_keys |= bit;
+    } else {
+        g_mouse.slot_keys &= static_cast<std::uint16_t>(~bit);
+    }
+    return true;
+}
+
+/// The mouse and keyboard into the game's input, under the mouse controls.
+void map_mouse(InputState& in) {
+    in.hold_position = g_mouse.shift;
+    in.control = g_mouse.control;
+    in.slot_keys = g_mouse.slot_keys;
+    in.pointer_wheel = g_mouse.wheel;
+    g_mouse.wheel = 0;
+    const float wide = static_cast<float>(android::screen_width());
+    const float tall = static_cast<float>(android::screen_height());
+    if (!g_mouse.present || !(wide > 0.0f) || !(tall > 0.0f)) return;
+    in.pointer = true;
+    in.pointer_x = g_mouse.x / wide;
+    in.pointer_y = g_mouse.y / tall;
+    in.pointer_left = g_mouse.left;
+    in.pointer_right = g_mouse.right;
+    in.pointer_middle = g_mouse.middle;
+}
+
 static_assert(static_cast<std::uint32_t>(kA) == TouchPad::kA &&
                   static_cast<std::uint32_t>(kStart) == TouchPad::kStart &&
                   static_cast<std::uint32_t>(kRight) == TouchPad::kRight,
@@ -153,7 +232,8 @@ namespace android {
 
 bool handle_input_event(const AInputEvent* event) {
     if (handle_touch(event)) return true;
-    if (!from_pad(event)) return false;
+    if (mouse_controls() && handle_mouse(event)) return true;
+    if (!from_pad(event)) return mouse_controls() && handle_keyboard(event);
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY) {
         int32_t key = AKeyEvent_getKeyCode(event);
         // Some pads send their B as Back. From a pad it is B; the phone's own
@@ -202,6 +282,7 @@ void release_pad() {
 
 InputState poll_platform_input() {
     InputState in;
+    if (mouse_controls()) map_mouse(in);
     // The on-screen pad folded in: its buttons with the controller's, and on
     // each axis whichever of the two is pushed further.
     const TouchPad::State touch = touch_pad().take();

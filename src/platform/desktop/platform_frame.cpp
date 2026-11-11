@@ -120,6 +120,7 @@ void pump_events() {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
         if (msg.message == WM_CHAR) note_typed_unit(static_cast<unsigned>(msg.wParam));
+        if (msg.message == WM_MOUSEWHEEL) note_wheel(GET_WHEEL_DELTA_WPARAM(msg.wParam));
         DispatchMessageW(&msg);
     }
 #endif

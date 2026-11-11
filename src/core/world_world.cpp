@@ -1,5 +1,6 @@
 // The gameplay half of render/renderer_world.cpp (core/world.h).
 #include "core/world.h"
+#include "core/unit_themes.h"
 
 #include <algorithm>
 #include <cmath>
@@ -214,6 +215,46 @@ void activate_linked_machines(World& world, LevelScript& parent, int64_t link,
 
 }  // namespace
 
+// The level's items as a damage shape reaches them (`set_level_items`), made once.
+void World::wire_level_items() {
+    if (level_items.list) return;
+    // `near`: on the near list and active (`CLevel::updateItems`);
+    // else every one standing, as `CDamageShape::doInstantDamage`
+    // walks the level's item list.
+    const auto items = [this](bool near) {
+        std::vector<tl::core::DamageShapeItem> out;
+        for (size_t i = breakables.size(); i-- > 0;) {
+            const BreakableWorld& b = breakables[i];
+            if (b.node == nullptr || !b.state.usable) continue;
+            if (near && (!b.listed || !b.presence.active)) continue;
+            const auto at = view_position(b.node);
+            tl::core::DamageShapeItem item;
+            item.id = b.id;
+            item.at = {at.x, at.y, at.z};
+            item.radius = tl::core::kBreakableRadius;
+            // Its own `UNITTYPE` where the unit's data is at hand; every
+            // one of them is a `BREAKABLE` at the least.
+            item.unit_type = unit_types.id_of(stats_for_unit(b.unit).unittype);
+            if (item.unit_type == tl::core::UnitTypeHierarchy::kUnknown) {
+                item.unit_type = tl::core::unit_type::kBreakable;
+            }
+            out.push_back(item);
+        }
+        return out;
+    };
+    level_items.list = [items]() { return items(true); };
+    level_items.all = [items]() { return items(false); };
+    level_items.interact = [this](int64_t item) { queue_item_interact(item); };
+    // `CBreakable::interact(nullptr)` within the shape's pass, as the console breaks it.
+    level_items.interact_now = [this](int64_t item) {
+        for (size_t i = 0; i < breakables.size(); ++i) {
+            if (breakables[i].id != item) continue;
+            break_breakable(i, false);
+            return;
+        }
+    };
+}
+
 void World::wire_script(tl::core::LevelScript& machine) {
     machine.set_animation_length([this](const std::string& unit, const std::string& animation) {
         return scene_animation_length(unit, animation);
@@ -222,33 +263,7 @@ void World::wire_script(tl::core::LevelScript& machine) {
     machine.set_stat_graphs(&stat_graphs);
     load_unit_types();
     machine.set_unit_types(&unit_types);
-    if (!level_items.list) {
-        level_items.list = [this]() {
-            std::vector<tl::core::DamageShapeItem> out;
-            for (size_t i = breakables.size(); i-- > 0;) {
-                const BreakableWorld& b = breakables[i];
-                // On the near list and active (`CLevel::updateItems`).
-                //
-                if (b.node == nullptr || !b.state.usable || !b.listed || !b.presence.active) {
-                    continue;
-                }
-                const auto at = view_position(b.node);
-                tl::core::DamageShapeItem item;
-                item.id = b.id;
-                item.at = {at.x, at.y, at.z};
-                item.radius = tl::core::kBreakableRadius;
-                // Its own `UNITTYPE` where the unit's data is at hand; every
-                // one of them is a `BREAKABLE` at the least.
-                item.unit_type = unit_types.id_of(stats_for_unit(b.unit).unittype);
-                if (item.unit_type == tl::core::UnitTypeHierarchy::kUnknown) {
-                    item.unit_type = tl::core::unit_type::kBreakable;
-                }
-                out.push_back(item);
-            }
-            return out;
-        };
-        level_items.interact = [this](int64_t item) { queue_item_interact(item); };
-    }
+    wire_level_items();
     machine.set_level_items(&level_items);
     machine.set_level_monster_level(level_monster_level);
     machine.set_random_names(&random_names);
@@ -261,6 +276,14 @@ void World::wire_script(tl::core::LevelScript& machine) {
         [this, &machine](int64_t link, std::vector<tl::core::ScriptEvent>& out) {
             activate_linked_machines(*this, machine, link, out);
         });
+    // `CQuestManager::calculateNPCIcon`: the quest drawn on `g_RandVolatile`.
+    // DIVERGENCE: the marker's themes are left to the level's next `updateNPCIcons`.
+    machine.set_npc_icon([this](const std::string& unit) {
+        TL_LOG_DEBUG("npc icon %s (a Monster's input)", unit.c_str());
+        tl::core::UnitThemeSet themes;
+        quest_log.calculate_npc_icon(unit, stats_for_unit(unit).quests, tl::core::volatile_random(),
+                                     ui_in_cinematic(), true, themes, nullptr);
+    });
     // The player's skill manager, for a `Skill Controller` on `PLAYERS`
     // (`CSkillController::update`).
     tl::core::LevelScript::PlayerSkills skills;
@@ -381,7 +404,7 @@ void World::wire_script(tl::core::LevelScript& machine) {
         machine.set_affix_book(&affixes);
         ensure_sound_index();
         machine.set_sound_data(&sound_info);
-        machine.set_audio_plays([this]() { return audio_enabled && tl::core::audio_available(); });
+        machine.set_listener([this]() { return sound_listener; });
         machine.set_model_sounds([this](const std::string& unit) {
             const tl::core::UnitStats* stats = unit_book.find(unit);
             if (stats == nullptr || stats->mesh.empty()) return false;

@@ -1,3 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffector.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffector.h
+index 67060e3..95dc260 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffector.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseLineAffector.h
+@@ -52,6 +52,8 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_DRIFT;
+ 			
+ 			LineAffector(void);
++	        // Torchlight: `LineAffector::~LineAffector`
++	        // is the library's.
+ 	        virtual ~LineAffector(void) {};
+ 
+ 			/** 
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp
 index a4fa625..79b47f3 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseLineAffector.cpp

@@ -2,11 +2,13 @@
 // `CPlayer::storeLevelSavedState` takes of a room
 // layout's logic nodes, `CGameClient::restoreLevelState`
 // putting them back, and the character side of both.
+#include "core/log.h"
 #include "core/script.h"
 #include "formats/float_convert.h"
 
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 namespace tl::core {
 
@@ -76,16 +78,34 @@ constexpr Descriptor kRestoreOrder[] = {
 
 // CPlayer::storeLevelSavedState, the
 // per-layout descriptor loop.
+int LevelScript::store_descriptors() { return static_cast<int>(std::size(kStoreOrder)); }
+
 void LevelScript::store_logic_states(uint32_t scene, int64_t hierarchy,
-                                     std::vector<LogicNodeState>& out) const {
-    for (const Descriptor& descriptor : kStoreOrder) {
+                                     std::vector<LogicNodeState>& out, int only,
+                                     int64_t top_parent) const {
+    for (int k = 0; k < store_descriptors(); ++k) {
+        if (only >= 0 && k != only) continue;
+        const Descriptor& descriptor = kStoreOrder[k];
         for (const Object& o : objects_) {
             if (o.type != descriptor.type) continue;
             LogicNodeState s;
             s.descriptor = descriptor.name;
             s.scene = scene;
             s.object_id = o.id;
-            s.parent_id = o.parent != 0 ? o.parent : -1;
+            // A root of the file (parent -1) hangs from what loaded it: the Layout Link for a linked copy.
+            // A Timer, Timeline or Output Incrementor passes over Groups to the first ancestor that is not
+            // one, as the console stores it (how its loader comes to it is not read).
+            int64_t parent = o.parent;
+            if (o.type == type::kTimer || o.type == type::kTimeline ||
+                o.type == kOutputIncrementor) {
+                const Object* up = find(parent);
+                for (int depth = 0; up != nullptr && up->type == type::kGroup && depth < 64;
+                     ++depth) {
+                    parent = up->parent;
+                    up = find(parent);
+                }
+            }
+            s.parent_id = parent != 0 && parent != -1 ? parent : top_parent;
             s.hierarchy = hierarchy;
             switch (o.type) {
                 case type::kPlayerSphereTrigger:
@@ -94,16 +114,16 @@ void LevelScript::store_logic_states(uint32_t scene, int64_t hierarchy,
                     s.flags[1] = o.inside;            // +0x100
                     s.flags[2] = o.triggered_once;    // +0x101
                     s.flags[3] = o.deactivated_once;  // +0x102
-                    s.position = to_save(o.position);
+                    s.position = to_save(own_position(o));
                     break;
                 case type::kMarker:
                     s.flags[0] = o.enabled;
-                    s.position = to_save(o.position);
+                    s.position = to_save(own_position(o));
                     break;
                 case type::kGroup:
                     s.flags[0] = o.enabled;
                     s.flags[1] = o.visible;  // +0x81
-                    s.position = to_save(o.position);
+                    s.position = to_save(own_position(o));
                     break;
                 case type::kTimeline:
                     // the percent through, 1 with no duration.
@@ -122,11 +142,10 @@ void LevelScript::store_logic_states(uint32_t scene, int64_t hierarchy,
                     s.flags[0] = o.enabled;      // +0x6c
                     break;
                 case kOutputIncrementor:
-                    // DIVERGENCE: this engine's incrementor counts up without the
-                    // original's cycle (+0x58 length, +0x64 cycles left), so +0x5c is
-                    // the running count and one cycle is left.
+                    // `storeLevelSavedState`: the count (+0x5c),
+                    // the loops left (+0x64) as a float, the flag (+0x68).
                     s.i1c = o.counter_value;
-                    s.f20 = 1.0f;
+                    s.f20 = static_cast<float>(o.incr_loops_left);
                     s.flags[0] = o.enabled;
                     break;
                 case kTeleport: s.flags[0] = o.enabled; break;
@@ -196,6 +215,13 @@ void LevelScript::restore_logic_states(uint32_t scene, int64_t hierarchy,
                     }
                     o.enabled = s->flags[4] != 0;
                     o.tl_playing = s->flags[0] != 0;
+                    TL_LOG_DEBUG(
+                        "  timeline %lld put back: playing %d enabled %d percent %a backwards %a"
+                        " -> time %a of %a step %a",
+                        static_cast<long long>(o.id), s->flags[0], s->flags[4],
+                        static_cast<double>(s->f20), static_cast<double>(s->f24),
+                        static_cast<double>(o.tl_time), static_cast<double>(o.tl_duration),
+                        static_cast<double>(o.tl_step));
                     break;
                 case type::kPlayerSphereTrigger:
                 case type::kPlayerBoxTrigger:
@@ -203,10 +229,10 @@ void LevelScript::restore_logic_states(uint32_t scene, int64_t hierarchy,
                     o.inside = s->flags[1] != 0;
                     o.triggered_once = s->flags[2] != 0;
                     o.deactivated_once = s->flags[3] != 0;
-                    o.position = from_save(s->position);
+                    o.position = position_from_own(o, from_save(s->position));
                     break;
                 case type::kMarker: {
-                    o.position = from_save(s->position);
+                    o.position = position_from_own(o, from_save(s->position));
                     const bool on = s->flags[0] != 0;
                     if (o.enabled != on) {
                         o.enabled = on;
@@ -231,7 +257,7 @@ void LevelScript::restore_logic_states(uint32_t scene, int64_t hierarchy,
                         e.on = visible;
                         out.push_back(e);
                     }
-                    o.position = from_save(s->position);
+                    o.position = position_from_own(o, from_save(s->position));
                     break;
                 }
                 case type::kAnimationController:
@@ -266,6 +292,9 @@ void LevelScript::restore_logic_states(uint32_t scene, int64_t hierarchy,
                     // `COutputIncrementor::setEnabled` broadcasts.
                     o.enabled = s->flags[0] != 0;
                     broadcast(o.id, o.enabled ? logic::kEnabled : logic::kDisabled, quests, out);
+                    // `restoreLevelState`: the loops left
+                    // truncated from the float, then the count.
+                    o.incr_loops_left = static_cast<int32_t>(s->f20);
                     o.counter_value = s->i1c;
                     break;
                 case kTeleport: o.enabled = s->flags[0] != 0; break;
@@ -307,6 +336,8 @@ std::vector<LevelScript::CharacterRecord> LevelScript::living_characters() const
         record.facing = c->facing;
         record.hp = c->combat.hp;
         record.level = c->combat.level;
+        record.champion_name = c->champion_name;
+        if (c->has_master) record.master = c->master.node;
         record.equipment = true;
         record.right_hand = c->right_hand;
         record.left_hand = c->left_hand;
@@ -327,7 +358,6 @@ bool LevelScript::apply_character_record(const CharacterRecord& record,
     if (o == nullptr || c == nullptr) return false;
     // `vtable +0x318` is `setLevel`, before the hit points are written back.
     if (record.level != c->combat.level) set_unit_level(record.node, record.level);
-    avoidance_remove(*c);
     c->motion.position = {record.position.x, record.position.y + c->motion.radius,
                           record.position.z};
     c->facing = record.facing;
@@ -341,7 +371,8 @@ bool LevelScript::apply_character_record(const CharacterRecord& record,
         c->attack_left = false;
     }
     o->position = record.position;
-    avoidance_add(*c);
+    // `CCharacter::applySaveState` moves it with `setPosition` alone:
+    // the avoidance map is not touched until its first update.
     ScriptEvent e;
     e.action = ScriptAction::MoveUnit;
     e.node_id = o->id;
@@ -406,6 +437,48 @@ std::vector<LevelScript::WarperRecord> LevelScript::warpers() const {
     return out;
 }
 
+// PORT: the machine's nodes in the file's order.
+std::vector<int64_t> LevelScript::node_order() const {
+    std::vector<int64_t> out;
+    out.reserve(objects_.size());
+    for (const Object& o : objects_) out.push_back(o.id);
+    return out;
+}
+
+// The axes of the node `o` hangs from: its parent's own, or the file's for a parent that reads
+// none (a Group) and for a node of the file's top.
+void LevelScript::parent_axes(const Object& o, const Object*& parent, Vec3& r, Vec3& u,
+                              Vec3& f) const {
+    parent = o.parent != 0 ? find(o.parent) : nullptr;
+    const bool own = parent != nullptr && (parent->forward.x * parent->forward.x +
+                                           parent->forward.y * parent->forward.y +
+                                           parent->forward.z * parent->forward.z) > 0.0f;
+    r = own ? parent->right : frame_.direction({1.0f, 0.0f, 0.0f});
+    u = own ? parent->up : frame_.direction({0.0f, 1.0f, 0.0f});
+    f = own ? parent->forward : frame_.direction({0.0f, 0.0f, 1.0f});
+}
+
+// `CPositionableObject::getPosition(false)` (r5 0): the node's own +0x70,
+// relative to the node it hangs from (a chest in a Group at z 2.16 keeps 38.16 for the
+// file's 40.32); a node of the file's top, relative to the file's frame.
+Vec3 LevelScript::own_position(const Object& o) const {
+    const Object* parent = nullptr;
+    Vec3 r, u, f;
+    parent_axes(o, parent, r, u, f);
+    const Vec3 d = o.position - (parent != nullptr ? parent->position : frame_.origin);
+    const auto dot = [](const Vec3& a, const Vec3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+    return {dot(d, r), dot(d, u), dot(d, f)};
+}
+
+// The level's place of a node whose own position (`own_position`) is `own`.
+Vec3 LevelScript::position_from_own(const Object& o, const Vec3& own) const {
+    const Object* parent = nullptr;
+    Vec3 r, u, f;
+    parent_axes(o, parent, r, u, f);
+    return (parent != nullptr ? parent->position : frame_.origin) + r * own.x + u * own.y +
+           f * own.z;
+}
+
 // PORT: the machine's nodes of a kind, for the renderer.
 std::vector<LevelScript::NodeRecord> LevelScript::nodes_of_type(uint32_t node_type) const {
     std::vector<NodeRecord> out;
@@ -416,6 +489,8 @@ std::vector<LevelScript::NodeRecord> LevelScript::nodes_of_type(uint32_t node_ty
         n.unit = o.unit;
         n.name = o.name;
         n.position = o.position;
+        n.local_position = own_position(o);
+        n.parent = o.parent;
         n.enabled = o.enabled;
         if (o.type == type::kMarker) {
             n.kind = o.resource;

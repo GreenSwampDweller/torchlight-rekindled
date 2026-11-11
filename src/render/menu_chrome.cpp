@@ -68,7 +68,23 @@ float authored_height(const tl::formats::Imageset& reference, float fallback) {
 namespace {
 bool g_console_game_data = false;
 std::vector<std::string> g_mod_imagesets;
+std::vector<std::string> g_pack_imagesets;
 }  // namespace
+
+void set_pack_imagesets(std::vector<std::string> paths) { g_pack_imagesets = std::move(paths); }
+
+std::string pack_imageset_path(int index) {
+    return "media/UI/icons2/pcart" + std::to_string(index) + ".imageset";
+}
+
+void apply_set_tint(const Ogre::MaterialPtr& material, const tl::formats::Imageset& set) {
+    if (!material || set.tint == 0xFFFFFF) return;
+    const Ogre::ColourValue tint(static_cast<float>((set.tint >> 16) & 0xFF) / 255.0f,
+                                 static_cast<float>((set.tint >> 8) & 0xFF) / 255.0f,
+                                 static_cast<float>(set.tint & 0xFF) / 255.0f, 1.0f);
+    material->getTechnique(0)->getPass(0)->getTextureUnitState(0)->setColourOperationEx(
+        Ogre::LBX_MODULATE, Ogre::LBS_TEXTURE, Ogre::LBS_MANUAL, Ogre::ColourValue::White, tint);
+}
 
 void set_mod_imagesets(std::vector<std::string> paths) { g_mod_imagesets = std::move(paths); }
 
@@ -78,7 +94,10 @@ bool console_game_data() { return g_console_game_data; }
 // PORT: the PC sets a console-style screen falls back to.
 std::vector<const char*> pc_imagesets() {
     std::vector<const char*> sets;
-    if (!g_console_game_data) sets = {kLogoImageset, kGuiImageset, kUi2Imageset, kUiIconsImageset};
+    if (!g_console_game_data) {
+        for (const std::string& path : g_pack_imagesets) sets.push_back(path.c_str());
+        sets.insert(sets.end(), {kLogoImageset, kGuiImageset, kUi2Imageset, kUiIconsImageset});
+    }
     for (const std::string& path : g_mod_imagesets) sets.push_back(path.c_str());
     return sets;
 }

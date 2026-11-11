@@ -239,21 +239,6 @@ bool NavGrid::nearest_wide_open(const Free& free, int target_cx, int target_cz, 
     return best_distance != kNone;
 }
 
-bool NavGrid::line_is_clear(float from_x, float from_z, float to_x, float to_z) const {
-    if (!ready()) return false;
-    const float dx = to_x - from_x;
-    const float dz = to_z - from_z;
-    const float length = std::sqrt(dx * dx + dz * dz);
-    // Sampled at half a cell, so a diagonal cannot slip between two blocked
-    // cells that touch only at a corner.
-    const int steps = std::max(1, static_cast<int>(length / (cell_ * 0.5f)));
-    for (int i = 0; i <= steps; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(steps);
-        if (!walkable(from_x + dx * t, from_z + dz * t)) return false;
-    }
-    return true;
-}
-
 namespace {
 
 /// `CAstarPathfinder::CAstarNode`. `children` caches up to 8 successors, for `relax_children`.
@@ -305,7 +290,7 @@ void relax_children(std::vector<AstarNode>& pool, int node_index, std::vector<in
     }
 }
 
-/// `createPath`'s open list (`generateSuccessor`): a new node goes before the
+/// PORT: `createPath`'s open list, the order `generateSuccessor`'s: a new node goes before the
 /// first whose f, as it stands now, is at least its own, and an improved node keeps its place,
 /// so the list is not sorted. Kept in blocks, each with a bound no f in it exceeds: an
 /// improvement only lowers an f, so a bound stays true untouched, and a block wholly under the
@@ -630,14 +615,12 @@ bool NavGrid::search(const Vec3& from, const Vec3& to, int rings, const Free& fr
     return true;
 }
 
-// `CAstarPathfinder::findPath` on the level's
-// map grid, the start left off the route.
-std::vector<Vec3> NavGrid::find_path(const Vec3& from, const Vec3& to) const {
+// INVENTED: the held player's walk, the cells as found (`setDestination`'s string pulling is
+// `LevelScript::set_destination`'s).
+std::vector<Vec3> NavGrid::find_path(const Vec3& from, const Vec3& to,
+                                     const PassabilityMap& level) const {
     std::vector<Vec3> route;
-    auto free = [this](int cx, int cz) { return is_open(static_cast<size_t>(index_of(cx, cz))); };
-    if (!search(from, to, kNavSnapRings, free, route, kAstarExpansionCap) || route.empty())
-        return {};
-    // `from` excluded.
+    if (!find_nodes(from, to, level, /*ignore_objects=*/false, route) || route.empty()) return {};
     route.erase(route.begin());
     return route;
 }
@@ -651,17 +634,6 @@ bool NavGrid::find_nodes(const Vec3& from, const Vec3& to, const PassabilityMap&
         return ignore_objects || level.object_passable(cx, cz);
     };
     return search(from, to, kAstarSnapRings, free, nodes, expansion_cap);
-}
-
-bool NavGrid::position_passable(const PassabilityMap& level, const Vec3& at) const {
-    return level.position_passable(at);
-}
-
-// `CLevel::passableBetween`: the level's, its
-// grid holding the blockers too.
-bool NavGrid::passable_between(const PassabilityMap& level, const Vec3& from, const Vec3& to,
-                               bool map_only) const {
-    return level.passable_between(from, to, map_only);
 }
 
 }  // namespace tl::core

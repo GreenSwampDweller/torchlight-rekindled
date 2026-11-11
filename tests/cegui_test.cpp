@@ -2,7 +2,9 @@
 #include "formats/cegui.h"
 #include "test_support.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -132,4 +134,19 @@ TL_TEST(an_image_reference_splits_set_and_image) {
     TL_CHECK(!tl::formats::parse_image_reference("", set, image));
     TL_CHECK(!tl::formats::parse_image_reference("image:topbar set:Logo", set, image));
     TL_CHECK(!tl::formats::parse_image_reference("set: image:topbar", set, image));
+}
+
+// The PC's layouts are UTF-16LE with a byte-order mark; they parse like the UTF-8 ones.
+TL_TEST(cegui_xml_reads_utf16le_with_a_bom) {
+    const std::string text = "<GUILayout><Window Type=\"A\" Name=\"B\" /></GUILayout>";
+    std::vector<uint8_t> bytes = {0xff, 0xfe};
+    for (const char c : text) {
+        bytes.push_back(static_cast<uint8_t>(c));
+        bytes.push_back(0);
+    }
+    const tl::formats::XmlDocument doc = tl::formats::parse_xml(bytes.data(), bytes.size());
+    TL_CHECK(doc.ok);
+    TL_CHECK_EQ(doc.root.name, std::string("GUILayout"));
+    TL_CHECK_EQ(doc.root.children.size(), size_t{1});
+    TL_CHECK_EQ(doc.root.children[0].attribute("Name", ""), std::string("B"));
 }

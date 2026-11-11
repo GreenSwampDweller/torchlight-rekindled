@@ -21,9 +21,12 @@ constexpr uint16_t kVertexDeclaration = 0x5100;
 constexpr uint16_t kVertexElement = 0x5110;
 constexpr uint16_t kVertexBuffer = 0x5200;
 constexpr uint16_t kVertexBufferData = 0x5210;
+constexpr uint16_t kSkeletonLink = 0x6000;
 constexpr size_t kChunkHeader = 6;  // uint16 id, uint32 length
 constexpr uint16_t kSemanticPosition = 1;
 constexpr uint16_t kTypeFloat3 = 2;
+constexpr uint16_t kSemanticTexcoord = 7;
+constexpr uint16_t kTypeFloat2 = 1;
 
 class Reader {
 public:
@@ -145,6 +148,23 @@ void copy_positions(const Reader& r, OgreMeshVertices& out, const std::vector<El
     }
 }
 
+/// The first float2 texture coordinates of buffer `bind`.
+void copy_texcoords(const Reader& r, OgreMeshVertices& out, const std::vector<Element>& elements,
+                    uint16_t bind, uint16_t vertex_size, size_t data_at) {
+    if (!out.texcoords.empty()) return;
+    for (const Element& e : elements) {
+        if (e.semantic != kSemanticTexcoord || e.source != bind || e.type != kTypeFloat2) continue;
+        if (e.offset + 8u > vertex_size) break;
+        out.texcoords.resize(static_cast<size_t>(out.count) * 2);
+        for (uint32_t v = 0; v < out.count; ++v) {
+            const size_t at = data_at + static_cast<size_t>(v) * vertex_size + e.offset;
+            out.texcoords[v * 2 + 0] = r.f32_at(at);
+            out.texcoords[v * 2 + 1] = r.f32_at(at + 4);
+        }
+        return;
+    }
+}
+
 /// `readGeometryVertexBuffer`: bind index, vertex size, then the data chunk. False where the
 /// geometry's walk ends: no data chunk, or the file ends inside it.
 bool read_vertex_buffer(Reader& r, OgreMeshVertices& out, const std::vector<Element>& elements) {
@@ -158,6 +178,7 @@ bool read_vertex_buffer(Reader& r, OgreMeshVertices& out, const std::vector<Elem
         return false;
     }
     copy_positions(r, out, elements, bind, vertex_size, data_at);
+    copy_texcoords(r, out, elements, bind, vertex_size, data_at);
     r.skip(bytes);
     return true;
 }
@@ -256,7 +277,8 @@ OgreMesh parse_ogre_mesh(const uint8_t* data, size_t size) {
             continue;
         }
         (void)r.boolean();  // skeletally animated
-        // The shared geometry and the submeshes come first; collision reads nothing after them.
+        // The shared geometry and the submeshes come first, then the skeleton link
+        // (`MeshSerializerImpl::writeMesh`); nothing after it is read.
         while (r.ok() && !r.eof()) {
             const uint16_t c_id = r.chunk();
             if (c_id == kGeometry) {
@@ -266,6 +288,7 @@ OgreMesh parse_ogre_mesh(const uint8_t* data, size_t size) {
                 read_submesh(r, sub);
                 mesh.submeshes.push_back(std::move(sub));
             } else {
+                if (c_id == kSkeletonLink) mesh.skeleton = r.line();
                 break;
             }
         }

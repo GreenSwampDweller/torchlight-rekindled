@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
                                // unspecified one, which x86 and AArch64 GCC differ on.
                                const Vec3 from = random_point(rng);
                                const Vec3 to = random_point(rng);
-                               nodes += level().nav.find_path(from, to).size();
+                               nodes += level().nav.find_path(from, to, level().grid).size();
                            }
                            return static_cast<double>(nodes);
                        }});

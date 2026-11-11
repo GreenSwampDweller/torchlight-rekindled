@@ -12,20 +12,32 @@ namespace {
 /// The "no hit yet" distance both list casts start from (`99999.0`).
 constexpr float kNoHit = 99999.0f;
 
-/// `Ogre::Vector3::length`, unfused, as `CCollisionList::rayCollision`
-/// and `sphereCollision` inline it.
+/// `Ogre::Vector3::length`, unfused.
 float length(const Vec3& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
+
+/// The length as `CCollisionList::sphereCollision` inlines it: y squared, z and
+/// x fused onto it.
+float fused_length(const Vec3& v) {
+    return std::sqrt(std::fma(v.x, v.x, std::fma(v.z, v.z, v.y * v.y)));
+}
+
+/// The length as `CCollisionList::rayCollision` inlines it: z squared, y and x
+/// fused onto it.
+float ray_length(const Vec3& v) {
+    return std::sqrt(std::fma(v.x, v.x, std::fma(v.y, v.y, v.z * v.z)));
+}
 
 /// `Ogre::Vector3::normalise`, as the original inlines it: left alone at or
 /// below 1e-8.
 void normalise(Vec3& v) {
-    const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if (1e-08f < len) {
-        const float inv = 1.0f / len;
-        v.x = v.x * inv;
-        v.y = v.y * inv;
-        v.z = v.z * inv;
-    }
+    // y squared, x and z fused onto it; left alone at or below the double 1e-8
+    // (`blelr`, which a NaN passes).
+    const float len = std::sqrt(std::fma(v.z, v.z, std::fma(v.x, v.x, v.y * v.y)));
+    if (static_cast<double>(len) <= 1e-08) return;
+    const float inv = 1.0f / len;
+    v.x = v.x * inv;
+    v.y = v.y * inv;
+    v.z = v.z * inv;
 }
 
 /// `MATH::boundsIntersectXY`: despite the name, x and z. The
@@ -52,7 +64,9 @@ constexpr uint32_t kItemObjectMaterial = 100;
 /// `MATH::classifyPoint`: 0 in front of the
 /// plane, 1 behind it, 2 on it (within 1e-5).
 int classify_point(const Vec3& p, const Vec3& on_plane, const Vec3& n) {
-    const float d = (on_plane.x - p.x) * n.x + (on_plane.y - p.y) * n.y + (on_plane.z - p.z) * n.z;
+    // y, then z and x fused onto it.
+    const float d =
+        std::fma(on_plane.x - p.x, n.x, std::fma(on_plane.z - p.z, n.z, (on_plane.y - p.y) * n.y));
     if (-1e-05f <= d) return (d <= 1e-05f) ? 2 : 1;
     return 0;
 }
@@ -60,8 +74,10 @@ int classify_point(const Vec3& p, const Vec3& on_plane, const Vec3& n) {
 /// `MATH::classifyPointForSphere`: the same,
 /// for a sphere of `radius` centred on `p`.
 int classify_point_for_sphere(const Vec3& p, const Vec3& on_plane, const Vec3& n, float radius) {
+    // classifyPoint's fused sum, then the radius added.
     const float d =
-        (on_plane.x - p.x) * n.x + (on_plane.y - p.y) * n.y + (on_plane.z - p.z) * n.z + radius;
+        std::fma(on_plane.x - p.x, n.x, std::fma(on_plane.z - p.z, n.z, (on_plane.y - p.y) * n.y)) +
+        radius;
     if (-1e-05f <= d) return (d <= 1e-05f) ? 2 : 1;
     return 0;
 }
@@ -73,16 +89,17 @@ bool sphere_plane_intersection(const Vec3& p1, const Vec3& p2, const Vec3& on_pl
     const float dx = p2.x - p1.x;
     const float dy = p2.y - p1.y;
     const float dz = p2.z - p1.z;
-    const float line = n.x * dx + dy * n.y + dz * n.z;
+    // y, then x and z fused onto it; the point `t * d + p1` fused.
+    const float line = std::fma(n.z, dz, std::fma(n.x, dx, n.y * dy));
     if (!(1e-05f <= std::fabs(line))) return false;
     const float tx = on_plane.x - p1.x;
     const float ty = on_plane.y - p1.y;
     const float tz = on_plane.z - p1.z;
-    const float distance = tx * n.x + ty * n.y + tz * n.z;
+    const float distance = std::fma(n.z, tz, std::fma(n.x, tx, n.y * ty));
     const float t = distance / line;
-    out.x = dx * t + p1.x;
-    out.y = dy * t + p1.y;
-    out.z = dz * t + p1.z;
+    out.x = std::fma(t, dx, p1.x);
+    out.y = std::fma(t, dy, p1.y);
+    out.z = std::fma(t, dz, p1.z);
     return true;
 }
 
@@ -93,17 +110,19 @@ bool line_plane_intersection(const Vec3& p1, const Vec3& p2, const Vec3& on_plan
     const float dx = p2.x - p1.x;
     const float dy = p2.y - p1.y;
     const float dz = p2.z - p1.z;
-    const float line = n.x * dx + dy * n.y + dz * n.z;
-    if (!(1e-05f <= std::fabs(line))) return false;
+    // the sums fused as in `sphere_plane_intersection`; the tests are
+    // `blt`/`bgt`, which a NaN passes.
+    const float line = std::fma(n.z, dz, std::fma(n.x, dx, n.y * dy));
+    if (std::fabs(line) < 1e-05f) return false;
     const float tx = on_plane.x - p1.x;
     const float ty = on_plane.y - p1.y;
     const float tz = on_plane.z - p1.z;
-    const float distance = tx * n.x + ty * n.y + tz * n.z;
+    const float distance = std::fma(n.z, tz, std::fma(n.x, tx, n.y * ty));
     const float t = distance / line;
-    if (!(0.0f <= t && t <= 1.0f)) return false;
-    out.x = t * dx + p1.x;
-    out.y = dy * t + p1.y;
-    out.z = dz * t + p1.z;
+    if (t < 0.0f || 1.0f < t) return false;
+    out.x = std::fma(t, dx, p1.x);
+    out.y = std::fma(t, dy, p1.y);
+    out.z = std::fma(t, dz, p1.z);
     return true;
 }
 
@@ -171,11 +190,19 @@ void CollisionWorld::add_triangle(const Vec3& p0, const Vec3& p1, const Vec3& p2
     const float cbz = t.c.z - t.b.z;
     const float bay = t.b.y - t.a.y;
     const float baz = t.b.z - t.a.z;
+    // each component one `fmsubs`, the length y squared with z and x
+    // fused onto it, inlined (not `normalise`'s order); left alone at or below the double 1e-8.
     Vec3 n;
-    n.y = bax * cbz - cbx * baz;
-    n.x = baz * cby - cbz * bay;
-    n.z = cbx * bay - cby * bax;
-    normalise(n);
+    n.y = std::fma(cbz, bax, -(baz * cbx));
+    n.z = std::fma(bay, cbx, -(cby * bax));
+    n.x = std::fma(baz, cby, -(bay * cbz));
+    const float len = std::sqrt(std::fma(n.x, n.x, std::fma(n.z, n.z, n.y * n.y)));
+    if (!(static_cast<double>(len) <= 1e-08)) {
+        const float inv = 1.0f / len;
+        n.x = n.x * inv;
+        n.y = n.y * inv;
+        n.z = n.z * inv;
+    }
     t.normal = n;
 
     // CCollisionList::calculateFaceBounds
@@ -237,6 +264,14 @@ void CollisionWorld::set_group_blocks(int64_t group, bool on) {
 }
 
 // PORT: an accessor of the port's collision lists.
+void CollisionWorld::set_group_load_shift(int64_t group, const Vec3& shift) {
+    if (group == 0) return;
+    const auto found = groups_.find(group);
+    if (found == groups_.end()) return;
+    found->second.load_shift = shift;
+}
+
+// PORT: an accessor of the port's collision lists.
 bool CollisionWorld::group_blocks(int64_t group) const {
     const auto found = groups_.find(group);
     return found != groups_.end() && found->second.blocks;
@@ -295,8 +330,10 @@ bool CollisionWorld::ray_collision_group(int64_t group, const Vec3& start, const
         Vec3 p;
         if (!line_plane_intersection(start, end, t.a, t.normal, p)) continue;
         if (!point_in(p, t)) continue;
-        const float d = length(p - start);
-        if (d < best) {
+        // `CCollisionList::rayCollision`: the distance fused (z, y, x);
+        // `bge` skips.
+        const float d = ray_length(p - start);
+        if (!(d >= best)) {
             best = d;
             hit.point = p;
             hit.centre = p;
@@ -535,44 +572,47 @@ bool CollisionWorld::point_in(const Vec3& p, const Tri& t) {
     const Vec3& n = t.normal;
     const float pz = p.z - a.z;
     const float px = p.x - a.x;
+    const float py = p.y - a.y;
     const float ey_c = c.y - a.y;
     const float ex_c = c.x - a.x;
     const float ez_c = c.z - a.z;
-    const float qz = ey_c * n.x - ex_c * n.y;
-    const float qx = ez_c * n.y - ey_c * n.z;
-    const float qy = ex_c * n.z - ez_c * n.x;
-    const float py = p.y - a.y;
-    const float u = qx * px + qy * py + qz * pz;
-    if (0.0f <= u) {
-        const float by = b.y - a.y;
-        const float bx = b.x - a.x;
-        const float bz = b.z - a.z;
-        const float whole = qx * bx + qy * by + qz * bz;
-        if (u <= whole) {
-            const float v =
-                (bz * py - by * pz) * n.x + (pz * bx - bz * px) * n.y + (px * by - bx * py) * n.z;
-            if (0.0f <= v) return u + v <= whole;
-        }
-    }
-    return false;
+    const float by = b.y - a.y;
+    const float bx = b.x - a.x;
+    const float bz = b.z - a.z;
+    // each cross term an `fmsubs` (one rounding, the second product
+    // rounded first), each sum two `fmadds` onto the first product.
+    const float qy = std::fma(n.z, ex_c, -(n.x * ez_c));
+    const float qz = std::fma(n.x, ey_c, -(n.y * ex_c));
+    const float qx = std::fma(n.y, ez_c, -(n.z * ey_c));
+    const float u = std::fma(px, qx, std::fma(pz, qz, py * qy));
+    const float whole = std::fma(qx, bx, std::fma(qz, bz, qy * by));
+    if (u < 0.0f || whole < u) return false;
+    // the second side the same way, then `fadds` and the bound.
+    const float ty = std::fma(pz, bx, -(bz * px));
+    const float tx = std::fma(py, bz, -(pz * by));
+    const float tz = std::fma(px, by, -(py * bx));
+    const float v = std::fma(n.x, tx, std::fma(n.z, tz, n.y * ty));
+    if (v < 0.0f) return false;
+    return v + u <= whole;
 }
 
-bool CollisionWorld::list_sphere(const std::vector<uint32_t>& faces, const Vec3& list_low,
-                                 const Vec3& list_high, const Vec3& start, const Vec3& end,
+bool CollisionWorld::list_sphere(const FaceList& list, const Vec3& start, const Vec3& end,
                                  const Vec3& box_low, const Vec3& box_high, float radius,
                                  CollisionHit& hit, float& best) const {
     // CCollisionList::sphereCollision
+    const std::vector<uint32_t>& faces = list.faces;
+    const std::vector<uint32_t>& by_position = list.by_position;
     if (faces.empty()) return best != kNoHit;
-    if (!bounds_intersect(list_low, list_high, box_low, box_high)) return best != kNoHit;
+    if (!bounds_intersect(list.low, list.high, box_low, box_high)) return best != kNoHit;
 
     float best_facing = 1.0f;
-    for (const uint32_t idx : faces) {
-        const Tri& t = tris_[idx];
-        // DIVERGENCE: the original reads the material and, below, the normal by
-        // the loop's position in the sorted set, not by the face; that order is
-        // not reproducible, so this reads the face's own. The material test never
-        // fires either way.
-        if (t.material == kSkippedMaterial) continue;
+    for (size_t position = 0; position < faces.size(); ++position) {
+        const Tri& t = tris_[faces[position]];
+        // The material (`+0xb0`) and, below, the edge test's normal (`+0x70` ->
+        // `+0x60`, `r17` the loop's count) are read by the loop's position in the
+        // sorted set: the list's own face at that position (`by_position`), not this face.
+        const Tri& at_position = position < by_position.size() ? tris_[by_position[position]] : t;
+        if (at_position.material == kSkippedMaterial) continue;
         if (!bounds_intersect(t.low, t.high, box_low, box_high)) continue;
 
         const int from = classify_point(start, t.a, t.normal);
@@ -585,8 +625,9 @@ bool CollisionWorld::list_sphere(const std::vector<uint32_t>& faces, const Vec3&
         if (!sphere_plane_intersection(start, offset, t.a, t.normal, p)) continue;
 
         if (point_in(p, t)) {
-            const float d = length(p - start);
-            if (d <= best) {
+            // the distance's squares fused (y, z, x); `bgt` skips.
+            const float d = fused_length(p - start);
+            if (!(d > best)) {
                 best = d;
                 hit.point = p;
                 hit.normal = t.normal;
@@ -600,11 +641,14 @@ bool CollisionWorld::list_sphere(const std::vector<uint32_t>& faces, const Vec3&
 
         const Vec3 closest = closest_point_on_triangle(t.a, t.b, t.c, start);
         Vec3 away = end - closest;
-        const float d = length(away);
-        if (!(d <= radius)) continue;
-        if (!(d <= best)) continue;
+        // fused the same way; `bgt` against the radius, then the best.
+        const float d = fused_length(away);
+        if (d > radius) continue;
+        if (d > best) continue;
         normalise(away);
-        const float facing = away.x * t.normal.x + away.y * t.normal.y + away.z * t.normal.z;
+        // y, then z and x fused, on the position's normal.
+        const Vec3& n = at_position.normal;
+        const float facing = std::fma(away.x, n.x, std::fma(n.z, away.z, n.y * away.y));
         if (!(facing < best_facing)) continue;
         if (classify_point(end, t.a, t.normal) != 0) continue;
         best = d;
@@ -619,18 +663,21 @@ bool CollisionWorld::list_sphere(const std::vector<uint32_t>& faces, const Vec3&
     return best != kNoHit;
 }
 
-bool CollisionWorld::list_ray(const std::vector<uint32_t>& faces, const Vec3& list_low,
-                              const Vec3& list_high, const Vec3& start, const Vec3& end,
+bool CollisionWorld::list_ray(const FaceList& list, const Vec3& start, const Vec3& end,
                               const Vec3& box_low, const Vec3& box_high, CollisionHit& hit,
                               float& best) const {
     // CCollisionList::rayCollision
+    const std::vector<uint32_t>& faces = list.faces;
+    const std::vector<uint32_t>& by_position = list.by_position;
     if (faces.empty()) return best != kNoHit;
-    if (!bounds_intersect(list_low, list_high, box_low, box_high)) return best != kNoHit;
+    if (!bounds_intersect(list.low, list.high, box_low, box_high)) return best != kNoHit;
 
-    for (const uint32_t idx : faces) {
-        const Tri& t = tris_[idx];
-        // DIVERGENCE: as in list_sphere(), the face's own material.
-        if (t.material == kSkippedMaterial) continue;
+    for (size_t position = 0; position < faces.size(); ++position) {
+        const Tri& t = tris_[faces[position]];
+        // The material skipped by the loop's position (`+0xb0[r15]`), as
+        // in list_sphere(); the hit's material is the face's own.
+        const Tri& at_position = position < by_position.size() ? tris_[by_position[position]] : t;
+        if (at_position.material == kSkippedMaterial) continue;
         if (!bounds_intersect(t.low, t.high, box_low, box_high)) continue;
 
         const int from = classify_point(start, t.a, t.normal);
@@ -640,8 +687,10 @@ bool CollisionWorld::list_ray(const std::vector<uint32_t>& faces, const Vec3& li
         Vec3 p;
         if (!line_plane_intersection(start, end, t.a, t.normal, p)) continue;
         if (!point_in(p, t)) continue;
-        const float d = length(p - start);
-        if (d < best) {
+        // `CCollisionList::rayCollision`: the distance fused (z, y, x);
+        // `bge` skips.
+        const float d = ray_length(p - start);
+        if (!(d >= best)) {
             best = d;
             hit.point = p;
             hit.centre = p;
@@ -685,8 +734,8 @@ bool CollisionWorld::object_sphere_collision(const Vec3& start, const Vec3& end,
         // placed in the world).
         CollisionHit unit_hit;
         float unit_best = kNoHit;
-        if (!list_sphere(g.faces, g.low, g.high, start, end, box_low, box_high, radius, unit_hit,
-                         unit_best)) {
+        if (!list_sphere({g.faces, g.faces, g.low, g.high}, start, end, box_low, box_high, radius,
+                         unit_hit, unit_best)) {
             continue;
         }
         const float dx = unit_hit.point.x - start.x;
@@ -711,18 +760,33 @@ bool CollisionWorld::object_ray_collision(const Vec3& start, const Vec3& end, Co
     // against the unit's, and its list's cast.
     nearest = kNoHit;
     if (group_order_.empty()) return false;
-    Vec3 low = start;
-    Vec3 high = start;
-    expand_bounds(low, high, end);
 
     for (size_t i = 0; i < group_order_.size(); ++i) {
         const int64_t id = group_order_[i];
         const Group& g = *group_walk_[i];
         if (!g.enabled || !g.blocks) continue;
+        // The ray's own bounds against the unit's culling bounds (`+0x180`), where it stands.
+        Vec3 low = start;
+        Vec3 high = start;
+        expand_bounds(low, high, end);
         if (!bounds_intersect(g.low, g.high, low, high)) continue;
+        // Then its model's cast, at its stored position: the faces moved back by `load_shift`.
+        const Vec3& shift = g.load_shift;
+        const bool shifted = shift.x != 0.0f || shift.y != 0.0f || shift.z != 0.0f;
+        const Vec3 from = shifted ? start + shift : start;
+        const Vec3 to = shifted ? end + shift : end;
+        Vec3 ray_low = from;
+        Vec3 ray_high = from;
+        expand_bounds(ray_low, ray_high, to);
         CollisionHit unit_hit;
         float unit_best = kNoHit;
-        if (!list_ray(g.faces, g.low, g.high, start, end, low, high, unit_hit, unit_best)) continue;
+        if (!list_ray({g.faces, g.faces, g.low, g.high}, from, to, ray_low, ray_high, unit_hit,
+                      unit_best))
+            continue;
+        if (shifted) {
+            unit_hit.point = unit_hit.point - shift;
+            unit_hit.centre = unit_hit.centre - shift;
+        }
         // `fmuls` on y, then `fmadds` on z and on x.
         const float dx = unit_hit.point.x - start.x;
         const float dy = unit_hit.point.y - start.y;
@@ -762,8 +826,8 @@ bool CollisionWorld::pre_sorted_sphere_collision(const Vec3& start, const Vec3& 
     if (have_level_) {
         CollisionHit level_hit;
         float level_best = kNoHit;
-        if (list_sphere(sorted_, level_low_, level_high_, start, end, low, high, radius, level_hit,
-                        level_best)) {
+        if (list_sphere({sorted_, level_faces_, level_low_, level_high_}, start, end, low, high,
+                        radius, level_hit, level_best)) {
             const float d = length(level_hit.point - start);
             if (d < nearest) {
                 hit = level_hit;
@@ -795,7 +859,8 @@ bool CollisionWorld::pre_sorted_ray_collision(const Vec3& start, const Vec3& end
         // The level cast starts from the object's distance, so it only answers
         // when it is nearer.
         CollisionHit level_hit;
-        if (list_ray(sorted_, level_low_, level_high_, start, end, low, high, level_hit, best) &&
+        if (list_ray({sorted_, level_faces_, level_low_, level_high_}, start, end, low, high,
+                     level_hit, best) &&
             best < nearest) {
             hit = level_hit;
             nearest = best;
@@ -830,14 +895,26 @@ bool CollisionWorld::ray_collision(const Vec3& start, const Vec3& end, bool obje
             quadtree_sort(0, low, high, true, scratch_level_);
         }
         CollisionHit level_hit;
-        if (list_ray(scratch_level_, level_low_, level_high_, start, end, low, high, level_hit,
-                     best) &&
+        if (list_ray({scratch_level_, level_faces_, level_low_, level_high_}, start, end, low, high,
+                     level_hit, best) &&
             best < nearest) {
             hit = level_hit;
             nearest = best;
         }
     }
     return nearest != kNoHit;
+}
+
+bool CollisionWorld::snap_to_valid_ground(Vec3& at) const {
+    // CLevel::snapToValidGround: a ray from 10 above
+    // to 100 below; a hit on anything but material 100 puts the point 0.01 above it.
+    CollisionHit hit;
+    if (!ray_collision({at.x, at.y + 10.0f, at.z}, {at.x, at.y - 100.0f, at.z}, true, hit)) {
+        return false;
+    }
+    if (hit.material == kNoCollideMaterial) return false;
+    at = {hit.point.x, hit.point.y + 0.01f, hit.point.z};
+    return true;
 }
 
 bool CollisionWorld::ground_under(float x, float z, float from_y, float& surface_y) const {

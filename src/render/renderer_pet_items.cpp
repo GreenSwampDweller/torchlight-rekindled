@@ -89,11 +89,6 @@ void Renderer::Impl::step_item_tooltips(float dt) {
 // tray's selected item and, with item compare on, for the worn items
 // `CInventory::getComparisonItems` names.
 void Renderer::Impl::show_item_tooltips() {
-    std::vector<tl::core::EquipmentTooltip> tips;
-    ensure_effect_data();
-    load_unit_types();
-    refresh_skill_effects();
-
     const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
     const InventoryMenu::Tray tray = inventory_menu.focused_tray();
     const tl::core::Inventory* held_in = &player_inventory;
@@ -118,7 +113,19 @@ void Renderer::Impl::show_item_tooltips() {
         inventory_menu.set_item_tooltips({});
         return;
     }
+    context.merchant_open = inventory_menu.vendor() == VendorScreen::Merchant;
+    inventory_menu.set_item_tooltips(item_tooltips(*held_in, slot, context, item_compare));
+}
 
+/// The details of the item in `slot` of `held_in` and, with `compare`, of the worn items
+/// it stands against. `context` says whose the item is and whether a merchant is open.
+std::vector<tl::core::EquipmentTooltip> Renderer::Impl::item_tooltips(
+    const tl::core::Inventory& held_in, int slot, tl::core::EquipmentTooltipContext context,
+    bool compare) {
+    std::vector<tl::core::EquipmentTooltip> tips;
+    ensure_effect_data();
+    load_unit_types();
+    refresh_skill_effects();
     const tl::core::TrayRowContext player = tray_row_context();
     const float bonus = player_total().effect_value(tl::core::item_effect::kPriceBonus);
     context.unit_types = &unit_types;
@@ -126,8 +133,7 @@ void Renderer::Impl::show_item_tooltips() {
     context.display = &skill_effects;
     context.colours = &item_label_colours;
     context.sets = &item_sets;
-    context.owner_inventory = held_in;
-    context.merchant_open = inventory_menu.vendor() == VendorScreen::Merchant;
+    context.owner_inventory = &held_in;
     context.reductions = player.reductions;
     context.level = player.level;
     context.strength = player.strength;
@@ -153,7 +159,7 @@ void Renderer::Impl::show_item_tooltips() {
         return true;
     };
 
-    const tl::core::InventorySlot& held = held_in->slots()[static_cast<size_t>(slot)];
+    const tl::core::InventorySlot& held = held_in.slots()[static_cast<size_t>(slot)];
     {
         tl::core::ItemStats copy = held.item;
         context.full_name = tl::core::item_full_name(copy, false, unit_types);
@@ -164,8 +170,8 @@ void Renderer::Impl::show_item_tooltips() {
     const bool wearable = tl::core::item_isa(held.item, tl::core::unit_type::kWeapon, unit_types) ||
                           tl::core::item_isa(held.item, tl::core::unit_type::kArmor, unit_types) ||
                           tl::core::item_isa(held.item, tl::core::unit_type::kTrinket, unit_types);
-    if (item_compare && wearable) {
-        const int own_slot = held_in == &player_inventory ? slot : -1;
+    if (compare && wearable) {
+        const int own_slot = &held_in == &player_inventory ? slot : -1;
         int first = -1, second = -1;
         player_inventory.comparison_items(held.item, unit_types, own_slot, first, second);
         for (const int location : {first, second}) {
@@ -185,7 +191,7 @@ void Renderer::Impl::show_item_tooltips() {
             tips.push_back(tl::core::equipment_tooltip(worn.item, worn_context));
         }
     }
-    inventory_menu.set_item_tooltips(std::move(tips));
+    return tips;
 }
 
 void Renderer::Impl::pet_tray_press() {

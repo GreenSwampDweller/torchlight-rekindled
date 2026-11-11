@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h b/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
-index f145b52..c472924 100644
+index f145b52..7300fba 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseTechnique.h
 @@ -659,6 +659,12 @@ namespace ParticleUniverse
@@ -66,10 +66,22 @@ index f145b52..c472924 100644
  			/** Convenient function to push an event.
  			*/
 diff --git a/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp b/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
-index c27675d..68ced5c 100644
+index c27675d..bcabef7 100644
 --- a/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleUniverseTechnique.cpp
-@@ -109,7 +109,12 @@ namespace ParticleUniverse
+@@ -52,6 +52,11 @@ namespace ParticleUniverse
+ 	const Real ParticleTechnique::DEFAULT_MAX_VELOCITY = 9999.0f;
+ 
+ 	//-----------------------------------------------------------------------
++	// Torchlight: `ParticleTechnique::ParticleTechnique` has the library's
++	// defaults (quotas 500, 50, 10, 10, 10; 50 x 50 x 50; spatial hashing 15, 0, 50, 0.05; maximum
++	// velocity 9999; BaseWhite) and its own fields (flipbook 1 x 1, no camera, WORLD ORIENTATION and
++	// NO CULLING off). It also sets +0x5a8 to 0xf and +0x5ac to -1, which nothing reads, and counts
++	// the manager's techniques up (+0x4fc), a statistic nothing reads; those are left out.
+ 	ParticleTechnique::ParticleTechnique(void) : 
+ 		Particle(),
+ 		IAlias(),
+@@ -109,7 +114,12 @@ namespace ParticleUniverse
  		mMaxNumEmitterParticles(0),
  		mMaxNumTechniqueParticles(0),
  		mMaxNumAffectorParticles(0),
@@ -83,7 +95,7 @@ index c27675d..68ced5c 100644
  	{
  		particleType = PT_TECHNIQUE;
  		mAliasType = AT_TECHNIQUE;
-@@ -117,11 +122,13 @@ namespace ParticleUniverse
+@@ -117,11 +127,13 @@ namespace ParticleUniverse
  		mPool.setParentTechnique(this);
  	}
  	//-----------------------------------------------------------------------
@@ -100,7 +112,7 @@ index c27675d..68ced5c 100644
  		// Destroy the spatial hashing tables.
  		if (mSpatialHashTableA)
  		{
-@@ -150,6 +157,7 @@ namespace ParticleUniverse
+@@ -150,6 +162,7 @@ namespace ParticleUniverse
  			mCameraDependencyFactory.destroy(mDepthCameraDependency);
  	}
  	//-----------------------------------------------------------------------
@@ -108,7 +120,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_initParticleForEmission(Particle* particle)
  	{
  		if (!mTechniqueListenerList.empty())
-@@ -164,6 +172,7 @@ namespace ParticleUniverse
+@@ -164,6 +177,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -116,7 +128,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_initForEmission(void)
  	{
  		// The technique itself is emitted.
-@@ -178,6 +187,7 @@ namespace ParticleUniverse
+@@ -178,6 +192,7 @@ namespace ParticleUniverse
  		mPool.lockAllParticles();
  	}
  	//-----------------------------------------------------------------------
@@ -124,7 +136,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_initForExpiration(ParticleTechnique* technique, Real timeElapsed)
  	{
  		// The technique itself is expired.
-@@ -187,6 +197,7 @@ namespace ParticleUniverse
+@@ -187,6 +202,7 @@ namespace ParticleUniverse
  		_notifyStop();
  	}
  	//-----------------------------------------------------------------------
@@ -132,7 +144,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_markForEmission(void)
  	{
  		// Set all indications to false.
-@@ -202,6 +213,7 @@ namespace ParticleUniverse
+@@ -202,6 +218,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -140,7 +152,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_markForEmission(ParticleEmitter* emitter, bool mark)
  	{
  		// Determine the type of particle the emitter emits
-@@ -239,6 +251,7 @@ namespace ParticleUniverse
+@@ -239,6 +256,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -148,7 +160,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_resetMarkForEmission(void)
  	{
  		// Run through all emitters and set MarkedForEmission to false.
-@@ -258,6 +271,7 @@ namespace ParticleUniverse
+@@ -258,6 +276,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -156,7 +168,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyUpdateBounds()
  	{
  		if (mPool.isEmpty())
-@@ -272,15 +286,19 @@ namespace ParticleUniverse
+@@ -272,15 +291,19 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -179,7 +191,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyRescaled(const Vector3& scale)
  	{
  		_mParticleSystemScale = scale;
-@@ -330,99 +348,87 @@ namespace ParticleUniverse
+@@ -330,99 +353,87 @@ namespace ParticleUniverse
  		{
  			(*itExtern)->_notifyRescaled(scale);
  		}
@@ -293,7 +305,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setDefaultWidth(const Real width)
  	{
  		mDefaultWidth = width;
-@@ -434,11 +440,13 @@ namespace ParticleUniverse
+@@ -434,11 +445,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -307,7 +319,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setDefaultHeight(const Real height)
  	{
  		mDefaultHeight = height;
-@@ -450,11 +458,13 @@ namespace ParticleUniverse
+@@ -450,11 +463,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -321,7 +333,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setDefaultDepth(const Real depth)
  	{
  		mDefaultDepth = depth;
-@@ -466,11 +476,13 @@ namespace ParticleUniverse
+@@ -466,11 +481,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -335,7 +347,7 @@ index c27675d..68ced5c 100644
  	const String& ParticleTechnique::getMaterialName(void) const
  	{
  		return mMaterialName;
-@@ -483,26 +495,30 @@ namespace ParticleUniverse
+@@ -483,26 +500,30 @@ namespace ParticleUniverse
                      Ogre::MaterialManager::getSingleton().load(mMaterialName, resourceGroupName));
      }
  	//-----------------------------------------------------------------------
@@ -373,7 +385,7 @@ index c27675d..68ced5c 100644
  		return emitter;
  	}
  	//-----------------------------------------------------------------------
-@@ -511,11 +527,19 @@ namespace ParticleUniverse
+@@ -511,11 +532,19 @@ namespace ParticleUniverse
  		assert(emitter && "Emitter is null!");
  		mEmitters.push_back(emitter);
  		emitter->setParentTechnique(this);
@@ -394,7 +406,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::removeEmitter(ParticleEmitter* emitter)
  	{
  		assert(emitter && "Emitter is null!");
-@@ -543,12 +567,14 @@ namespace ParticleUniverse
+@@ -543,12 +572,14 @@ namespace ParticleUniverse
  			_notifyEmissionChange();
  	}
  	//-----------------------------------------------------------------------
@@ -409,7 +421,7 @@ index c27675d..68ced5c 100644
  	ParticleEmitter* ParticleTechnique::getEmitter (const String& emitterName) const
  	{
  		if (emitterName == BLANK_STRING)
-@@ -567,11 +593,13 @@ namespace ParticleUniverse
+@@ -567,11 +598,13 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -423,7 +435,7 @@ index c27675d..68ced5c 100644
  	size_t ParticleTechnique::getNumEmittedEmitters (void) const
  	{
  		ParticleEmitterIterator it;
-@@ -588,36 +616,23 @@ namespace ParticleUniverse
+@@ -588,36 +621,23 @@ namespace ParticleUniverse
  		return count;
  	}
  	//-----------------------------------------------------------------------
@@ -467,7 +479,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyAllEmitters(void)
  	{
  		ParticleEmitterList::iterator it;
-@@ -630,6 +645,7 @@ namespace ParticleUniverse
+@@ -630,6 +650,7 @@ namespace ParticleUniverse
  	}
  
  	//-----------------------------------------------------------------------
@@ -475,7 +487,7 @@ index c27675d..68ced5c 100644
  	ParticleAffector* ParticleTechnique::createAffector(const String& affectorType)
  	{
  		assert(affectorType != BLANK_STRING && "affectorType is empty!");
-@@ -643,9 +659,12 @@ namespace ParticleUniverse
+@@ -643,9 +664,12 @@ namespace ParticleUniverse
  		assert(affector && "Affector is null!");
  		mAffectors.push_back(affector);
  		affector->setParentTechnique(this);
@@ -488,7 +500,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::removeAffector (ParticleAffector* affector)
  	{
  		assert(affector && "Affector is null!");
-@@ -665,12 +684,14 @@ namespace ParticleUniverse
+@@ -665,12 +689,14 @@ namespace ParticleUniverse
  		affector->setParentTechnique(0);
  	}
  	//-----------------------------------------------------------------------
@@ -503,7 +515,7 @@ index c27675d..68ced5c 100644
  	ParticleAffector* ParticleTechnique::getAffector (const String& affectorName) const
  	{
  		if (affectorName == BLANK_STRING)
-@@ -689,11 +710,13 @@ namespace ParticleUniverse
+@@ -689,11 +715,13 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -517,7 +529,7 @@ index c27675d..68ced5c 100644
  	size_t ParticleTechnique::getNumEmittedAffectors (void) const
  	{
  		ParticleAffectorIterator it;
-@@ -710,28 +733,24 @@ namespace ParticleUniverse
+@@ -710,28 +738,24 @@ namespace ParticleUniverse
  		return count;
  	}
  	//-----------------------------------------------------------------------
@@ -554,7 +566,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyAllAffectors(void)
  	{
  		ParticleAffectorIterator it;
-@@ -744,6 +763,7 @@ namespace ParticleUniverse
+@@ -744,6 +768,7 @@ namespace ParticleUniverse
  	}
  
  	//-----------------------------------------------------------------------
@@ -562,7 +574,7 @@ index c27675d..68ced5c 100644
  	ParticleObserver* ParticleTechnique::createObserver(const String& observerType)
  	{
  		assert(observerType != BLANK_STRING && "observerType is empty!");
-@@ -752,12 +772,14 @@ namespace ParticleUniverse
+@@ -752,12 +777,14 @@ namespace ParticleUniverse
  		return observer;
  	}
  	//-----------------------------------------------------------------------
@@ -578,7 +590,7 @@ index c27675d..68ced5c 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleTechnique::removeObserver(ParticleObserver* observer)
-@@ -779,12 +801,14 @@ namespace ParticleUniverse
+@@ -779,12 +806,14 @@ namespace ParticleUniverse
  		observer->setParentTechnique(0);
  	}
  	//-----------------------------------------------------------------------
@@ -593,7 +605,7 @@ index c27675d..68ced5c 100644
  	ParticleObserver* ParticleTechnique::getObserver (const String& observerName) const
  	{
  		if (observerName == BLANK_STRING)
-@@ -803,11 +827,13 @@ namespace ParticleUniverse
+@@ -803,11 +832,13 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -607,7 +619,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyObserver(ParticleObserver* observer)
  	{
  		assert(observer && "Observer is null!");
-@@ -825,11 +851,13 @@ namespace ParticleUniverse
+@@ -825,11 +856,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -621,7 +633,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyAllObservers(void)
  	{
  		ParticleObserverIterator it;
-@@ -841,15 +869,21 @@ namespace ParticleUniverse
+@@ -841,15 +874,21 @@ namespace ParticleUniverse
  		mObservers.clear();
  	}
  	//-----------------------------------------------------------------------
@@ -643,7 +655,7 @@ index c27675d..68ced5c 100644
  			destroyRenderer();
  		}
  
-@@ -861,6 +895,7 @@ namespace ParticleUniverse
+@@ -861,6 +900,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -651,7 +663,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setRenderer(ParticleRenderer* renderer)
  	{
  		if (!renderer)
-@@ -868,6 +903,9 @@ namespace ParticleUniverse
+@@ -868,6 +908,9 @@ namespace ParticleUniverse
  
  		if (mRenderer)
  		{
@@ -661,7 +673,7 @@ index c27675d..68ced5c 100644
  			destroyRenderer();
  		}
  
-@@ -884,21 +922,27 @@ namespace ParticleUniverse
+@@ -884,21 +927,27 @@ namespace ParticleUniverse
  		renderer->setParentTechnique(0);
  	}
  	//-----------------------------------------------------------------------
@@ -690,7 +702,7 @@ index c27675d..68ced5c 100644
  		mPrepareBehaviour = true;
  	}
  	//-----------------------------------------------------------------------
-@@ -921,12 +965,14 @@ namespace ParticleUniverse
+@@ -921,12 +970,14 @@ namespace ParticleUniverse
  		behaviourTemplate->setParentTechnique(0);
  	}
  	//-----------------------------------------------------------------------
@@ -705,7 +717,7 @@ index c27675d..68ced5c 100644
  	ParticleBehaviour* ParticleTechnique::_getBehaviourTemplate (const String& behaviourType) const
  	{
  		if (behaviourType == BLANK_STRING)
-@@ -945,11 +991,13 @@ namespace ParticleUniverse
+@@ -945,11 +996,13 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -719,7 +731,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_destroyBehaviourTemplate(ParticleBehaviour* behaviourTemplate)
  	{
  		assert(behaviourTemplate && "Behaviour is null!");
-@@ -967,6 +1015,7 @@ namespace ParticleUniverse
+@@ -967,6 +1020,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -727,7 +739,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_destroyAllBehaviourTemplates (void)
  	{
  		ParticleBehaviourIterator it;
-@@ -978,6 +1027,7 @@ namespace ParticleUniverse
+@@ -978,6 +1032,7 @@ namespace ParticleUniverse
  		mBehaviourTemplates.clear();
  	}
  	//-----------------------------------------------------------------------
@@ -735,7 +747,7 @@ index c27675d..68ced5c 100644
  	Extern* ParticleTechnique::createExtern (const String& externType)
  	{
  		assert(externType != BLANK_STRING && "externType is empty!");
-@@ -986,12 +1036,14 @@ namespace ParticleUniverse
+@@ -986,12 +1041,14 @@ namespace ParticleUniverse
  		return externObject;
  	}
  	//-----------------------------------------------------------------------
@@ -751,7 +763,7 @@ index c27675d..68ced5c 100644
  		mPrepareExtern = true;
  	}
  	//-----------------------------------------------------------------------
-@@ -1014,12 +1066,14 @@ namespace ParticleUniverse
+@@ -1014,12 +1071,14 @@ namespace ParticleUniverse
  		externObject->setParentTechnique(0);
  	}
  	//-----------------------------------------------------------------------
@@ -766,7 +778,7 @@ index c27675d..68ced5c 100644
  	Extern* ParticleTechnique::getExtern (const String& externName) const
  	{
  		if (externName == BLANK_STRING)
-@@ -1038,6 +1092,7 @@ namespace ParticleUniverse
+@@ -1038,6 +1097,7 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -774,7 +786,7 @@ index c27675d..68ced5c 100644
  	Extern* ParticleTechnique::getExternType (const String& externType) const
  	{
  		if (externType == BLANK_STRING)
-@@ -1056,16 +1111,19 @@ namespace ParticleUniverse
+@@ -1056,16 +1116,19 @@ namespace ParticleUniverse
  		return 0;
  	}
  	//-----------------------------------------------------------------------
@@ -794,7 +806,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyExtern (Extern* externObject)
  	{
  		assert(externObject && "ExternObject is null!");
-@@ -1083,6 +1141,7 @@ namespace ParticleUniverse
+@@ -1083,6 +1146,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -802,7 +814,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::destroyAllExterns (void)
  	{
  		ExternIterator it;
-@@ -1094,6 +1153,8 @@ namespace ParticleUniverse
+@@ -1094,6 +1158,8 @@ namespace ParticleUniverse
  		mExterns.clear();
  	}
  	//-----------------------------------------------------------------------
@@ -811,7 +823,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_updateRenderQueue(Ogre::RenderQueue* queue)
  	{
  		if (mRenderer && mRenderer->isRendererInitialised())
-@@ -1102,7 +1163,15 @@ namespace ParticleUniverse
+@@ -1102,7 +1168,15 @@ namespace ParticleUniverse
  			{
  				// Update the techniques' own renderqueue or proceed if smooth Lod has been set, 
  				// to be able to render the existing particles.
@@ -828,7 +840,7 @@ index c27675d..68ced5c 100644
  
  				/** Update the renderqueue of the pooled techniques (if available)
  					Note, that the _updateRenderQueue() of pooled (emitted) particle systems is NOT
-@@ -1114,6 +1183,7 @@ namespace ParticleUniverse
+@@ -1114,6 +1188,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -836,7 +848,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_updateRenderQueuePooledTechniques(Ogre::RenderQueue* queue)
  	{
  		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
-@@ -1151,47 +1221,64 @@ namespace ParticleUniverse
+@@ -1151,47 +1226,64 @@ namespace ParticleUniverse
  		_unprepareExterns();
  	}
  	//-----------------------------------------------------------------------
@@ -935,7 +947,7 @@ index c27675d..68ced5c 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleTechnique::_prepareSystem(void)
-@@ -1407,49 +1494,102 @@ namespace ParticleUniverse
+@@ -1407,49 +1499,102 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1057,7 +1069,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyEmissionChange(void)
  	{
  		if (mSuppressNotifyEmissionChange)
-@@ -1467,17 +1607,15 @@ namespace ParticleUniverse
+@@ -1467,17 +1612,15 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1078,7 +1090,7 @@ index c27675d..68ced5c 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleTechnique::_notifyAttachedPooledTechniques(Ogre::Node* parent, bool isTagPoint)
-@@ -1497,6 +1635,8 @@ namespace ParticleUniverse
+@@ -1497,6 +1640,8 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1087,7 +1099,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyCurrentCamera(Camera* camera)
  	{
  		if (mRenderer && mRenderer->isRendererInitialised())
-@@ -1515,6 +1655,63 @@ namespace ParticleUniverse
+@@ -1515,6 +1660,63 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1151,7 +1163,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyCurrentCameraPooledTechniques(Camera* camera)
  	{
  		if (mPool.isEmpty(Particle::PT_TECHNIQUE))
-@@ -1525,9 +1722,8 @@ namespace ParticleUniverse
+@@ -1525,9 +1727,8 @@ namespace ParticleUniverse
  		{
  			if (technique)
  			{
@@ -1162,7 +1174,7 @@ index c27675d..68ced5c 100644
  			technique = static_cast<ParticleTechnique*>(mPool.getNext(Particle::PT_TECHNIQUE));
  		}
  	}
-@@ -1550,6 +1746,7 @@ namespace ParticleUniverse
+@@ -1550,6 +1751,7 @@ namespace ParticleUniverse
  		return - (sortPosition - p->position).squaredLength();
  	}
  	//-----------------------------------------------------------------------
@@ -1170,7 +1182,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_sortVisualParticles(Camera* camera)
  	{
  		if (mRenderer)
-@@ -1571,6 +1768,7 @@ namespace ParticleUniverse
+@@ -1571,6 +1773,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1178,7 +1190,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyParticleResized(void)
  	{
  		if (mRenderer)
-@@ -1579,6 +1777,7 @@ namespace ParticleUniverse
+@@ -1579,6 +1782,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1186,7 +1198,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyStart (void)
  	{
  #ifdef PU_LOG_DEBUG
-@@ -1645,6 +1844,7 @@ namespace ParticleUniverse
+@@ -1645,6 +1849,7 @@ namespace ParticleUniverse
  		setEnabled(mOriginalEnabled);
  	}
  	//-----------------------------------------------------------------------
@@ -1194,7 +1206,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyStartPooledComponents(void)
  	{
  		if (mPool.isEmpty())
-@@ -1685,6 +1885,9 @@ namespace ParticleUniverse
+@@ -1685,6 +1890,9 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1204,7 +1216,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyStop (void)
  	{
  		// Notify the registered objects that the ParticleSystem/ParticleTechnique stops.
-@@ -1737,10 +1940,9 @@ namespace ParticleUniverse
+@@ -1737,10 +1945,9 @@ namespace ParticleUniverse
  		// Notify the components in the pool.
  		_notifyStopPooledComponents();
  
@@ -1218,7 +1230,7 @@ index c27675d..68ced5c 100644
  		_resetBounds();
  
  #ifdef PU_LOG_DEBUG
-@@ -1748,6 +1950,7 @@ namespace ParticleUniverse
+@@ -1748,6 +1955,7 @@ namespace ParticleUniverse
  #endif // PU_LOG_DEBUG
  	}
  	//-----------------------------------------------------------------------
@@ -1226,7 +1238,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyStopPooledComponents(void)
  	{
  		if (mPool.isEmpty())
-@@ -1788,6 +1991,7 @@ namespace ParticleUniverse
+@@ -1788,6 +1996,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1234,7 +1246,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyPause (void)
  	{
  		/** The renderer, Externs and Observers aren't notified. There is no specific reasons for that.
-@@ -1822,6 +2026,7 @@ namespace ParticleUniverse
+@@ -1822,6 +2031,7 @@ namespace ParticleUniverse
  		_notifyPausePooledComponents();
  	}
  	//-----------------------------------------------------------------------
@@ -1242,7 +1254,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyPausePooledComponents(void)
  	{
  		if (mPool.isEmpty())
-@@ -1862,6 +2067,7 @@ namespace ParticleUniverse
+@@ -1862,6 +2072,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1250,7 +1262,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyResume (void)
  	{
  		/** The renderer, Externs and Observers aren't notified. There is no specific reasons for that.
-@@ -1896,6 +2102,7 @@ namespace ParticleUniverse
+@@ -1896,6 +2107,7 @@ namespace ParticleUniverse
  		_notifyResumePooledComponents();
  	}
  	//-----------------------------------------------------------------------
@@ -1258,7 +1270,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_notifyResumePooledComponents(void)
  	{
  		if (mPool.isEmpty())
-@@ -1945,12 +2152,15 @@ namespace ParticleUniverse
+@@ -1945,12 +2157,15 @@ namespace ParticleUniverse
  		return false;
  	}
  	//-----------------------------------------------------------------------
@@ -1275,7 +1287,7 @@ index c27675d..68ced5c 100644
  		Particle* particle = mPool.getFirst();
  		ParticleEmitter* emitter = 0;
  		ParticleTechnique* technique = 0;
-@@ -1960,47 +2170,29 @@ namespace ParticleUniverse
+@@ -1960,47 +2175,29 @@ namespace ParticleUniverse
  		{
  			if (particle)
  			{
@@ -1324,7 +1336,7 @@ index c27675d..68ced5c 100644
  							if (mUpdateWorldAABB)
  							{
  								mWorldAABB.merge(technique->getWorldBoundingBox());
-@@ -2009,39 +2201,40 @@ namespace ParticleUniverse
+@@ -2009,39 +2206,40 @@ namespace ParticleUniverse
  					}
  
  					firstActiveParticle = false;
@@ -1379,7 +1391,7 @@ index c27675d..68ced5c 100644
  			}
  
  			firstParticle = false;
-@@ -2049,6 +2242,7 @@ namespace ParticleUniverse
+@@ -2049,6 +2247,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1387,7 +1399,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_processDependencies(void)
  	{
  		// Fast rejection
-@@ -2083,6 +2277,7 @@ namespace ParticleUniverse
+@@ -2083,6 +2282,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1395,7 +1407,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_extractPooledAffectors(void)
  	{
  		// Copy all pooled affectors to separate list.
-@@ -2102,30 +2297,26 @@ namespace ParticleUniverse
+@@ -2102,30 +2302,26 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1440,7 +1452,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_processAffectors(Particle* particle, Real timeElapsed, bool firstParticle)
  	{
  		// Iterate through all affector objects that are registered at this technique and which are not emitted
-@@ -2161,6 +2352,8 @@ namespace ParticleUniverse
+@@ -2161,6 +2357,8 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1449,7 +1461,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_preProcessParticles(Real timeElapsed)
  	{
  		// Note, the particle pool may be empty, but the preprocessing must still be executed, because
-@@ -2220,20 +2413,10 @@ namespace ParticleUniverse
+@@ -2220,20 +2418,10 @@ namespace ParticleUniverse
  		{
  			Hook<ParticleObserver>::_preProcessParticles(&mObservers, this, timeElapsed);
  		}
@@ -1472,7 +1484,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_postProcessParticles(Real timeElapsed)
  	{
  		// Note, the particle pool may be empty, but the postprocessing must still be executed, because
-@@ -2246,6 +2429,10 @@ namespace ParticleUniverse
+@@ -2246,6 +2434,10 @@ namespace ParticleUniverse
  		mUpdateWorldAABB = false;
  		if (mHasExtents)
  		{
@@ -1483,7 +1495,7 @@ index c27675d..68ced5c 100644
  			mWorldAABB.setExtents(mMinWorldExtend, mMaxWorldExtend);
  		}
  
-@@ -2267,6 +2454,9 @@ namespace ParticleUniverse
+@@ -2267,6 +2459,9 @@ namespace ParticleUniverse
  				{
  					(*emitterIt)->_postProcessParticles(this, timeElapsed);
  				}
@@ -1493,7 +1505,7 @@ index c27675d..68ced5c 100644
  			}
  		}
  
-@@ -2307,6 +2497,7 @@ namespace ParticleUniverse
+@@ -2307,6 +2502,7 @@ namespace ParticleUniverse
  #endif // PU_LOG_DEBUG
  	}
  	//-----------------------------------------------------------------------
@@ -1501,7 +1513,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_postProcessSpatialHashing(void)
  	{
  		/** Cycle tables.
-@@ -2320,6 +2511,7 @@ namespace ParticleUniverse
+@@ -2320,6 +2516,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1509,7 +1521,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_processExternals(Particle* particle, Real timeElapsed, bool firstParticle)
  	{
  		if (mExterns.empty())
-@@ -2336,17 +2528,16 @@ namespace ParticleUniverse
+@@ -2336,17 +2533,16 @@ namespace ParticleUniverse
  		mRenderer->_processParticle(this, particle, timeElapsed, firstParticle);
  	}
  	//-----------------------------------------------------------------------
@@ -1530,7 +1542,7 @@ index c27675d..68ced5c 100644
  			if (p->ownDimensions)
  			{
  				maxDim = std::max(p->width, p->height);
-@@ -2357,22 +2548,28 @@ namespace ParticleUniverse
+@@ -2357,22 +2553,28 @@ namespace ParticleUniverse
  				maxDim = std::max(mDefaultWidth, mDefaultHeight);
  				maxDim = std::max(maxDim, mDefaultDepth);
  			}
@@ -1565,7 +1577,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_initParticleForExpiration(Particle* particle, Real timeElapsed)
  	{
  		particle->_initForExpiration(this, timeElapsed);
-@@ -2387,21 +2584,9 @@ namespace ParticleUniverse
+@@ -2387,21 +2589,9 @@ namespace ParticleUniverse
  				(*it)->particleExpired(this, particle);
  			}
  		}
@@ -1588,7 +1600,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_processObservers(Particle* particle, Real timeElapsed, bool firstParticle)
  	{
  		if (mObservers.empty())
-@@ -2410,8 +2595,13 @@ namespace ParticleUniverse
+@@ -2410,8 +2600,13 @@ namespace ParticleUniverse
  		Hook<ParticleObserver>::_processParticle(&mObservers, this, particle, timeElapsed, firstParticle);
  	}
  	//-----------------------------------------------------------------------
@@ -1602,7 +1614,7 @@ index c27675d..68ced5c 100644
  		bool expired = particle->timeToLive < timeElapsed;
  		if (expired)
  		{
-@@ -2422,6 +2612,7 @@ namespace ParticleUniverse
+@@ -2422,6 +2617,7 @@ namespace ParticleUniverse
  		return expired;
  	}
  	//-----------------------------------------------------------------------
@@ -1610,7 +1622,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::_emitParticles(Real timeElapsed)
  	{
  		// Don't emit if the technique is not enabled
-@@ -2452,6 +2643,7 @@ namespace ParticleUniverse
+@@ -2452,6 +2648,7 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1618,7 +1630,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::forceEmission(ParticleEmitter* emitter, unsigned requested)
  	{
  		// Fast rejection: Don't emit if the technique is not enabled
-@@ -2461,6 +2653,7 @@ namespace ParticleUniverse
+@@ -2461,6 +2658,7 @@ namespace ParticleUniverse
  		_executeEmitParticles(emitter, requested, 0);
  	}
  	//-----------------------------------------------------------------------
@@ -1626,7 +1638,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::forceEmission(const Particle::ParticleType particleType, unsigned requested)
  	{
  		// Fast rejection: Don't emit if the technique is not enabled
-@@ -2483,75 +2676,59 @@ namespace ParticleUniverse
+@@ -2483,75 +2681,59 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1728,7 +1740,7 @@ index c27675d..68ced5c 100644
  	const Vector3& ParticleTechnique::getDerivedPosition(void)
  	{
  		if (mMarkedForEmission)
-@@ -2571,57 +2748,24 @@ namespace ParticleUniverse
+@@ -2571,57 +2753,24 @@ namespace ParticleUniverse
  		return mDerivedPosition;
  	}
  	//-----------------------------------------------------------------------
@@ -1791,7 +1803,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setWidthCameraDependency(CameraDependency* cameraDependency)
  	{
  		if (mWidthCameraDependency)
-@@ -2630,6 +2774,7 @@ namespace ParticleUniverse
+@@ -2630,6 +2779,7 @@ namespace ParticleUniverse
  		mWidthCameraDependency = cameraDependency;
  	}
  	//-----------------------------------------------------------------------
@@ -1799,7 +1811,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setWidthCameraDependency(Real squareDistance, bool inc)
  	{
  		if (!mWidthCameraDependency)
-@@ -2643,11 +2788,13 @@ namespace ParticleUniverse
+@@ -2643,11 +2793,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1813,7 +1825,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setHeightCameraDependency(CameraDependency* cameraDependency)
  	{
  		if (mHeightCameraDependency)
-@@ -2656,6 +2803,7 @@ namespace ParticleUniverse
+@@ -2656,6 +2808,7 @@ namespace ParticleUniverse
  		mHeightCameraDependency = cameraDependency;
  	}
  	//-----------------------------------------------------------------------
@@ -1821,7 +1833,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setHeightCameraDependency(Real squareDistance, bool inc)
  	{
  		if (!mHeightCameraDependency)
-@@ -2669,11 +2817,13 @@ namespace ParticleUniverse
+@@ -2669,11 +2822,13 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1835,7 +1847,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setDepthCameraDependency(CameraDependency* cameraDependency)
  	{
  		if (mDepthCameraDependency)
-@@ -2682,6 +2832,7 @@ namespace ParticleUniverse
+@@ -2682,6 +2837,7 @@ namespace ParticleUniverse
  		mDepthCameraDependency = cameraDependency;
  	}
  	//-----------------------------------------------------------------------
@@ -1843,7 +1855,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::setDepthCameraDependency(Real squareDistance, bool inc)
  	{
  		if (!mDepthCameraDependency)
-@@ -2695,59 +2846,24 @@ namespace ParticleUniverse
+@@ -2695,59 +2851,24 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -1910,7 +1922,7 @@ index c27675d..68ced5c 100644
  	}
  	//-----------------------------------------------------------------------
  	void ParticleTechnique::_initAllParticlesForExpiration(void)
-@@ -2774,19 +2890,24 @@ namespace ParticleUniverse
+@@ -2774,19 +2895,24 @@ namespace ParticleUniverse
  		mPool.lockAllParticles();
  	}
  	//-----------------------------------------------------------------------
@@ -1943,7 +1955,7 @@ index c27675d..68ced5c 100644
  	}
  	//-----------------------------------------------------------------------
  	ParticlePool* ParticleTechnique::_getParticlePool(void)
-@@ -2794,16 +2915,19 @@ namespace ParticleUniverse
+@@ -2794,16 +2920,19 @@ namespace ParticleUniverse
  		return &mPool;
  	}
  	//-----------------------------------------------------------------------
@@ -1963,7 +1975,7 @@ index c27675d..68ced5c 100644
  	bool ParticleTechnique::makeParticleLocal(Particle* particle)
  	{
  		if (!particle)
-@@ -2817,6 +2941,7 @@ namespace ParticleUniverse
+@@ -2817,6 +2946,7 @@ namespace ParticleUniverse
  		return true;
  	}
  	//-----------------------------------------------------------------------
@@ -1971,7 +1983,7 @@ index c27675d..68ced5c 100644
  	SpatialHashTable<Particle*>* ParticleTechnique::getSpatialHashTable(void) const
  	{
  		return mCurrentSpatialHashTable;
-@@ -2827,68 +2952,82 @@ namespace ParticleUniverse
+@@ -2827,68 +2957,82 @@ namespace ParticleUniverse
  		return mIsSpatialHashingUsed;
  	}
  	//-----------------------------------------------------------------------
@@ -2055,7 +2067,7 @@ index c27675d..68ced5c 100644
  	void ParticleTechnique::removeTechniqueListener (TechniqueListener* techniqueListener)
  	{
  		assert(techniqueListener && "TechniqueListener is null!");
-@@ -2975,18 +3114,30 @@ namespace ParticleUniverse
+@@ -2975,18 +3119,30 @@ namespace ParticleUniverse
  		}
  	}
  	//-----------------------------------------------------------------------
@@ -2088,7 +2100,7 @@ index c27675d..68ced5c 100644
  		technique->mName = mName;
  		technique->mVisualParticlePoolIncreased = false;
  		technique->mParticleEmitterPoolIncreased = false;
-@@ -2996,14 +3147,19 @@ namespace ParticleUniverse
+@@ -2996,14 +3152,19 @@ namespace ParticleUniverse
  		technique->mEmittedEmitterQuota = mEmittedEmitterQuota;
  		technique->mEmittedTechniqueQuota = mEmittedTechniqueQuota;
  		technique->mEmittedAffectorQuota = mEmittedAffectorQuota;
@@ -2112,7 +2124,7 @@ index c27675d..68ced5c 100644
  		technique->mIsSpatialHashingUsed = mIsSpatialHashingUsed;
  		technique->mSpatialHashingCellDimension = mSpatialHashingCellDimension;
  		technique->mSpatialHashingCellOverlap = mSpatialHashingCellOverlap;
-@@ -3012,65 +3168,49 @@ namespace ParticleUniverse
+@@ -3012,65 +3173,49 @@ namespace ParticleUniverse
  		technique->mSpatialHashingIntervalRemainder = mSpatialHashingIntervalRemainder;
  		technique->mSpatialHashingIntervalSet = mSpatialHashingIntervalSet;
  		technique->mMaxVelocity = mMaxVelocity;

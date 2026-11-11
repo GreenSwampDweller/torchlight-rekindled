@@ -1,8 +1,16 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
-index 1c92309..74f76df 100644
+index 1c92309..2accaf8 100644
 --- a/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
 +++ b/Plugins/ParticleUniverse/include/ParticleUniverseDynamicAttributeFactory.h
-@@ -87,6 +87,15 @@ namespace ParticleUniverse
+@@ -37,6 +37,7 @@ namespace ParticleUniverse
+ 	    public:
+ 
+ 			DynamicAttributeFactory(void) {};
++	        // Torchlight: `DynamicAttributeFactory::~DynamicAttributeFactory`, nothing of its own.
+ 	        virtual ~DynamicAttributeFactory(void) {};
+ 
+ 			/** 
+@@ -87,6 +88,15 @@ namespace ParticleUniverse
  							return dynAttr;
  						}
  						break;

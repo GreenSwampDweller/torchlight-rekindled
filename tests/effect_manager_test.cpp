@@ -424,9 +424,11 @@ TL_TEST(add_affix_by_name_clones_from_the_book_and_needs_one) {
     TL_CHECK(std::fabs(manager.effect_value(0x34) - 3.0f) < 0.001f);
 }
 
-// `CAffix::addEffectsToEffectManager`: the unit's `applyEffectOnUnit` may refuse
-// an effect or rewrite it (`SUMMON DURATION`'s value as its duration).
-TL_TEST(a_unit_hook_decides_which_of_an_affixs_effects_are_held) {
+// `CAffix::addEffectsToEffectManager`: each effect cloned,
+// given its affix owner, rolled and activated - never through the unit's `applyEffectOnUnit`,
+// which only a skill event's effects go through (`offer_effect`). A unit hook that would refuse
+// the burn or rewrite the summon's duration is not asked; both are held as authored.
+TL_TEST(an_affixs_effects_are_held_without_asking_the_unit_hook) {
     const EffectTypeTable types = shipped_types();
     const tl::core::StatBook graphs;
     EffectManager manager;
@@ -435,7 +437,7 @@ TL_TEST(a_unit_hook_decides_which_of_an_affixs_effects_are_held) {
     ctx.on_unit = [&offered](Effect& effect) {
         ++offered;
         if (effect.type == 0x2f) effect.duration = effect.values[0];
-        return effect.type != 0x34;  // the unit refuses the burn
+        return effect.type != 0x34;  // the unit would refuse the burn
     };
     manager.set_context(ctx);
     TL_CHECK(manager.has_unit_hook());
@@ -443,12 +445,12 @@ TL_TEST(a_unit_hook_decides_which_of_an_affixs_effects_are_held) {
                                  {make_effect("SUMMON", 0x2f, 60.0f, 1.0f),
                                   make_effect("BURN", 0x34, 5.0f, 3.0f)}),
                       1);
-    TL_CHECK_EQ(offered, 2);
+    TL_CHECK_EQ(offered, 0);
     TL_CHECK(manager.has_effect(0x2f));
-    TL_CHECK(!manager.has_effect(0x34));
+    TL_CHECK(manager.has_effect(0x34));
     const std::vector<tl::core::LiveEffect*> held = manager.live_effects_of_type(0x2f);
     TL_CHECK_EQ(held.size(), 1u);
-    TL_CHECK(std::fabs(held[0]->effect.duration - 60.0f) < 0.001f);
+    TL_CHECK(std::fabs(held[0]->effect.duration - 1.0f) < 0.001f);
     // A held affix's countdown can be set again (`getAffix` then `+0xa4`).
     TL_CHECK(manager.set_affix_duration("EMBERSENTRY", 2.0f));
     TL_CHECK(!manager.set_affix_duration("NOSUCHAFFIX", 2.0f));
@@ -556,7 +558,9 @@ TL_TEST(modify_damage_shield_buffer_absorbs_the_hit) {
     // 10 left in it, and a second hit of 15 goes through by 5, spending it.
     TL_CHECK_EQ(tl::core::modify_damage(defender, 15, 2, -1, 1.0f, rolls), 5);
     TL_CHECK_EQ(raised, 1);
-    TL_CHECK(!manager.has_effect(tl::core::kEffectTypeShieldBuffer));
+    // Spent, it is dead but still held (and seen by `hasEffect`) until its update removes it.
+    TL_CHECK(manager.has_effect(tl::core::kEffectTypeShieldBuffer));
+    TL_CHECK(manager.live_effects_of_type(tl::core::kEffectTypeShieldBuffer).front()->dead);
 }
 
 // A shield of another damage type is passed over; a physical hit it does not

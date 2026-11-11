@@ -104,7 +104,12 @@ bool World::place_breakable(const std::string& unit, const ogre::Vector3& at,
     // unit carries with it, in place where it ends up.
     const std::string collider = resolve_archive_path(b.data.collision);
     if (!collider.empty()) {
-        view_add_node_collision(b.node, collider, id);
+        // Where it ends up (`settle`, else the ground), turned and scaled as its node is: the
+        // core's own, so a world with no scene (the oracle's) has the item's collision too.
+        ogre::Matrix4 to_world;
+        to_world.makeTransform(settle != nullptr ? *settle : ground,
+                               ogre::Vector3(scale, scale, scale), facing);
+        add_collision_mesh(collider, to_world, id);
         collision.build();
         b.has_collision = collision.has_group(id);
         collision.set_group_blocks(id, b.data.block);
@@ -114,6 +119,7 @@ bool World::place_breakable(const std::string& unit, const ogre::Vector3& at,
     if (b.has_collision) collision.set_group_enabled(id, b.state.collision_live);
 
     const ogre::Vector3 where = view_position(b.node);
+    b.made = ++items_made;
     breakables.push_back(std::move(b));
     tl::core::Vec3 box_low{0.0f, 0.0f, 0.0f};
     tl::core::Vec3 box_high{0.0f, 0.0f, 0.0f};
@@ -165,17 +171,22 @@ bool World::break_breakable(size_t index, bool by_player) {
         const std::string& name = data.skills[static_cast<size_t>(out.skill)];
         cast_prop_trap(unit, name, data.skill_levels[static_cast<size_t>(out.skill)],
                        ogre::Vector3(out.skill_at.x, out.skill_at.y, out.skill_at.z), facing,
-                       have_breaker);
+                       have_breaker, id);
         if (has_collision) collision.set_group_enabled(id, true);
     }
 
-    // The particle, `+0.1` along the up vector, started.
+    // The particle, `+0.1` along the up vector, started: `CParticle::Start`
+    // on the one `CBreakable::unitInit` made. PORT: the layout is placed here, and what that does
+    // to `g_Rand` (its samples' `addSample`, each leaving the low word) the console did at the
+    // load (`breakable_unit_loads`), so the generator is kept as it was.
     if (!data.interact_particle.empty()) {
         std::string particle = preloaded_particle_file(data.interact_particle);
         if (particle.empty()) particle = data.interact_particle;
+        const uint64_t g_before = tl::core::game_random().state();
         std::vector<Ogre::SceneNode*> holders = place_particle_layout(
             particle, ogre::Vector3(out.particle_at.x, out.particle_at.y, out.particle_at.z),
             ogre::Quaternion::IDENTITY, nullptr);
+        tl::core::game_random().set_state(g_before);
         if (holders.empty()) {
             TL_LOG_WARN("breakable: %s has no particle '%s'", unit.c_str(),
                         data.interact_particle.c_str());
@@ -184,7 +195,7 @@ bool World::break_breakable(size_t index, bool by_player) {
         }
     }
     // Sample 0 of its own bank, `INTERACT_SOUND`.
-    play_sound(data.interact_sound, position);
+    play_bank_sample(data.interact_sound, position);
 
     // `CLevel::rollTreasure(breaker, null, position)`.
     if (!loot_tables_built) {

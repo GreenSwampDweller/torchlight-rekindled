@@ -155,7 +155,7 @@ struct QuestObjective {
     /// `CQuestUnitData::getUnitName`: the
     /// champion name, else `display_name` with a `{...}` span taken out.
     /// INVENTED: with nothing resolved the authored key is printed, where the
-    /// original prints an empty string.
+    /// console prints `+0x48`, the authored `UNITTYPE` (only a log with no unit world).
     std::string unit_name() const;
 
     /// Whether a unit called `name` is the unit this objective resolved to
@@ -675,6 +675,8 @@ struct QuestCompletion {
     /// The units `calculateRewards` made when the quest was offered
     /// (`QuestEntry::reward_units`); empty for a quest taken without an NPC.
     std::vector<QuestRewardUnit> reward_units;
+    /// Paid by the log's payout already (`QuestLog::set_payout`).
+    bool paid = false;
 };
 
 /// `CQuestRewards::calculateRewards`, the
@@ -727,6 +729,11 @@ public:
     /// What `CQuestRewards::calculateRewards` makes reward units with.
     // PORT: the log's wiring, set by the renderer.
     void set_reward_world(QuestRewardWorld world) { reward_world_ = std::move(world); }
+    /// `CQuest::giveRewardForQuest`'s payout (`incrementJournalStatistic(4)`,
+    /// `CQuestRewards::rewardPlayer`), run where the console runs it: before the
+    /// quests it gives and `cleanUp`'s `reinitializeQuest`. Without one, the
+    /// completions wait for `take_completions`.
+    void set_payout(std::function<void(const QuestCompletion&)> pay) { payout_ = std::move(pay); }
     const QuestUnitWorld& unit_world() const { return unit_world_; }
     /// The objectives' printed names again (`getUnitName`
     /// reads the unit as it is asked), for an entry
@@ -766,6 +773,12 @@ public:
     /// the manager's reset rolled them.
     // PORT: the log's state set from outside (the oracle hands it the console's).
     void seed_dormant(const QuestDefinition& quest, uint32_t seed, int depth, int level);
+    /// A quest not held, the units its reset resolved (`CQuestUnitData +0x10`'s NAME and a
+    /// champion's name `+0x128`), objective by objective: the acquire, defeat and populate lists in
+    /// order, each objective before its additional units. Empty names leave one unresolved.
+    // PORT: the log's state set from outside (the oracle hands it the console's).
+    void seed_dormant_units(const QuestDefinition& quest,
+                            std::vector<std::pair<std::string, std::string>> units);
     /// The level an offered quest is worth (`Offered::level`), or `fallback`
     /// for one no NPC has initialised.
     int offer_level(const QuestDefinition& quest, int fallback) const;
@@ -868,14 +881,16 @@ public:
     /// `COMPLETE_ON_QUEST_*` lists, and report the reward to pay out.
     ///
     /// `CQuestManager::completeQuest`.
-    /// Returns false for a quest the player has not got.
-    bool complete(const std::string& name, QuestReward* paid = nullptr);
+    /// Returns false for a quest the player has not got. Without `player` (the manager's
+    /// `+0x8` unset, as while `loadLevel` makes a floor) `giveRewardForQuest` is not run: no
+    /// payout, no gives, no `cleanUp`.
+    bool complete(const std::string& name, QuestReward* paid = nullptr, bool player = true);
 
     /// `CQuestManager::completeQuest` on any
     /// quest, held or not: a held one through `complete`, one the player never
     /// took marked complete with the same `[COMPLETE_ON_QUEST_COMPLETE]` and
     /// `[GIVE_QUESTS_ON_COMPLETE]` consequences. False when already complete.
-    bool complete_quest(const QuestDefinition& quest);
+    bool complete_quest(const QuestDefinition& quest, bool player = true);
 
     /// `CQuestManager::completeQuest` as
     /// `CQuestDialogMenu::onClick` calls it for `OK` on a
@@ -893,6 +908,8 @@ public:
         unhold(quest.name);
         queue_completion(quest, held ? entry : nullptr);
         queue_item_removals(quest, entry);
+        pay_queued();
+        reinitialize_released(quest, false);  // `cleanUp`'s last call,
         completion_consequences(quest);
     }
 
@@ -1023,7 +1040,7 @@ private:
     bool quest_complete(const std::string& name) const;
     std::vector<const QuestDefinition*> finished_;
     /// What completing `quest` sets off in other quests.
-    void completion_consequences(const QuestDefinition& quest);
+    void completion_consequences(const QuestDefinition& quest, bool player = true);
     /// `CQuest::cleanUp(true)`, the inventory
     /// half, queued.
     void queue_item_removals(const QuestDefinition& quest, const QuestEntry* entry,
@@ -1036,6 +1053,9 @@ private:
     /// `completeQuest` for `quest`: queued for `take_completions`.
     void queue_completion(const QuestDefinition& quest, const QuestEntry* entry);
     std::vector<QuestCompletion> completions_;
+    std::function<void(const QuestCompletion&)> payout_;
+    /// The queued completions not yet paid, through `payout_`.
+    void pay_queued();
     /// `CQuest +0x26`, the quest accepted.
     bool accepted(const QuestDefinition& quest) const;
     /// `CQuestDialog::dialogIsForNPC`: the line's `UNITNAME`, or
@@ -1052,6 +1072,12 @@ private:
     /// `CQuest::reinitializeQuest(.., false)`, what an offer
     /// keeps of it: the floor, the exhausted flag and the `[DEFEAT]` groups.
     void reinitialize_offer(const QuestDefinition& quest, Offered& rolled);
+    /// `initializeQuestWithNPC`'s level (X360 `+0x1ec`): the `CLEAR_DUNGEON_HISTORY` call,
+    /// then the monsters' rank on the deepest floor of the quest's last roll.
+    void rank_offer(const QuestDefinition& quest, Offered& rolled);
+    /// `CQuest::reinitializeQuest(quest, units, false)` on a quest let go:
+    /// the giver cleared, the offer rolled again; with `units` each unit resolved and counted.
+    void reinitialize_released(const QuestDefinition& quest, bool units);
 
     /// Quest name (upper-cased) to giver (upper-cased).
     std::map<std::string, std::string> givers_;
@@ -1090,6 +1116,8 @@ private:
     };
     /// Seeds handed in for dormant quests (`seed_dormant`), by upper-cased name.
     std::map<std::string, DormantSeed> dormant_seeds_;
+    /// Resolved units handed in for dormant quests (`seed_dormant_units`), by upper-cased name.
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> dormant_units_;
     QuestState state_;
     std::vector<QuestEntry> entries_;
     QuestPlayerSource player_source_;

@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitterFactory.h
+index 68b4771..66a8909 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseLineEmitterFactory.h
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			LineEmitterFactory(void) {};
++	        // Torchlight: `LineEmitterFactory::~LineEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~LineEmitterFactory(void) {};
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `LineEmitterFactory::getEmitterType` is the library's (the same name).
+ 			String getEmitterType(void) const
+ 			{
+ 				return "Line";
+ 			}
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `LineEmitterFactory::createEmitter` is the library's: made, then given its type.
+ 			ParticleEmitter* createEmitter(void)
+ 			{
+ 				return _createEmitter<LineEmitter>();

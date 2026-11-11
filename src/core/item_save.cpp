@@ -4,6 +4,7 @@
 #include "core/item_effects.h"
 #include "core/item_name.h"
 #include "core/item_roll.h"
+#include "core/random.h"
 
 #include <cstring>
 
@@ -172,6 +173,15 @@ tl::formats::ItemSaveState fill_item_save_state(const ItemStats& item, int32_t c
     for (int list = 0; list < 3; ++list) {
         for (const LiveEffect& live : manager.effects(static_cast<EffectActivation>(list))) {
             if (gem && !live.affix.empty()) continue;
+            // The copy (`CEffect(const CEffect*)`: `clone`'s `setOwner(owner, true)`, then its own
+            // `calculateBaseValue(0)`) and `setOwner(null, true)`: three rolls, after which the copy
+            // takes the source's value back, so the record is the source's.
+            if (effects.graphs != nullptr) {
+                Effect copied = live.effect;
+                roll_effect_value(copied, *effects.graphs, effects.owner, volatile_random());
+                roll_effect_value(copied, *effects.graphs, effects.owner, volatile_random());
+                roll_effect_value(copied, *effects.graphs, EffectOwner{}, volatile_random());
+            }
             state.effects[static_cast<size_t>(list)].push_back(effect_save_record(live));
         }
     }
@@ -238,10 +248,16 @@ void apply_item_save_state(ItemStats& copy, const tl::formats::ItemSaveState& st
         set_item_requirements(copy, *effects.graphs, unit_types);
     }
     // A record of version 0x19 or later ends on `calculateInherentDamages`,
-    // the kept damage split again; an older one rolls it anew.
-    //
-    // DIVERGENCE: the port's own saves, written at the PC's version (23), take the console's path.
-    split_weapon_damage(copy, item_isa(copy, unit_type::kWeapon, unit_types));
+    // the kept damage split again; an older one - a record kept in memory over
+    // a warp, as a rule - rolls it anew (`recalculateInherentDamages`).
+    // DIVERGENCE: the port's own saves, written at the PC's version (23), take the first path.
+    const bool weapon = item_isa(copy, unit_type::kWeapon, unit_types);
+    if (state.version >= 0x19 || state.version == tl::formats::kSaveFileVersion ||
+        rolls == nullptr || effects.graphs == nullptr) {
+        split_weapon_damage(copy, weapon);
+    } else {
+        roll_weapon_damage(copy, weapon, *effects.graphs, *rolls, copy.heirloom_level);
+    }
 }
 
 }  // namespace tl::core

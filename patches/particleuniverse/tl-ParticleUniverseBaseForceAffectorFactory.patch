@@ -1,8 +1,19 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
-index f652b45..4b284ab 100644
+index f652b45..db106c1 100644
 --- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
 +++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseForceAffectorFactory.h
-@@ -50,6 +50,7 @@ namespace ParticleUniverse
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			BaseForceAffectorFactory(void) {};
++	        // Torchlight: `ForceAffectorFactory::~ForceAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~BaseForceAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `ForceAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Dummy01"; // Dummy Factory, only for setting up token definitions.
  			}
  
  			/** See ParticleAffectorFactory  */

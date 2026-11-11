@@ -84,6 +84,15 @@ EffectManager item_effect_manager(const ItemStats& item, const EffectManager::Co
     return build_item_manager(item, context, skill_blocks, /*ordered=*/true);
 }
 
+void destroy_item_effects(const ItemStats& item, const EffectManager::Context& context,
+                          const EffectRolls& rolls) {
+    // `CAffix::clearEffectsFromOwner` rolls every effect of the affix's own list
+    // (+0xb0), the dead elemental ones too, which are no longer on the manager. Only the number of
+    // draws is kept: the values die with the item.
+    item_effect_manager(item, context).destroy(rolls);
+    for (Effect effect : item.dead_affix_effects) rolls.roll(effect);
+}
+
 float item_effect_value(const ItemStats& item, const EffectManager::Context& context,
                         EffectActivation activation, int type, int damage_type) {
     // `CBaseUnit::getEffectValue(EEFFECT_ACTIVATION, EEFFECT_TYPE, float,

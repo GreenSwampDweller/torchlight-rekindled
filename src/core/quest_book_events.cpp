@@ -30,6 +30,7 @@ struct QuestEvent {
     QuestEntry& entry;
     QuestEventUnit& unit;
     const QuestUnitWorld& world;
+    // cppcheck-suppress uninitMemberVarNoCtor
     std::vector<QuestProgressText>& texts;
 };
 

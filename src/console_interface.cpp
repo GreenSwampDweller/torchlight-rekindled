@@ -1,24 +1,9 @@
 // Which console interface a PC pak is drawn with. Split from main.cpp.
 #include "console_interface.h"
 
+#include "app_folders.h"
+
 #include "core/platform.h"
-
-#include <sys/stat.h>
-
-namespace {
-
-// Not every target's branch below uses both.
-[[maybe_unused]] bool is_directory(const std::string& path) {
-    struct stat info {};
-    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
-}
-
-[[maybe_unused]] bool is_regular_file(const std::string& path) {
-    struct stat info {};
-    return stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
-}
-
-}  // namespace
 
 std::string console_interface(const std::string& asked,
                               const std::vector<std::string>& extra_data) {

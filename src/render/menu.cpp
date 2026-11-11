@@ -1387,15 +1387,7 @@ void MainMenu::apply_button_look() {
     }
 }
 
-int MainMenu::button_under(const tl::core::InputState& input) const {
-    for (size_t i = 0; i < buttons_.size(); ++i) {
-        if (pointer_over(input, buttons_[i].piece.panel)) return static_cast<int>(i);
-    }
-    return -1;
-}
-
 void MainMenu::hold(const tl::core::InputState& input) {
-    pointer_.step(input);
     const bool column = console_mode_ || editor_mode_;
     nav_held_ = column ? std::abs(input.move_y) > 0.5f : std::abs(input.move_x) > 0.5f;
     quit_held_ = input.quit;
@@ -1426,12 +1418,6 @@ MenuAction MainMenu::update(const tl::core::InputState& input) {
         nav_held_ = false;
     }
 
-    // The pointer: over a button, the focus; a click, A on it; the right button, B.
-    pointer_.step(input);
-    const int under = pointer_.acting() ? button_under(input) : -1;
-    if (under >= 0) selected_ = under;
-    const bool clicked = pointer_.pressed && under >= 0;
-
     if (selected_ != previous) apply_button_look();
 
     // START (Escape on a keyboard) leaves; the same thing the Quit button does.
@@ -1440,13 +1426,13 @@ MenuAction MainMenu::update(const tl::core::InputState& input) {
     MenuAction action = MenuAction::None;
     if (input.quit && !quit_held_) action = list_mode_ ? MenuAction::Back : MenuAction::Quit;
     quit_held_ = input.quit;
-    if (((input.skip && !skip_held_) || pointer_.alt_pressed) && list_mode_) action = MenuAction::Back;
+    if (input.skip && !skip_held_ && list_mode_) action = MenuAction::Back;
     skip_held_ = input.skip;
 
     // A acts on the focused button. A press rather than a release, and only on
     // a transition: `confirm` is held for as long as the button is down and
     // this loop runs at 60 Hz.
-    if (((input.confirm && !confirm_held_) || clicked) && selected_ >= 0 &&
+    if (input.confirm && !confirm_held_ && selected_ >= 0 &&
         selected_ < static_cast<int>(buttons_.size())) {
         const Button& button = buttons_[static_cast<size_t>(selected_)];
         action = button.action;
@@ -2001,30 +1987,16 @@ MenuAction MainMenu::update_difficulty(const tl::core::InputState& input) {
         nav_held_ = false;
     }
 
-    pointer_.step(input);
-    const int under = pointer_.acting() ? button_under(input) : -1;
-    bool clicked = false;
-    for (size_t i = 0; under >= 0 && i < count; ++i) {
-        if (difficulty_button_[i] != static_cast<size_t>(under)) continue;
-        if (state.focus != static_cast<int>(i)) {
-            state.focus = static_cast<int>(i);
-            selected_ = under;
-            apply_button_look();
-        }
-        clicked = pointer_.pressed;
-    }
-
     MenuAction action = MenuAction::None;
     // B: back to character creation.
-    if ((input.skip && !skip_held_) || pointer_.alt_pressed) {
+    if (input.skip && !skip_held_) {
         difficulty_click_ = state.back();
         action = MenuAction::Back;
     }
     skip_held_ = input.skip;
     quit_held_ = input.quit;
 
-    if (action == MenuAction::None && ((input.confirm && !confirm_held_) || clicked) &&
-        state.focus >= 0 &&
+    if (action == MenuAction::None && input.confirm && !confirm_held_ && state.focus >= 0 &&
         state.focus < static_cast<int>(count)) {
         const size_t index = difficulty_button_[static_cast<size_t>(state.focus)];
         if (buttons_[index].checkbox) {

@@ -109,6 +109,9 @@ struct CombineContext {
     int32_t player_level = 1;  ///< `CCharacter +0x100`
     const SpawnContext* spawn_context = nullptr;
     RunicRandom* game_rng = nullptr;  ///< `g_Rand`, the spawn-class roll
+    /// The deleting destructor of a used-up ingredient, as it is consumed: its effect
+    /// manager's affixes rolling their effects again (`EffectManager::destroy`).
+    std::function<void(const ItemStats& item)> destroy_item;
 };
 
 /// No sample at all: the console's transmute with nothing matched.

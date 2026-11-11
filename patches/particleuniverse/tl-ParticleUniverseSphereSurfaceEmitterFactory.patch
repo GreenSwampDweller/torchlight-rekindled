@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitterFactory.h
+index 429c3e6..30b07c1 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseSphereSurfaceEmitterFactory.h
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			SphereSurfaceEmitterFactory(void) {};
++	        // Torchlight: `SphereSurfaceEmitterFactory::~SphereSurfaceEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~SphereSurfaceEmitterFactory(void) {};
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `SphereSurfaceEmitterFactory::getEmitterType` is the library's (the same name).
+ 			String getEmitterType(void) const
+ 			{
+ 				return "SphereSurface";
+ 			}
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `SphereSurfaceEmitterFactory::createEmitter` is the library's: made, then given its type.
+ 			ParticleEmitter* createEmitter(void)
+ 			{
+ 				return _createEmitter<SphereSurfaceEmitter>();

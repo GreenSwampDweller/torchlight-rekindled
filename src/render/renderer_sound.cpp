@@ -1,6 +1,7 @@
 // The renderer's implementation: interaction, music, banners, sounds and voices, path blockers, unit index.
 // Split from renderer.cpp; the shared
 // declarations are in renderer_impl.h.
+#include "core/sound_object.h"
 #include "core/unit_stats_reader.h"
 #include "render/renderer_impl.h"
 
@@ -124,9 +125,14 @@ void Renderer::Impl::pick_up_targeted_item() {
 // keys a mod's files by their path in its folder), then the game folder's, through
 // the case-insensitive index (the data's music names are cased unlike the files).
 namespace {
-std::string music_file(const RendererConfig& config, const std::string& relative) {
+std::string music_tail(const std::string& relative) {
     std::string tail = relative;
     while (tail.compare(0, 3, "../") == 0) tail.erase(0, 3);
+    return tail;
+}
+
+std::string music_file(const RendererConfig& config, const std::string& relative) {
+    std::string tail = music_tail(relative);
     std::string from_mod = renderer_detail::mod_file_path(tail);
     if (!from_mod.empty()) return from_mod;
     if (config.assets != nullptr) {
@@ -136,6 +142,13 @@ std::string music_file(const RendererConfig& config, const std::string& relative
     std::string full = config.game_data;
     if (!full.empty() && full.back() != '/' && full.back() != '\\') full += '/';
     return full + tail;
+}
+
+// The track's bytes: a `.zip` mod's through its archive, else the file music_file() names.
+std::vector<uint8_t> music_bytes(const RendererConfig& config, const std::string& relative) {
+    std::vector<uint8_t> bytes;
+    if (renderer_detail::read_mod_resource(music_tail(relative), bytes)) return bytes;
+    return read_file(music_file(config, relative));
 }
 }  // namespace
 
@@ -164,7 +177,7 @@ tl::core::MusicHost Renderer::Impl::music_host(int64_t node) {
             return 0.0f;
         }
         if (loops) return 0.0f;
-        const std::vector<uint8_t> bytes = read_file(music_file(config, relative));
+        const std::vector<uint8_t> bytes = music_bytes(config, relative);
         return bytes.empty() ? 0.0f : tl::formats::ogg_duration(bytes.data(), bytes.size());
     };
     host.stop = [this]() { play_music(std::string(), false, ""); };
@@ -197,7 +210,7 @@ bool Renderer::Impl::play_music(const std::string& relative, bool loop, const ch
     if (silent) {
         // A track present counts as playing (getMusicFilePlaying), so a Music node runs its
         // course on a silent run too.
-        if (is_file(full)) {
+        if (is_file(full) || renderer_detail::mod_has_file(music_tail(relative))) {
             TL_LOG_INFO("music (no audio device, not played): %s", full.c_str());
             music_track = relative;
         } else {
@@ -206,7 +219,7 @@ bool Renderer::Impl::play_music(const std::string& relative, bool loop, const ch
         return false;
     }
 
-    std::vector<uint8_t> bytes = read_file(full);
+    std::vector<uint8_t> bytes = music_bytes(config, relative);
     if (bytes.empty()) {
         // Not an error worth stopping for. The music sits outside the archive,
         // and on the console it is only there if it was deployed - see
@@ -267,6 +280,17 @@ void Renderer::Impl::player_levelled_up() {
     // on the console, after the new maxima).
     player_inventory.calculate_effect_values();
     refresh_game_hud();
+}
+
+// The character's own name (`+0x4c0`) where it was given one: the layout's, else a champion's.
+std::optional<std::string> Renderer::Impl::unit_own_name(int64_t node) {
+    const auto named = unit_names.find(node);
+    if (named != unit_names.end()) return named->second;
+    if (const tl::core::LevelScript* of = script_owning(node)) {
+        std::string champion = of->unit_champion_name(node);
+        if (!champion.empty()) return champion;
+    }
+    return std::nullopt;
 }
 
 void Renderer::Impl::refresh_game_hud() {
@@ -330,9 +354,9 @@ void Renderer::Impl::refresh_game_hud() {
         state.target_name = stats != nullptr && !stats->display_name.empty()
                                 ? tl::core::strip_markup(stats->display_name)
                                 : pad_selected;
-        // The character's own name (`+0x4c0`) where it was given one.
-        const auto named = unit_names.find(pad_selected_node);
-        if (named != unit_names.end()) state.target_name = tl::core::strip_markup(named->second);
+        if (const std::optional<std::string> own = unit_own_name(pad_selected_node)) {
+            state.target_name = tl::core::strip_markup(*own);
+        }
         state.target_champion =
             (stats != nullptr && stats->is_champion) || spawn_marked_champion(pad_selected_node);
         state.target_level = effective_monster_level(pad_selected_node);
@@ -479,6 +503,19 @@ bool Renderer::Impl::play_sound(const std::string& name, const Ogre::Vector3& at
     return play_sound(name, at, 1.0f, 0.0f, std::string());
 }
 
+namespace {
+
+// `CSoundManager::playSound`: the variation drawn for a play heard at the
+// listener, 0 for one that is not.
+float heard_variation(float volume, float radius, const tl::core::Vec3& listener,
+                      const Ogre::Vector3& at, float variation, tl::core::RunicRandom& rolls) {
+    const float heard =
+        volume * tl::core::configure_volume_scale(radius, listener, {at.x, at.y, at.z});
+    return 0.0f < heard ? rolls.between(0.0f, variation) : 0.0f;
+}
+
+}  // namespace
+
 bool Renderer::Impl::play_sound_drawn(const std::string& name, const std::string& recording,
                                       float variation, const Ogre::Vector3& at) {
     // PORT: the mix of a sample the machine drew (`play_unit_sample`).
@@ -529,6 +566,14 @@ bool Renderer::Impl::play_sound(const std::string& name, const Ogre::Vector3& at
     // nothing at no volume.
     const float volume = volume_given ? volume_scale : definition->volume * volume_scale;
     if (!(volume > 0.0f)) return false;
+    // `CSoundBank::addSample`: the
+    // definition's radius, or the bank's when it authors none.
+    const float radius = definition->radius != 0.0f ? definition->radius : radius_if_none;
+    // Started and heard at the listener: `randomBetweenVolatile(0, VOLUMEVARIATION)` added
+    // (once FMOD's `playSound` has succeeded), the sum held to 1 - drawn whether or
+    // not a device mixes it, so a silent run draws as an audible one.
+    const float variation =
+        heard_variation(volume, radius, sound_listener, at, definition->volume_variation, rolls);
 
     // A run with no audio device still resolves the file, once, as play_music() does.
     if (!audio_enabled || !tl::core::audio_available()) {
@@ -548,15 +593,8 @@ bool Renderer::Impl::play_sound(const std::string& name, const Ogre::Vector3& at
         }
         return false;
     }
-    // Started: `randomBetweenVolatile(0, VOLUMEVARIATION)` added
-    // (once FMOD's `playSound` has succeeded), the sum held to 1.
-    const float variation = rolls.between(0.0f, definition->volume_variation);
-
     float gain = 0.0f;
     float pan = 0.0f;
-    // `CSoundBank::addSample`: the
-    // definition's radius, or the bank's when it authors none.
-    const float radius = definition->radius != 0.0f ? definition->radius : radius_if_none;
     // PORT: the falling off with distance, which the console's emitter does.
     const bool audible = positional_mix(volume, radius, at, gain, pan);
     if (!audible || !(gain > 0.0f)) return false;

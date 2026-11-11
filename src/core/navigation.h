@@ -6,10 +6,6 @@
 // every step costs 1.0, the heuristic is the
 // squared distance (so a closed node can be reopened), routes are cell-centre staircases.
 //
-// DIVERGENCE (`find_path` only - the pet and the player's walks): `findNearestOpen`/
-// `findNearestWideOpen` scan a 33x33 box; `find_path` keeps
-// `kNavSnapRings`, which `snap_distance()`'s callers rely on. `find_nodes` is the original's.
-//
 // No OGRE and no file I/O.
 #pragma once
 
@@ -24,10 +20,6 @@ namespace tl::core {
 
 /// How far apart the cells are, in level units: the passability grid's 0.4.
 inline constexpr float kNavCell = PassabilityMap::kCell;
-
-/// How many cells either end of a `find_path` route may be snapped by (two units). Part of the
-/// contract: how far a completed route may end from the point asked for.
-inline constexpr int kNavSnapRings = 4;
 
 /// `CAstarPathfinder::findNearestOpen`/`findNearestWideOpen`'s own box: 16 cells
 /// either way. What a
@@ -64,10 +56,6 @@ public:
     size_t blocked_count() const;
     float cell_size() const { return cell_; }
 
-    /// How far a completed route may end from the point it was given, in world
-    /// units: `kNavSnapRings` cells. See the constant.
-    float snap_distance() const { return cell_ * static_cast<float>(kNavSnapRings); }
-
     /// Whether a character can stand at (x, z).
     bool walkable(float x, float z) const;
 
@@ -86,10 +74,12 @@ public:
     /// is outside the grid or has no ground.
     float height_at(float x, float z, float fallback) const;
 
-    /// A route from `from` to `to`, cell centres, `from` excluded and the destination last;
-    /// empty when there is none. `CAstarPathfinder::findPath` over the snapshot, with
-    /// `kNavSnapRings`.
-    std::vector<Vec3> find_path(const Vec3& from, const Vec3& to) const;
+    /// A route from `from` to `to` for the held player's walk: `find_nodes` with `+0x69` clear
+    /// (the constructor's), the start's cell left off; empty when there is none.
+    /// INVENTED: the walk follows the cells, where `CCharacter::setDestination`
+    /// pulls the string with `passableBetween` (`LevelScript::set_destination`).
+    std::vector<Vec3> find_path(const Vec3& from, const Vec3& to,
+                                const PassabilityMap& level) const;
 
     /// `CAstarPathfinder::findPath` on the level's live map
     /// and object grids (`tileFree`); `ignore_objects` is the pathfinder's +0x69. `nodes` runs
@@ -99,13 +89,6 @@ public:
                     bool ignore_objects, std::vector<Vec3>& nodes,
                     int expansion_cap = kAstarExpansionCap) const;
 
-    /// `CLevel::positionPassable(Vector3)`.
-    bool position_passable(const PassabilityMap& level, const Vec3& at) const;
-
-    /// `CLevel::passableBetween`.
-    bool passable_between(const PassabilityMap& level, const Vec3& from, const Vec3& to,
-                          bool map_only) const;
-
     /// Record, for `blocked()`, that a blocker covers the box `low`..`high`, or no longer does;
     /// returns how many cells changed. Counted, so two that overlap do not lift each other.
     /// The map grid is written apart (`PassabilityMap::increment_map_passability`).
@@ -113,10 +96,6 @@ public:
 
     /// Forget the stick's blocker record.
     void clear_blockers();
-
-    /// Whether the straight line between two points stays on walkable ground.
-    /// Exposed because it is what a follower uses to decide it can skip ahead.
-    bool line_is_clear(float from_x, float from_z, float to_x, float to_z) const;
 
 private:
     // PORT: an accessor of the port's pathfinding grid (`CAstarPathfinder`'s view).

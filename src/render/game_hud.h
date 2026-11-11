@@ -134,10 +134,12 @@ public:
 
     void show();
     void hide();
-    /// DIVERGENCE (desktop mouse): the hotbar function slot (0..9) shown under the point
-    /// (0..1 of the screen), or -1.
-    int hotbar_slot_at(float x, float y) const;
     bool visible() const { return visible_; }
+    /// Whether the game wants a HUD up, whether or not this one could be built.
+    bool wanted() const { return wanted_; }
+    /// The layout's own windows hidden while another HUD stands in for them (the PC's,
+    /// under the mouse controls); the floor labels stay.
+    void set_layout_hidden(bool hidden);
 
     void set_state(const HudState& state);
     const HudState& state() const { return state_; }
@@ -212,6 +214,8 @@ private:
     void layout();
     void apply_state();
     void set_uv(Node& node, float u0, float v0, float u1, float v1) const;
+    /// DIVERGENCE (desktop keyboard): the pad glyphs of the slots a key fires, as that key.
+    void label_keys();
 
     /// The four `media/UI/icons2/*.imageset` files, and which texture each named rectangle is cut
     /// from. Their 282 names do not collide, so the lookup is flat.
@@ -252,6 +256,8 @@ private:
     /// the layout has no such window.
     size_t target_first_ = 0;
     size_t target_last_ = 0;
+    bool wanted_ = false;
+    bool layout_hidden_ = false;
     Ogre::Overlay* overlay_ = nullptr;       ///< the pictures
     Ogre::Overlay* text_overlay_ = nullptr;  ///< the words, above them
     /// Every panel is an absolutely placed child of one full-screen container. Children are named

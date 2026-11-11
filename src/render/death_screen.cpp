@@ -102,6 +102,7 @@ bool DeathScreen::load_art(const std::string& group) {
         if (!texture) continue;
         textures_.push_back(texture);
         materials_.push_back(build_menu_material("tl/death/" + stored.name, texture));
+        apply_set_tint(materials_.back(), stored);
         for (const tl::formats::ImagesetImage& image : stored.images) {
             Sprite entry;
             entry.rect = &image;

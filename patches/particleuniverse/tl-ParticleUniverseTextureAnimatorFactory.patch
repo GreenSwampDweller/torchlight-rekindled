@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimatorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimatorFactory.h
+index 342ec75..b6ebade 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimatorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureAnimatorFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			TextureAnimatorFactory(void){};
++	        // Torchlight: `TextureAnimatorFactory::~TextureAnimatorFactory` is the library's (the script members apart).
+ 	        virtual ~TextureAnimatorFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `TextureAnimatorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "TextureAnimator";
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `TextureAnimatorFactory::createAffector` is the library's: made, then given its type.
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<TextureAnimator>();

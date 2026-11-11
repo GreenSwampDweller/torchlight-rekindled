@@ -159,6 +159,11 @@ public:
     friend struct PassabilityMapProbe;
     /// PORT: called after each pass of `bake`, for a check to read the grid between passes.
     std::function<void(const PassabilityMap&, const Pass&)> after_pass;
+    /// PORT: called for each cell `calculate` casts, with the pass's index, the cell's centre, the
+    /// ground ray's hit and the value it leaves before the one-cell-gap pass.
+    std::function<void(size_t pass, float x, float z, bool hit, float y, uint32_t material,
+                       int8_t value)>
+        after_cast;
 
 private:
     /// `increment`/`decrementMapPassability` and `...ObjectPassability`.
@@ -173,6 +178,8 @@ private:
                      Pass& pass);
     /// `calculate`'s cast again: every cell of the box made open first.
     void open_cells(int x0, int z0, int x1, int z1);
+    /// `after_cast` for one cell, when it is set.
+    void report_cast(float x, float z, bool hit, const CollisionHit& ground, int8_t value) const;
 
     // `CLevel +0x40`'s order, column by column (x, then z). PORT: an index.
     size_t index_of(int x, int z) const {

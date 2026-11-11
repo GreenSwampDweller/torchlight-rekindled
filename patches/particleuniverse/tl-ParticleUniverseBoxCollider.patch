@@ -1,3 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxCollider.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxCollider.h
+index fa493fe..e39b023 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxCollider.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBoxCollider.h
+@@ -40,6 +40,8 @@ namespace ParticleUniverse
+ 			static const Real DEFAULT_DEPTH;
+ 
+ 			BoxCollider(void);
++	        // Torchlight: `BoxCollider::~BoxCollider`
++	        // is the library's: the box's corners freed, then the base.
+ 	        virtual ~BoxCollider(void){};
+ 
+ 			/** Returns the width of the box
 diff --git a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBoxCollider.cpp b/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBoxCollider.cpp
 index a61cbdf..5515665 100644
 --- a/Plugins/ParticleUniverse/src/ParticleAffectors/ParticleUniverseBoxCollider.cpp

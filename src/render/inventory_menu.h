@@ -9,7 +9,6 @@
 #include "core/character.h"
 #include "core/effects.h"
 #include "core/equipment_tooltip.h"
-#include "core/input.h"
 #include "core/inventory.h"
 #include "core/item_roll.h"
 #include "core/journal.h"
@@ -210,6 +209,13 @@ public:
         spell_remove_rows_ = rows;
     }
 
+    /// What the pointer is on, under the mouse controls: nothing, a tray's row that already
+    /// has the selection, or a row the selection has just been given.
+    enum class Pointed { Nothing, Row, Selected };
+    Pointed point_row(float x, float y, bool take);
+    int tray_row_at(const std::string& prefix, float x, float y);
+    bool click_filter(float x, float y);
+
     /// The tray X acts on. Outside a vendor's screen, the bag.
     Tray focused_tray() const { return vendor_ == VendorScreen::None ? Tray::Bag : focus_; }
     /// RB (+1) and LB (-1) on a vendor's screen: codes 10 and
@@ -253,31 +259,9 @@ public:
     /// The stick's left and right on that screen (handler codes
     /// 0x13, 0x14): the focused tray's tab, and past either end the swap.
     void step_bag_tab(int direction);
-    /// Whether the pet's tray is drawn beside the bag.
-    bool pet_tray_available() const { return pet_tray_available_; }
     bool pet_tray_focused() const { return vendor_ == VendorScreen::None && focus_ == Tray::Pet; }
     /// The pet's tray's selected slot in the pet's bag, -1 for none.
     int selected_pet_slot() const;
-
-    /// DIVERGENCE (desktop mouse): what lies under the pointer - a tray's row (`row`, counted
-    /// from the top of its list, the scroll applied), a tray's tab, one of the ring's
-    /// trigger arrows (`tab` -1 or +1), or a row of the quest page.
-    struct PointerHit {
-        enum class Kind { None, Row, Tab, Ring, Quest } kind = Kind::None;
-        Tray tray = Tray::Bag;
-        int tab = 0;
-        int row = 0;
-    };
-    PointerHit pointer_hit(const tl::core::InputState& in);
-    /// The skills tab's cursor onto the skill or spell cell under the pointer, as the stick would
-    /// have walked it; false off every shown cell, or under the map sheet.
-    bool point_skill(const tl::core::InputState& in);
-    /// The function slot (2..9) of the skill-set row's cell under the pointer, or -1.
-    int skill_slot_at(const tl::core::InputState& in) const;
-    /// Whether the pointer lies on any of the menu's windows, a full-screen one aside.
-    bool pointer_on_menu(const tl::core::InputState& in) const;
-    /// The focus onto `tray`, its tab `tab` and its row `row`, as the pad would have walked it.
-    void point_at(Tray tray, int tab, int row);
 
     /// The Stats column's refresh (`CStatsXenon`) and its selection (`+0xa4`),
     /// written into the page's windows by `update`. The page itself is `tl::core::StatsPage`.
@@ -512,8 +496,7 @@ private:
                           bool shown);
     /// A tray's legend on a vendor's screen (`(tray, A, X,
     /// Y)`): each button shown only with a caption, `buttonB`
-    /// ("Info") hidden. INVENTED: the buttons stay where the layout puts them;
-    /// centres the row by the captions' widths.
+    /// ("Info") hidden, and the row centred by the captions' widths.
     void set_tray_legend(const std::string& prefix, const std::string& a, const std::string& x,
                          const std::string& y);
     /// `text` broken into lines at the widget's own measured width, for a

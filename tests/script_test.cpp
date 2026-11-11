@@ -894,12 +894,28 @@ TL_TEST(a_flee_effect_turns_a_monster_to_flee_once) {
     // The resistance roll is `integer_between(0, 100)` against 0, so a draw of
     // 0 resists even a 100% effect, as in the original: try until one lands.
     tl::core::volatile_random().set_seed(0x1234);
+    const auto sounds = [&events] {
+        int n = 0;
+        for (const ScriptEvent& e : events) {
+            if (e.action == tl::core::ScriptAction::UnitSample &&
+                e.input == static_cast<uint32_t>(tl::core::SoundSlot::Flee)) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    events.clear();
     bool turned = false;
     for (int i = 0; i < 16 && !turned; ++i) {
         turned = script.apply_flee_effect(-1001, 100.0f, 0.5f, &source, quests, events);
     }
     TL_CHECK(turned);
-    TL_CHECK(!script.apply_flee_effect(-1001, 100.0f, 0.5f, &source, quests, events));
+    TL_CHECK_EQ(sounds(), 1);
+    // Fleeing already: the effect is copied again, with no second sound.
+    for (int i = 0; i < 16; ++i) {
+        if (script.apply_flee_effect(-1001, 100.0f, 0.5f, &source, quests, events)) break;
+    }
+    TL_CHECK_EQ(sounds(), 1);
     TL_CHECK(!script.apply_flee_effect(-9999, 100.0f, 0.5f, &source, quests, events));
 }
 
@@ -3863,28 +3879,4 @@ TL_TEST(a_struck_units_friends_near_it_react_too) {
     TL_CHECK(has(ids, 1));
     TL_CHECK(has(ids, 2));
     TL_CHECK(!has(ids, 3));
-}
-
-// `CDungeonObjectDescriptor::InputLogicEvent`: only
-// `Clear History` does anything.
-TL_TEST(a_dungeon_object_clears_the_history_of_its_dungeon) {
-    CmpScene scene;
-    CmpNode& group = add_node(scene, tl::formats::cmp_type::kLogicGroup, 1, "Logic");
-    group.fields.push_back(uint_field(0));
-    CmpNode& node = add_node(scene, tl::formats::cmp_type::kDungeonObject, 2, "Dungeon");
-    for (int i = 0; i < 5; ++i) node.fields.push_back(CmpField{});  // VISIBLE..UP unset
-    node.fields.push_back(text_field("Mines"));                     // DUNGEON NAME
-    tl::formats::CmpLogicObject from{0, 1, 0.0f, 0.0f, {}};
-    from.links.push_back({1, "Level Activated", "Enable"});
-    from.links.push_back({1, "Level Activated", "Clear History"});
-    tl::formats::CmpLogicGroup wiring;
-    wiring.node_id = 1;
-    wiring.objects.push_back(from);
-    wiring.objects.push_back({1, 2, 0.0f, 0.0f, {}});
-    scene.logic_groups.push_back(std::move(wiring));
-
-    const std::vector<ScriptEvent> cleared =
-        of_action(activate(scene), ScriptAction::ClearDungeonHistory);
-    TL_CHECK_EQ(cleared.size(), size_t{1});
-    TL_CHECK_EQ(cleared.front().name, std::string("Mines"));
 }

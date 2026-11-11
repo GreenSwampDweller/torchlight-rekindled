@@ -275,6 +275,8 @@ void write_item_state(ByteWriter& out, const ItemSaveState& item) {
 }
 
 bool read_item_state(ByteReader& in, ItemSaveState& item) {
+    // `CItemSaveState::load` first keeps the file's version (+0x17c).
+    item.version = static_cast<uint8_t>(kSaveFileVersion);
     item.unit_guid = in.i64();
     item.name = read_string16(in);
     item.s18 = read_string16(in);

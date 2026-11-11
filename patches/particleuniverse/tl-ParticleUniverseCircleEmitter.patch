@@ -1,5 +1,5 @@
 diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
-index b7466a2..ed6c3ca 100644
+index b7466a2..4cee951 100644
 --- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
 +++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitter.h
 @@ -30,24 +30,29 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -55,10 +55,10 @@ index b7466a2..ed6c3ca 100644
 -	        */
 +			virtual ~CircleEmitter(void);
 +
-+			/** Torchlight's attributes (`setMinRadius`, `setMaxRadius`,
-+				`setCircleAngle`, `setStep`). Each takes ownership. The getters
-+				are plain (`getMinRadius`, `getMaxRadius`, and Torchlight's
-+				`getCircleAngle` and `getStep`, named ...Attribute here because
++			/** Torchlight's attributes (`CircleEmitter::setMinRadius`, `CircleEmitter::setMaxRadius`,
++				`CircleEmitter::setCircleAngle`, `CircleEmitter::setStep`). Each takes ownership. The getters
++				are plain (`CircleEmitter::getMinRadius`, `CircleEmitter::getMaxRadius`, and Torchlight's
++				`CircleEmitter::getCircleAngle` and `CircleEmitter::getStep`, named ...Attribute here because
 +				the library's scalar getters keep those names).
 +			*/
 +			DynamicAttribute* getMinRadius(void) const {return mMinRadius;}
@@ -70,17 +70,17 @@ index b7466a2..ed6c3ca 100644
 +			DynamicAttribute* getStepAttribute(void) const {return mStep;}
 +			void setStep(DynamicAttribute* step);
 +
-+			/** Only the maximum radius counts (`getFixedRadius`,
-+				`setFixedRadius`).
++			/** Only the maximum radius counts (`CircleEmitter::getFixedRadius`,
++				`CircleEmitter::setFixedRadius`).
 +			*/
 +			bool getFixedRadius(void) const {return mFixedRadius;}
 +			void setFixedRadius(bool fixedRadius) {mFixedRadius = fixedRadius;}
 +
-+			/** `isRandom`, `setRandom`. */
++			/** `CircleEmitter::isRandom`, `CircleEmitter::setRandom`. */
 +			const bool isRandom(void) const {return mRandom;}
 +			void setRandom(const bool random) {mRandom = random;}
 +
-+			/** `getOrientation`. */
++			/** `CircleEmitter::getOrientation`. */
 +			const Quaternion& getOrientation(void) const {return mOrientation;}
 +			const Vector3& getNormal(void) const {return mNormal;}
 +			void setNormal(const Vector3 &normal);
@@ -128,7 +128,7 @@ index b7466a2..ed6c3ca 100644
  	};
  
 diff --git a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
-index 1cc4382..1dbd760 100644
+index 1cc4382..e6d4e87 100644
 --- a/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
 +++ b/Plugins/ParticleUniverse/src/ParticleEmitters/ParticleUniverseCircleEmitter.cpp
 @@ -31,161 +31,202 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -195,7 +195,7 @@ index 1cc4382..1dbd760 100644
  	}
  	//-----------------------------------------------------------------------
 -	const Real CircleEmitter::getRadius(void) const
-+	// Torchlight: `~CircleEmitter`.
++	// Torchlight: `CircleEmitter::~CircleEmitter`.
 +	CircleEmitter::~CircleEmitter(void)
  	{
 -		return mRadius;

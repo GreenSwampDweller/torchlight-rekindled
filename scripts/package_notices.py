@@ -215,9 +215,10 @@ def write_notices(out: pathlib.Path, platform: str, dlls: list[pathlib.Path] | N
         lgpl = [package.short for package in packages if "LGPL" in package.licence]
         if lgpl:
             lines[-2:-2] = ["Under the GNU Lesser General Public License: " + ", ".join(lgpl) + "."]
-    (out / "README.txt").write_text(
-        "\n".join(lines).replace("\n\n\n", "\n\n") + "\n", encoding="utf-8",
-        newline="\r\n" if platform == "Windows" else "\n")
+    # open(), not write_text(newline=), which is Python 3.10: the Linux release image has 3.9.
+    with open(out / "README.txt", "w", encoding="utf-8",
+              newline="\r\n" if platform == "Windows" else "\n") as fh:
+        fh.write("\n".join(lines).replace("\n\n\n", "\n\n") + "\n")
     return problems
 
 

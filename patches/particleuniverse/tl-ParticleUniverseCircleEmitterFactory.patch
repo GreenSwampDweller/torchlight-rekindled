@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitterFactory.h b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitterFactory.h
+index 94b16e5..81a3a10 100644
+--- a/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitterFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleEmitters/ParticleUniverseCircleEmitterFactory.h
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			CircleEmitterFactory(void) {};
++	        // Torchlight: `CircleEmitterFactory::~CircleEmitterFactory` is the library's (the script members apart).
+ 	        virtual ~CircleEmitterFactory(void) {};
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `CircleEmitterFactory::getEmitterType` is the library's (the same name).
+ 			String getEmitterType(void) const
+ 			{
+ 				return "Circle";
+ 			}
+ 
+ 			/** See ParticleEmitterFactory */
++			// Torchlight: `CircleEmitterFactory::createEmitter` is the library's: made, then given its type.
+ 			ParticleEmitter* createEmitter(void)
+ 			{
+ 				return _createEmitter<CircleEmitter>();

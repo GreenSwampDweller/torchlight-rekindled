@@ -150,14 +150,17 @@ class Quaternion;
 struct Vector3 {
     Real x, y, z;
 
+    // Left unset, as OGRE's.
+    // cppcheck-suppress uninitMemberVar
     Vector3() = default;
     constexpr Vector3(Real _x, Real _y, Real _z) : x(_x), y(_y), z(_z) {}
     explicit Vector3(Real s) : x(s), y(s), z(s) {}
 
-    Real operator[](size_t i) const { return (&x)[i]; }
     // OGRE's own indexing over x, y, z, which lie together.
+    // cppcheck-suppress objectIndex
+    Real operator[](size_t i) const { return (&x)[i]; }
     // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
-    Real& operator[](size_t i) { return (&x)[i]; }
+    Real& operator[](size_t i) { return (&x)[i]; }  // cppcheck-suppress objectIndex
     Real* ptr() { return &x; }
     const Real* ptr() const { return &x; }
 
@@ -343,6 +346,8 @@ inline const Vector3 Vector3::UNIT_SCALE(1, 1, 1);
 // PORT: OGRE's `Matrix3`, as far as a quaternion goes through it.
 class Matrix3 {
 public:
+    // Left unset, as OGRE's.
+    // cppcheck-suppress uninitMemberVar
     Matrix3() = default;
     const Real* operator[](size_t iRow) const { return m[iRow]; }
     Real* operator[](size_t iRow) { return m[iRow]; }

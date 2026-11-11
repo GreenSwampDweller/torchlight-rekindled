@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureRotatorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureRotatorFactory.h
+index bda1891..dd0975a 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureRotatorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseTextureRotatorFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			TextureRotatorFactory(void){};
++	        // Torchlight: `TextureRotatorFactory::~TextureRotatorFactory` is the library's (the script members apart).
+ 	        virtual ~TextureRotatorFactory(void){};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `TextureRotatorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "TextureRotator";
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `TextureRotatorFactory::createAffector` is the library's: made, then given its type.
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				return _createAffector<TextureRotator>();

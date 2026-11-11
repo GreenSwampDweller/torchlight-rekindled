@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseColliderFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseColliderFactory.h
+index e78b1d1..76c3165 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseColliderFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseBaseColliderFactory.h
+@@ -41,15 +41,18 @@ namespace ParticleUniverse
+ 
+ 		public:
+ 			BaseColliderFactory(void) {};
++	        // Torchlight: `ColliderFactory::~ColliderFactory` is the library's (the script members apart).
+ 	        virtual ~BaseColliderFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `ColliderFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Dummy02"; // Dummy Factory, only for setting up token definitions.
+ 			}
+ 
+ 			/** See ParticleAffectorFactory  */
++			// Torchlight: `ColliderFactory::createAffector` is the library's dummy (it throws).
+ 			ParticleAffector* createAffector(void)
+ 			{
+ 				EXCEPT(Exception::ERR_NOT_IMPLEMENTED, "PU: BaseColliderFactory is a dummy factory.", 

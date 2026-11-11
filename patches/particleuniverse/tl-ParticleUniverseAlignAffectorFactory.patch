@@ -1,0 +1,16 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffectorFactory.h b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffectorFactory.h
+index c0af524..118b5a9 100644
+--- a/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffectorFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleAffectors/ParticleUniverseAlignAffectorFactory.h
+@@ -37,9 +37,11 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			AlignAffectorFactory(void) {};
++	        // Torchlight: `AlignAffectorFactory::~AlignAffectorFactory` is the library's (the script members apart).
+ 	        virtual ~AlignAffectorFactory(void) {};
+ 
+ 			/** See ParticleAffectorFactory */
++			// Torchlight: `AlignAffectorFactory::getAffectorType` is the library's (the same name).
+ 			String getAffectorType(void) const
+ 			{
+ 				return "Align";

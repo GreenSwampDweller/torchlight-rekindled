@@ -49,8 +49,11 @@ size_t pack_two_column_skill_grid(std::vector<ClassSkill>& skills, bool* repacke
             const size_t room = kSkillColumns - placed.size();
             const auto first_kept = std::next(
                 own.begin(), static_cast<std::ptrdiff_t>(own.size() - std::min(room, own.size())));
+            // `waiting` holds copies, no iterator of `placed`.
+            // cppcheck-suppress invalidContainer
             waiting.insert(waiting.end(), own.begin(), first_kept);
             placed.insert(placed.end(), first_kept, own.end());
+            // cppcheck-suppress invalidContainer
             carried = std::move(waiting);
             for (size_t c = 0; c < placed.size(); ++c) {
                 ClassSkill& s = skills[placed[c]];

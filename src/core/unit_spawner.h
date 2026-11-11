@@ -156,6 +156,12 @@ public:
     /// The spawn listeners (`+0x218`), told last about each unit released. Only a skill event
     /// registers one (`CSkillEvent::addListeners`).
     virtual void unit_spawned(const SpawnedUnitRef& unit) { (void)unit; }
+    /// The resource's data names a `SPAWNER` (`setResourceSpawn`: its data group's
+    /// `SPAWNER` value is not empty); false when the resource has no data.
+    virtual bool resource_names_spawner(const std::string& resource) {
+        (void)resource;
+        return false;
+    }
 };
 
 /// One `CUnitSpawner`.
@@ -170,10 +176,6 @@ public:
     // PORT: an accessor of the port's own bookkeeping.
     const ShapeFrame& frame() const { return frame_; }
     void set_frame(const ShapeFrame& frame) { frame_ = frame; }
-
-    /// `+0x1c3`, set by `setResourceSpawn`: the resource
-    /// names a `SPAWNER`, so what comes out stands on the spawner's own point.
-    void set_resource_names_spawner(bool names) { resource_names_spawner_ = names; }
 
     /// `CUnitSpawnerDescriptor::InputLogicEvent`.
     ///
@@ -210,6 +212,9 @@ public:
     int32_t level_delta() const { return spec_.level_delta; }
     const std::vector<SpawnedUnitRef>& characters() const { return characters_; }
     const std::vector<SpawnedUnitRef>& others() const { return others_; }
+    /// `CUnitSpawner::addSpawnedUnit` from a unit's `applySaveState`: a
+    /// restored unit taken back into the lists.
+    void take_back(const SpawnedUnitRef& unit) { add_spawned_unit(unit); }
     /// Whether `id` is one of the units this spawner holds.
     bool holds(int64_t id) const;
 
@@ -218,7 +223,6 @@ private:
 
     UnitSpawnerSpec spec_;
     ShapeFrame frame_;
-    bool resource_names_spawner_ = false;  ///< +0x1c3
 
     bool active_ = false;                     ///< +0x1c1, releasing
     float timer_ = 0.0f;                      ///< +0x184, to the next unit

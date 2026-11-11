@@ -31,6 +31,11 @@ Effect item_block_chance_effect(int block_chance);
 EffectManager item_effect_manager(const ItemStats& item, const EffectManager::Context& context,
                                   const std::function<void()>& skill_blocks = {});
 
+/// The draws an item's deletion makes: its manager destroyed (`~CEffectManager`),
+/// and with it each affix's dead elemental effects (`ItemStats::dead_affix_effects`).
+void destroy_item_effects(const ItemStats& item, const EffectManager::Context& context,
+                          const EffectRolls& rolls);
+
 /// `CBaseUnit::getEffectValue(EEFFECT_ACTIVATION, EEFFECT_TYPE, float,
 /// EDAMAGE_TYPES)`: the item's manager
 /// narrowed to one activation's list (`CEffectManager::getEffectValue`);

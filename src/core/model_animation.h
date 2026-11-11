@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -244,9 +245,27 @@ struct LoadedAnimation {
 /// as the mesh (`model_stem`), the one called `BIND`; a name the entity
 /// already has and an earlier block took is a duplicate and skipped; a `BIND`
 /// animation is filed but not counted. `entity_has` is the entity's
-/// `hasAnimationState` before the load.
+/// `hasAnimationState` before the load. The list starts as `loadModel`
+/// leaves the set: the entity's own animations but one named
+/// `*`, so an index counts them first.
 std::vector<LoadedAnimation> load_animation_list(const std::vector<AnimationFileEntry>& entries,
                                                  const std::string& model_stem,
                                                  const std::vector<std::string>& entity_has);
+
+/// One name of a model's animation set (`CAnimationSet +0x2c`).
+struct AnimationSetEntry {
+    std::string name;
+    std::string file;  ///< the skeleton file it came from
+    float length = 0.0f;
+};
+using AnimationSet = std::vector<AnimationSetEntry>;
+
+/// The set `loadAnimations` leaves: the mesh skeleton's own animations first,
+/// then each block's skeleton's animation under its own name (the one called `BIND` in the file
+/// named as the mesh), in block order, a name already there passed over. `block_stems` are the
+/// blocks' `FILE` stems; `read_beside` reads a file beside the mesh, empty when there is none.
+AnimationSet load_animation_set(
+    const std::string& mesh_file, const std::vector<std::string>& block_stems,
+    const std::function<std::vector<uint8_t>(const std::string&)>& read_beside);
 
 }  // namespace tl::core

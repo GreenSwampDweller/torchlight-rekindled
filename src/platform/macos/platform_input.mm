@@ -285,8 +285,8 @@ static void read_mouse(InputState& in) {
     const NSUInteger buttons = [NSEvent pressedMouseButtons];
     // A Control-click is the Mac's right click.
     const bool control = ([NSEvent modifierFlags] & NSEventModifierFlagControl) != 0;
-    in.click = (buttons & 1) != 0 && !control;
-    in.click_alt = (buttons & 2) != 0 || ((buttons & 1) != 0 && control);
+    in.pointer_left = (buttons & 1) != 0 && !control;
+    in.pointer_right = (buttons & 2) != 0 || ((buttons & 1) != 0 && control);
 }
 
 InputState poll_platform_input() {

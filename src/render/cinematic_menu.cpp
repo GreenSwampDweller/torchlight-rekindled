@@ -23,51 +23,35 @@
 #include <OgreTextureManager.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace tl::render {
 namespace {
 
 constexpr const char* kLoadingImageset = "media/UI/loading.imageset";
+constexpr const char* kWidgets1Imageset = "media/UI/icons2/widgets1.imageset";
 
-// INVENTED: the dark band behind the text. The layout's `Frameb` is a
-// `GuiLook/ItemText` window, whose frame imagery is not drawn here.
-Ogre::TexturePtr create_gradient_texture(const std::string& name) {
-    auto& textures = Ogre::TextureManager::getSingleton();
-    if (Ogre::TexturePtr existing = textures.getByName(name, Ogre::RGN_INTERNAL)) {
-        textures.remove(existing);
-    }
+struct Slice {
+    float x, y, w, h;
+};
 
-    constexpr uint32_t kW = 16;
-    constexpr uint32_t kH = 64;
-    Ogre::TexturePtr texture = textures.createManual(name, Ogre::RGN_INTERNAL, Ogre::TEX_TYPE_2D,
-                                                     kW, kH, 0, Ogre::PF_BYTE_RGBA);
-    if (!texture) return {};
-
-    std::vector<uint8_t> rgba(kW * kH * 4, 0);
-    constexpr uint32_t kFadeRows = 8;
-    constexpr float kMaxAlpha = 0.78f;
-
-    for (uint32_t y = 0; y < kH; ++y) {
-        float alpha = kMaxAlpha;
-        if (y < kFadeRows) {
-            const float u = static_cast<float>(y) / static_cast<float>(kFadeRows);
-            const float smooth_u = u * u * (3.0f - 2.0f * u);
-            alpha = smooth_u * kMaxAlpha;
-        }
-        const uint8_t a_byte = static_cast<uint8_t>(std::clamp(alpha * 255.0f, 0.0f, 255.0f));
-        for (uint32_t x = 0; x < kW; ++x) {
-            const size_t idx = (y * kW + x) * 4;
-            rgba[idx + 0] = 0;
-            rgba[idx + 1] = 0;
-            rgba[idx + 2] = 0;
-            rgba[idx + 3] = a_byte;
-        }
-    }
-
-    const Ogre::PixelBox source(kW, kH, 1, Ogre::PF_BYTE_RGBA, rgba.data());
-    texture->getBuffer()->blitFromMemory(source);
-    return texture;
+/// A `FrameComponent`'s nine pieces over `x, y, w, h`, in `FrameLook::image` order (the four
+/// corners at their own size, then the left, right, top and bottom edges, then the middle).
+std::array<Slice, 9> frame_slices(float x, float y, float w, float h, float cw, float ch) {
+    const float mw = std::max(0.0f, w - 2.0f * cw);
+    const float mh = std::max(0.0f, h - 2.0f * ch);
+    const float r = x + w - cw;
+    const float b = y + h - ch;
+    return {{{x, y, cw, ch},
+             {r, y, cw, ch},
+             {x, b, cw, ch},
+             {r, b, cw, ch},
+             {x, y + ch, cw, mh},
+             {r, y + ch, cw, mh},
+             {x + cw, y, mw, ch},
+             {x + cw, b, mw, ch},
+             {x + cw, y + ch, mw, mh}}};
 }
 
 }  // namespace
@@ -150,6 +134,7 @@ bool CinematicMenu::create(const std::string& group, unsigned width, unsigned he
     // panel below is skipped when its image is not there.
     logo_set_ = read_optional_imageset(kLogoImageset, group);
     hud_set_ = read_optional_imageset(kGuiImageset, group);
+    frame_set_ = read_optional_imageset(kWidgets1Imageset, group);
 
     if (!art_set_.ok || !loading_set_.ok) {
         destroy();
@@ -167,6 +152,7 @@ bool CinematicMenu::create(const std::string& group, unsigned width, unsigned he
         loading_texture_ = textures.load(loading_set_.image_file, group);
         logo_texture_ = load_optional_texture(logo_set_, group);
         hud_texture_ = load_optional_texture(hud_set_, group);
+        frame_texture_ = load_optional_texture(frame_set_, group);
 
         if (!art_texture_ || !loading_texture_) {
             destroy();
@@ -178,16 +164,8 @@ bool CinematicMenu::create(const std::string& group, unsigned width, unsigned he
         if (logo_texture_) logo_material_ = build_menu_material("tl/intro/logo", logo_texture_);
         if (hud_texture_) hud_material_ = build_menu_material("tl/intro/hud", hud_texture_);
 
-        text_bg_texture_ = create_gradient_texture("tl/intro/text_bg_tex");
-        if (!text_bg_texture_) {
-            destroy();
-            return false;
-        }
-        text_bg_material_ = build_menu_material("tl/intro/text_bg", text_bg_texture_);
-        if (text_bg_material_ && text_bg_material_->getTechnique(0) &&
-            text_bg_material_->getTechnique(0)->getPass(0)) {
-            text_bg_material_->getTechnique(0)->getPass(0)->setColourWriteEnabled(true, true, true,
-                                                                                  false);
+        if (frame_texture_) {
+            frame_material_ = build_menu_material("tl/intro/frame", frame_texture_);
         }
 
         auto& overlays = Ogre::OverlayManager::getSingleton();
@@ -274,21 +252,26 @@ void CinematicMenu::layout() {
     add_panel(art_overlay_, art_set_, art_material_, art_texture_, art_img, art_x, art_y, art_w,
               art_h);
 
-    // 3. Dark transparent background behind crawling dialogue text:
-    // Spans full width from slightly above the text crawl box down to the bottom
-    // of the screen, with a smooth top fade to blend seamlessly with the artwork.
-    if (text_bg_overlay_ && text_bg_material_) {
-        const float bg_top = down - (370.0f * scale);
-        const float bg_h = down - bg_top;
-        auto* bg_p = static_cast<Ogre::PanelOverlayElement*>(
-            overlays.createOverlayElement("Panel", "tl/intro/p_text_bg"));
-        bg_p->setMetricsMode(Ogre::GMM_RELATIVE);
-        bg_p->setMaterial(text_bg_material_);
-        bg_p->setPosition(0.0f, bg_top / down);
-        bg_p->setDimensions(1.0f, bg_h / down);
-        bg_p->setUV(0.0f, 0.0f, 1.0f, 1.0f);
-        text_bg_overlay_->add2D(bg_p);
-        panels_.push_back(bg_p);
+    // 3. The text window, `i_962` of `cinematic.uilayout`: a `ceguiWidget/ItemText` 900x200
+    // at {0,464}, centred across. `DialogTextFrame` and `DialogText` fill it.
+    const float box_w = 900.0f * scale;
+    const float box_h = 200.0f * scale;
+    const float box_x = across * 0.5f - box_w * 0.5f;
+    const float box_top_y = 464.0f * scale;
+    window_height_px_ = box_h;
+
+    // Its `Enabled` imagery draws `StaticShared`'s `frame` behind the text: corners at their
+    // own size, edges and middle stretched between them.
+    if (const tl::formats::ImagesetImage* corner = frame_set_.find(kPanelFrame.image[0])) {
+        const FrameLook& look = kPanelFrame;
+        const std::array<Slice, 9> slices = frame_slices(
+            box_x + look.left * scale, box_top_y + look.top * scale, box_w + look.grow_w * scale,
+            box_h + look.grow_h * scale, static_cast<float>(corner->width) * scale,
+            static_cast<float>(corner->height) * scale);
+        for (size_t i = 0; i < slices.size(); ++i) {
+            add_panel(text_bg_overlay_, frame_set_, frame_material_, frame_texture_, look.image[i],
+                      slices[i].x, slices[i].y, slices[i].w, slices[i].h);
+        }
     }
 
     // 4. Ornate framing bars: top and bottom
@@ -346,15 +329,8 @@ void CinematicMenu::layout() {
     button_label_->setPosition(btn_center_x, btn_center_y);
     btn_container->addChild(button_label_);
 
-    // 5. The crawling text. `Frameb` sits at {{.5,-440},{1,-320}};
-    // `DialogTextFrame` inside it at {0,10} is 900x200 and clips `DialogText`,
-    // a 900x200 window of its own that `updateTextDisplay` slides up into it.
-    const float box_w = 900.0f * scale;
-    const float box_top_y = down - (320.0f * scale) + (10.0f * scale);
-    const float box_h = 200.0f * scale;
-    const float box_x = across * 0.5f - (440.0f * scale);
-    window_height_px_ = box_h;
-
+    // 5. The crawling text: `DialogTextFrame` clips `DialogText`, a window of the frame's size
+    // that `updateTextDisplay` slides up into it.
     box_left_rel_ = box_x / across;
     box_top_rel_ = box_top_y / down;
     box_w_rel_ = box_w / across;
@@ -371,11 +347,12 @@ void CinematicMenu::layout() {
     const auto& fonts = Ogre::FontManager::getSingleton();
     Ogre::FontPtr font = fonts.getByName(kFontName, Ogre::RGN_INTERNAL);
 
-    // INVENTED: the size and the line spacing. The layout asks for the `Serif`
-    // font, whose own metrics are not read.
-    const float text_pts = 11.0f;
-    line_height_rel_ = text_pts * ui_points_to_pixels() / kNativeHeight;
-    line_step_rel_ = line_height_rel_ * 1.25f;
+    // `DialogText`'s `Serif` (`Size="11"`). CEGUI steps a line by the face's FreeType height:
+    // `BRLNSDB.TTF`'s hhea 1893 + 419 + 0 over its em of 2048.
+    constexpr float kTextPoints = 11.0f;
+    constexpr float kLineSpacingPerEm = 2312.0f / 2048.0f;
+    line_height_rel_ = kTextPoints * points_to_char_pixels() / kNativeHeight;
+    line_step_rel_ = kTextPoints * ui_points_to_pixels() * kLineSpacingPerEm / kNativeHeight;
 
     std::vector<std::string> wrapped_lines =
         wrap_text(font, narrative_text_, box_w_rel_, line_height_rel_, across, down);
@@ -443,7 +420,7 @@ void CinematicMenu::place_text(float offset_pixels) {
         const float y = text_top_rel + line.base_y_rel;
 
         // DIVERGENCE (drawing hookup): CEGUI clips the text to the frame's
-        // rectangle, whose lower edge is 21 pixels above the bottom bar. An
+        // rectangle, whose lower edge is above the bottom bar. An
         // OGRE overlay text area has no clip rectangle, so the text is drawn
         // whole and rises from behind the bar, which is drawn over it: the
         // same wipe, glyph row by glyph row, that much lower. A line still
@@ -583,9 +560,9 @@ void CinematicMenu::destroy() {
         materials.remove(hud_material_->getHandle());
         hud_material_.reset();
     }
-    if (text_bg_material_) {
-        materials.remove(text_bg_material_->getHandle());
-        text_bg_material_.reset();
+    if (frame_material_) {
+        materials.remove(frame_material_->getHandle());
+        frame_material_.reset();
     }
 
     auto& textures = Ogre::TextureManager::getSingleton();
@@ -605,10 +582,7 @@ void CinematicMenu::destroy() {
         textures.remove(hud_texture_->getHandle());
         hud_texture_.reset();
     }
-    if (text_bg_texture_) {
-        textures.remove(text_bg_texture_->getHandle());
-        text_bg_texture_.reset();
-    }
+    frame_texture_.reset();
 
     built_ = false;
 }

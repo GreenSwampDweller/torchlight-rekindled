@@ -69,25 +69,30 @@ python scripts/package_windows.py --pak <your pak.zip> --music <your music/>   #
 
 ## Linux
 
-Run this on Linux or in WSL. On Debian or Ubuntu the requirements are:
+The Linux build is made in Valve's Steam Runtime SDK (Debian 11, glibc 2.31),
+in a container, so it runs on any distribution with glibc 2.31 or newer:
+SteamOS, Ubuntu 20.04, Debian 11, Fedora 32 and everything after them. A build
+made on your own distribution would need that distribution's glibc, and a
+player with an older one could not start it.
+
+Requirements: Linux or WSL, with [Docker](https://docs.docker.com/engine/install/)
+and Python 3. Nothing else: the compiler and the libraries are the SDK's.
 
 ```bash
-sudo apt install build-essential cmake ninja-build python3 \
-    libx11-dev libxrandr-dev libgl-dev libegl-dev libasound2-dev \
-    libfreetype-dev zlib1g-dev
+python3 scripts/build_linux_release.py   # -> build-linux/package/Torchlight/
+python3 scripts/build_linux_release.py --zip TorchlightRekindled-linux-x64.zip
 ```
 
-```bash
-python3 scripts/build_ogre.py --platform linux
-cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DTL_OGRE_BUILD_DIR=build-ogre-linux
-cmake --build build-linux
-python3 scripts/package_linux.py        # -> build-linux/package/Torchlight/
-```
+It builds OGRE and the engine with GCC 14, the C++ runtime linked in, runs the
+unit tests, makes the player folder (`package_linux.py`), and checks that the
+program needs no glibc newer than 2.31. `--zip` also writes the folder to a zip
+that keeps the programs' run permission. The first run downloads the SDK image,
+about 5 GB unpacked.
 
-`package_linux.py` takes the same `--pak` and `--music` options as the Windows
-script. The player folder is laid out as in the README's
-[Linux](../README.md#linux) section.
+The player folder is laid out as in the README's [Linux](../README.md#linux)
+section. To put your own game files in it for a local run, run
+`python3 scripts/package_linux.py --pak <your pak.zip> --music <your music/>`
+afterwards.
 
 ## Nintendo Switch
 

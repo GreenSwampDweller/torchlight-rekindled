@@ -1,0 +1,23 @@
+diff --git a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRendererFactory.h b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRendererFactory.h
+index 3c96c17..c9df955 100644
+--- a/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRendererFactory.h
++++ b/Plugins/ParticleUniverse/include/ParticleRenderers/ParticleUniverseBillboardRendererFactory.h
+@@ -37,15 +37,18 @@ namespace ParticleUniverse
+ 	{
+ 		public:
+ 			BillboardRendererFactory(void) {};
++	        // Torchlight: `BillboardRendererFactory::~BillboardRendererFactory` is the library's (the script members apart).
+ 	        virtual ~BillboardRendererFactory(void) {};
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `BillboardRendererFactory::getRendererType` is the library's (the same name).
+ 			String getRendererType(void) const
+ 			{
+ 				return "Billboard";
+ 			}
+ 
+ 			/** See ParticleRendererFactory */
++			// Torchlight: `BillboardRendererFactory::createRenderer` is the library's: made, then given its type.
+ 			ParticleRenderer* createRenderer(void)
+ 			{
+ 				return _createRenderer<BillboardRenderer>();
