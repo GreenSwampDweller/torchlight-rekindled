@@ -117,8 +117,22 @@ void Renderer::Impl::drive_pause_menu(const tl::core::InputState& in, bool start
         pause_stick_held = false;
     }
 
-    const bool confirm_edge = in.confirm && !confirm_held;
-    const bool skip_edge = in.skip && !skip_held;
+    // The pointer: over a row, the focus; a click, A on it; the right button, B.
+    pause_pointer.step(in);
+    mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
+    bool clicked = false;
+    for (int i = 0; pause_pointer.acting() && i < tl::core::kOptionsRowCount; ++i) {
+        if (!pause_screen.pointed(in, tl::core::options_row(i).window)) continue;
+        if (pause_menu.focus != i) {
+            pause_menu.focus = i;
+            play_ui(tl::core::InterfaceSound::Navigate);
+            refresh_pause_menu();
+        }
+        clicked = pause_pointer.pressed;
+    }
+
+    const bool confirm_edge = (in.confirm && !confirm_held) || clicked;
+    const bool skip_edge = (in.skip && !skip_held) || pause_pointer.alt_pressed;
     tl::core::OptionsClick click;
     if (confirm_edge) {
         click = pause_menu.on_click(tl::core::options_row(pause_menu.focus).function);
@@ -251,6 +265,33 @@ void Renderer::Impl::drive_settings_menu(const tl::core::InputState& in) {
     // Start is not read.
     if (in.action_y && !settings_y_held) code = tl::core::kMenuPadY;
     settings_y_held = in.action_y;
+    // The pointer: over a control, the focus; a click, A on it; the right button, B.
+    settings_pointer.step(in);
+    mouse_click_held = in.pointer && in.click;  // the click is the menu's, not a walk
+    for (int i = 0; settings_pointer.acting() && i < tl::core::kSettingsControlCount; ++i) {
+        const auto control = static_cast<tl::core::SettingsControl>(i + 1);
+        if (!settings_screen.pointed(in, tl::core::settings_control_window(control))) continue;
+        if (settings_menu.focus != i) {
+            settings_menu.focus = i;
+            play_ui(tl::core::InterfaceSound::Navigate);
+            refresh_settings_menu();
+        }
+        if (!settings_pointer.pressed) continue;
+        if (tl::core::settings_slider_tab_window(control) != nullptr) {
+            settings_drag = control;  // a bar: held, the tab follows the pointer
+        } else {
+            code = tl::core::kMenuPadA;
+        }
+    }
+    if (!settings_pointer.held) settings_drag = tl::core::SettingsControl::None;
+    float along = 0.0f;
+    if (settings_drag != tl::core::SettingsControl::None &&
+        settings_screen.pointer_along(in, tl::core::settings_control_window(settings_drag),
+                                      along)) {
+        settings_menu.set_slider_along(settings_drag, along, settings);
+        refresh_settings_menu();
+    }
+    if (settings_pointer.alt_pressed) code = tl::core::kMenuPadB;
     if (code == 0) return;
 
     if (settings_menu.navigate(code)) {

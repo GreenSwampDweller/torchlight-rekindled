@@ -80,9 +80,16 @@ void World::place_merge_layouts(const std::string& path, const ogre::Vector3& or
     }
     const std::string merge_dir = path.substr(0, slash + 1) + "Merge/";
     std::vector<std::string> merge_layouts = archive_paths_under(merge_dir, ".layout.cmp");
+    // A text layout unless its compiled one is listed beside it. Not asked of
+    // resolve_archive_path(): a mod's text source answers the compiled name too, so a mod's
+    // text-only merge (Baklah's, the Merchant Pack's) would always look compiled and be skipped.
+    const std::vector<std::string> compiled_layouts = merge_layouts;
     for (const std::string& text_layout : archive_paths_under(merge_dir, ".layout")) {
-        const std::string compiled = text_layout + ".cmp";
-        if (resolve_archive_path(compiled).empty()) merge_layouts.push_back(text_layout);
+        const std::string compiled = tl::core::upper_ascii(text_layout + ".cmp");
+        const bool listed = std::any_of(
+            compiled_layouts.begin(), compiled_layouts.end(),
+            [&](const std::string& path) { return tl::core::upper_ascii(path) == compiled; });
+        if (!listed) merge_layouts.push_back(text_layout);
     }
     const auto upper_less = [](const std::string& a, const std::string& b) {
         return tl::core::upper_ascii(a) < tl::core::upper_ascii(b);

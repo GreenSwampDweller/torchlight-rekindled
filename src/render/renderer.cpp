@@ -2085,12 +2085,13 @@ bool window_fills_screen(const RendererConfig& config) {
 
 Ogre::NameValuePairList window_params(const RendererConfig& config) {
     Ogre::NameValuePairList params{{"FSAA", "0"}};
-    tl::core::platform_window_params(params);
     if (config.headless) {
         // GL still needs a context and a drawable; there is no windowless path.
         // The frame itself is rendered offscreen, so the window is never read.
+        // Set first: a platform that makes the window itself (macOS) keeps it off screen.
         params["hidden"] = "true";
     }
+    tl::core::platform_window_params(params);
 #if !defined(TL_PLATFORM_SWITCH) && !defined(TL_PLATFORM_ANDROID) && !defined(TL_PLATFORM_IOS)
     // OGRE's WGL and GLX windows swap unsynchronised unless asked; the devices keep their
     // own swap interval.

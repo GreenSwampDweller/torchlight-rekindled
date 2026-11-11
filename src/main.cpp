@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -116,6 +117,15 @@ std::string menu_backdrop(tl::render::Renderer& renderer, const std::string& fro
 
 // The playable town, the level `media/dungeons/town.dat` names as the Town dungeon.
 constexpr const char* kTownLayout = "MEDIA/LAYOUTS/TOWN/1X1SINGLE_ROOM/TOWN.LAYOUT";
+
+#if defined(TL_PLATFORM_MACOS)
+[[noreturn]] void quit_macos_app() {
+    // The game has saved on the transition back to the title. Avoid OGRE's
+    // external Cocoa window teardown, which can hang after the Quit choice.
+    tl::core::log_shutdown();
+    std::_Exit(0);
+}
+#endif
 
 struct Options {
     std::string game_data;
@@ -679,6 +689,22 @@ bool player_folder() { return is_regular_file("pak.zip") || is_regular_file("Pak
 // (scripts/package_windows.py) - the program beside its own pak.zip, music/
 // and RTShaderLib/, laid out as the devices lay theirs.
 void apply_desktop_defaults(Options& o) {
+#if defined(TL_PLATFORM_MACOS)
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0') {
+        o.game_data = std::string(home) + "/Documents/Torchlight Rekindled/";
+        const std::string console_ui = o.game_data + "console_ui";
+        if (is_directory(console_ui)) o.console_ui = console_ui;
+    }
+    const std::string resources = tl::core::platform_program_folder() + "../Resources/";
+    const std::string bundled_ogre_media = resources + "OGRE/Media/";
+    if (is_directory(bundled_ogre_media + "RTShaderLib")) o.ogre_media = bundled_ogre_media;
+    if (!o.game_data.empty()) {
+        std::error_code error;
+        std::filesystem::create_directories(o.game_data, error);
+    }
+    return;
+#endif
     o.game_data = "game_data";
     if (!player_folder()) return;
     o.game_data = "./";
@@ -1217,10 +1243,14 @@ Options with_run_config(Options o) {
 // so it does not overwrite the ordinary build's. With `debug` and `logs` both
 // off (config.txt) nothing is opened, and nothing is even formatted.
 void open_log() {
+#if !defined(TL_PLATFORM_MACOS)
+    // DIVERGENCE (platform): a Mac app has no working folder for config.txt, so it always logs,
+    // into Application Support.
     if (!tl::core::run_config().debug && !tl::core::run_config().logs) {
         tl::core::log_set_min_level(tl::core::LogLevel::Off);
         return;
     }
+#endif
 #if defined(TL_PLATFORM_SWITCH)
     tl::core::log_init(tl::core::platform_data_root() + (sizeof(TL_RUN_TAG) > 1
                                                              ? "torchlight-" TL_RUN_TAG ".log"
@@ -1297,6 +1327,8 @@ bool device_files_present(const Options& opts) {
 bool prepare_run(const Options& opts, tl::core::AssetIndex& assets) {
     apply_input_options(opts);
 #if defined(TL_DEVICE_BUILD)
+    const bool check_files = true;
+#elif defined(TL_PLATFORM_MACOS)
     const bool check_files = true;
 #else
     const bool check_files = player_folder();
@@ -1878,6 +1910,9 @@ int main(int argc, char** argv) {
                     } else if (choice == tl::render::MenuAction::NewGame && !how.skip_create) {
                         next = tl::core::kMenuNewGame;
                     } else {
+#if defined(TL_PLATFORM_MACOS)
+                        if (choice == tl::render::MenuAction::Quit) quit_macos_app();
+#endif
                         if (choice == tl::render::MenuAction::NewGame &&
                             !how.difficulty_dump.empty()) {
                             choose_difficulty(/*retirement=*/false, how.difficulty_dump);
@@ -1964,6 +1999,10 @@ int main(int argc, char** argv) {
                 dungeon.clear();
                 scene = kTownLayout;
             } else {
+#if defined(TL_PLATFORM_MACOS)
+                if (choice == tl::render::MenuAction::Quit ||
+                    !tl::core::should_keep_running()) quit_macos_app();
+#endif
                 return false;
             }
             // A new character remembers nowhere, and gets a file of its own.
@@ -2929,7 +2968,13 @@ int main(int argc, char** argv) {
                 // `CGameClient::update`:
                 // leaving the game saves it.
                 if (!save_path.empty()) renderer.save_character(save_path);
-                if (!enter_from_menu(retiring ? &heirloom : nullptr)) return;
+                if (!enter_from_menu(retiring ? &heirloom : nullptr)) {
+#if defined(TL_PLATFORM_MACOS)
+                    quit_macos_app();
+#else
+                    return;
+#endif
+                }
                 continue;
             }
 
@@ -2954,6 +2999,13 @@ int main(int argc, char** argv) {
         opts.stats_dump.empty() && opts.skills_dump.empty() && opts.quest_dump.empty() &&
         opts.quest_offers.empty() && opts.travels.empty() && opts.deaths.empty()) {
         play();
+    }
+#endif
+
+#if defined(TL_PLATFORM_MACOS)
+    if (!tl::core::should_keep_running()) {
+        if (!save_path.empty()) renderer.save_character(save_path);
+        quit_macos_app();
     }
 #endif
 

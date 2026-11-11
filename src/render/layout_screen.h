@@ -4,6 +4,7 @@
 // (`media/UI/modalmenu_xenon.layout`, `CModalMenu`), which ship in the Xbox archive only.
 #pragma once
 
+#include "core/input.h"
 #include "formats/cegui.h"
 #include "formats/uilayout.h"
 
@@ -66,6 +67,11 @@ public:
 
     void resize(unsigned width, unsigned height);
 
+    /// DIVERGENCE (desktop mouse): whether the pointer lies on that window, shown.
+    bool pointed(const tl::core::InputState& in, const std::string& widget) const;
+    /// How far across that window the pointer stands, 0 to 1, clamped; false when it is not shown.
+    bool pointer_along(const tl::core::InputState& in, const std::string& widget,
+                       float& along) const;
     /// Whether the layout has a window of that `WIDGET NAME`.
     bool has(const std::string& widget) const { return find_widget(widget) >= 0; }
     /// A `Text` window's caption.

@@ -10,6 +10,7 @@
 #include "core/randomizer.h"
 #include "core/units.h"
 #include "formats/cegui.h"
+#include "render/menu_pointer.h"
 #include "render/renderer.h"
 
 #include <OgrePrerequisites.h>
@@ -393,6 +394,7 @@ private:
     float scale_ = 1.0f;
     bool created_ = false;
     bool confirm_held_ = false;
+    MenuPointer pointer_;
     bool move_held_ = false;
     bool turn_held_ = false;
     bool skip_held_ = false;
@@ -768,6 +770,9 @@ private:
     /// Which button has the focus. The first, when a menu opens.
     int selected_ = 0;
     bool confirm_held_ = false;
+    MenuPointer pointer_;
+    /// The button under the pointer, -1 for none.
+    int button_under(const tl::core::InputState& input) const;
     bool quit_held_ = false;
     bool skip_held_ = false;
     bool nav_held_ = false;

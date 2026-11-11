@@ -134,7 +134,7 @@ settings, which are kept with the saves (`save/settings.txt`). Each line is
 | --- | --- | --- |
 | `debug` | `0` | the debug tools: the debug menu, the bestiary, the wardrobe editor, Choose Level, frame dumps, and the log file. When off, the menus do not offer them at all |
 | `logs` | `0` | the log file on its own (`debug=1` turns it on too) |
-| `mods_menu` | `1` | the Mods page before the game (not on iOS); `0` skips it and starts without any mods |
+| `mods_menu` | `1` | the Mods page before the game; `0` skips it and starts without any mods |
 | `fps_limit` | `0` (Android `60`) | the most frames a second the game draws; `0` for no limit. On Android the display is asked for that rate too, so a 120 Hz screen can run at 60 |
 | `width`, `height` | `1280`, `720` | **desktop builds only:** the window size, or the screen resolution in fullscreen |
 | `fullscreen` | `0` | **desktop builds only:** `1` fills the screen at `width` x `height` |

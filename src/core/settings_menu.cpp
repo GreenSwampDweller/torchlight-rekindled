@@ -185,6 +185,18 @@ void SettingsMenu::set_open(bool opening, GameSettings& settings) {
 }
 
 //
+void SettingsMenu::set_slider_along(SettingsControl control, float along,
+                                    GameSettings& settings) {
+    along = unit_clamp(along);
+    if (control == SettingsControl::Brightness) {
+        set_slider(control, kSliderFloor + along / kBrightnessPerUnit, settings);
+    } else if (control == SettingsControl::Contrast) {
+        set_slider(control, kSliderFloor + along / kContrastPerUnit, settings);
+    } else {
+        set_slider(control, along, settings);
+    }
+}
+
 void SettingsMenu::set_slider(SettingsControl control, float value, GameSettings& settings) {
     float along = 0.0f;
     if (control == SettingsControl::Brightness) {
