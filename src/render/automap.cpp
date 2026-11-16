@@ -83,6 +83,18 @@ constexpr float kZoomToOrtho = 2.0f;
 /// tiles would be drawn four times their size.
 constexpr float kSecondScreenView = 2.0f;
 
+/// PORT: where the circle is in the mask's and the ring's pictures (`automapmask.dds`,
+/// `automapoverlay.dds`, both 256 square): its centre 0.533 of the way across and down, not the
+/// middle, and its radius 0.455 of the width. Drawn over the whole viewport, as the console
+/// draws them, the circle is that far off the player's arrow, which is the viewport's middle;
+/// small in a corner it does not show, across a whole screen it does.
+constexpr float kCircleCentre = 0.5332f;
+constexpr float kCircleRadius = 0.4551f;
+/// How much of a second screen's viewport the circle is drawn across, from its middle. Not
+/// less: the pictures end just past the circle on the right and below (0.467 from its centre),
+/// and must still cover the viewport there for the mask to hide the map outside it.
+constexpr float kSecondScreenCircle = 0.985f;
+
 /// The viewports' z-orders: the map's on either window (the world is 0 on the main one), and on
 /// a second screen the black the rest of it is cleared to.
 constexpr int kMapZOrder = 2;
@@ -367,6 +379,43 @@ void Automap::set_second_screen(Ogre::RenderWindow* second) {
     // Shown again on the window it now belongs to; the same window again is a new size.
     if (was_visible && mMode != MapMode::Hidden) show();
     apply_zoom();
+}
+
+// The mask's and the ring's quads. As the console places them (`AutomapCullQuad` at -1.01 and
+// 1.01, `AutomapOverlayQuad` at -1 and 1), or, PORT, `centred` for a second screen: placed so
+// the circle in their pictures is round the viewport's middle and nearly as wide as it.
+void Automap::place_circle(bool centred) {
+    float left = -1.0f, top = 1.0f, right = 1.0f, bottom = -1.0f;
+    if (centred) {
+        const float before = kCircleCentre / kCircleRadius * kSecondScreenCircle;
+        const float after = (1.0f - kCircleCentre) / kCircleRadius * kSecondScreenCircle;
+        left = -before;
+        top = before;
+        right = after;
+        bottom = -after;
+    }
+    if (mCullQuad) mCullQuad->setCorners(left * 1.01f, top * 1.01f, right * 1.01f, bottom * 1.01f);
+    if (mRingQuad) mRingQuad->setCorners(left, top, right, bottom);
+}
+
+// PORT: the second screen's top edge given to the HUD's strip, the map under it.
+void Automap::set_second_screen_top(float fraction) {
+    const float top = std::clamp(fraction, 0.0f, 0.5f);
+    if (top == mSecondTop) return;
+    mSecondTop = top;
+    update_viewport_dimensions();
+}
+
+bool Automap::second_screen_square(float& left, float& top, float& side) const {
+    if (mSecond == nullptr) return false;
+    const float second_w = static_cast<float>(mSecond->getWidth());
+    const float second_h = static_cast<float>(mSecond->getHeight());
+    if (second_w <= 0.0f || second_h <= 0.0f) return false;
+    const float room = second_h * (1.0f - mSecondTop);
+    side = std::min(second_w, room) * kSecondScreenFill;
+    left = (second_w - side) * 0.5f;
+    top = second_h * mSecondTop + (room - side) * 0.5f;
+    return true;
 }
 
 void Automap::shutdown() {
@@ -1021,19 +1070,20 @@ void Automap::update_viewport_dimensions() {
         mCamera->setAspectRatio(win_w / win_h);
         if (mCullQuad) mCullQuad->setVisible(false);
         if (mRingQuad) mRingQuad->setVisible(false);
+        place_circle(false);
     } else if (on_second_screen()) {
-        // PORT: the second screen's own: the circle as large as fits, in its middle.
+        // PORT: the second screen's own: the circle in the middle of the room it has there.
+        float left = 0.0f, top = 0.0f, side = 0.0f;
+        if (!second_screen_square(left, top, side)) return;
         const float second_w = static_cast<float>(mSecond->getWidth());
         const float second_h = static_cast<float>(mSecond->getHeight());
-        if (second_w <= 0.0f || second_h <= 0.0f) return;
-        const float side = std::min(second_w, second_h);
-        const float w = side / second_w;
-        const float h = side / second_h;
-        mViewport->setDimensions((1.0f - w) * 0.5f, (1.0f - h) * 0.5f, w, h);
+        mViewport->setDimensions(left / second_w, top / second_h, side / second_w,
+                                 side / second_h);
         mCamera->setAspectRatio(1.0f);
 
         if (mCullQuad) mCullQuad->setVisible(true);
         if (mRingQuad) mRingQuad->setVisible(true);
+        place_circle(true);
     } else {
         // Minimap mode: a bottom-right circle.
         const float aspect = win_w / win_h;
@@ -1048,6 +1098,7 @@ void Automap::update_viewport_dimensions() {
 
         if (mCullQuad) mCullQuad->setVisible(true);
         if (mRingQuad) mRingQuad->setVisible(true);
+        place_circle(false);
     }
 }
 

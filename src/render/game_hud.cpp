@@ -31,6 +31,17 @@ namespace {
 constexpr const char* kHudLayout = "media/UI/hud_xenon.layout";
 constexpr const char* kPetLayout = "media/UI/pethud_xenon.layout";
 
+/// PORT (a second display): the strip of the HUD drawn there - the skill slots, the bag and the
+/// experience bar - is as wide as this fraction of that screen, though never more than this
+/// much larger than its own interface scale would draw it, and this far, as a fraction of its
+/// height, from its top edge.
+constexpr float kSecondScreenStripWidth = 0.94f;
+constexpr float kSecondScreenMaxScale = 1.6f;
+constexpr float kSecondScreenMargin = 0.012f;
+/// ...and the slots and the bag on it are this much larger again than the bar under them: they
+/// are what is looked for at a glance.
+constexpr float kSecondScreenIconScale = 2.0f;
+
 /// Where the console HUD's art lives: four imagesets over four 1024x1024 textures, whose names do
 /// not collide, so `IMAGE:hpmanaball` names a picture without its sheet.
 constexpr const char* kImagesets[] = {
@@ -279,6 +290,11 @@ void GameHud::build(const tl::formats::UiObject& object, int parent, const std::
     node.h_text = anchor_of(object.string_or("HORIZONTAL ALIGN", "LEFT"));
     node.v_text = anchor_of(object.string_or("VERTICAL ALIGN", "TOP"));
     node.hidden = inherited_hidden || !object.bool_or("VISIBLE", true) || is_runtime_only(widget);
+    // PORT (a second display): what goes there, each with everything under it: the two banks of
+    // skill slots, the experience bar, and the bag (which has no widget name, only its picture).
+    node.second = (parent >= 0 && nodes_[static_cast<size_t>(parent)].second) ||
+                  widget == "SkillSet1" || widget == "SkillSet2" || widget == "PlayerXP" ||
+                  lowered(object.string_or("IMAGE", std::string())) == "bag";
     node.skill_set = widget == "SkillSet1"   ? 0
                      : widget == "SkillSet2" ? 1
                      : parent >= 0           ? nodes_[static_cast<size_t>(parent)].skill_set
@@ -407,6 +423,14 @@ bool GameHud::create(const std::string& group, unsigned width, unsigned height) 
         };
         panel_root_ = root("tl/hud/panelroot", overlay_);
         text_root_ = root("tl/hud/textroot", text_overlay_);
+        // The second display's pair, never shown here: whoever draws that display shows them
+        // for its viewport alone (second_overlays()).
+        second_overlay_ = overlays.create("tl/hud/second");
+        second_overlay_->setZOrder(473);
+        second_text_overlay_ = overlays.create("tl/hud/secondtext");
+        second_text_overlay_->setZOrder(474);
+        second_panel_root_ = root("tl/hud/secondpanelroot", second_overlay_);
+        second_text_root_ = root("tl/hud/secondtextroot", second_text_overlay_);
 
         if (!add_layout(kHudLayout, group, "the screen")) {
             destroy();
@@ -426,14 +450,7 @@ bool GameHud::create(const std::string& group, unsigned width, unsigned height) 
         for (Node& node : nodes_) {
             if (node.panel != nullptr) panel_root_->addChild(node.panel);
         }
-        Ogre::ushort z = static_cast<Ogre::ushort>(panel_root_->getZOrder() + 1);
-        for (Node& node : nodes_) {
-            if (node.panel == nullptr) continue;
-            node.panel->_notifyZOrder(z);
-            // Room for 100 per overlay (`Overlay::setZOrder` multiplies by that); stopping at the
-            // top of the band keeps a modded layout out of the next overlay.
-            if (z < static_cast<Ogre::ushort>(panel_root_->getZOrder() + 99)) ++z;
-        }
+        place_skill_nodes();  // and the draw order
 
         build_labels();
 
@@ -448,32 +465,93 @@ bool GameHud::create(const std::string& group, unsigned width, unsigned height) 
     }
 }
 
+// PORT (a second display): the elements of what goes there under the roots of the overlays they are
+// drawn through - the second display's pair while there is one, the HUD's own otherwise - and
+// then every panel's place in the draw order.
+//
+// Flat under one container, in draw order, each with its own render priority: OGRE sorts
+// equal-depth transparent renderables by `Pass` pointer (`DistanceSortDescendingLess`), so the
+// sheet would decide what covers what. Each priority is its own `RenderPriorityGroup`, ordered
+// by key.
+void GameHud::place_skill_nodes() {
+    if (panel_root_ == nullptr || text_root_ == nullptr) return;
+    const bool away = second_on_ && second_panel_root_ != nullptr && second_text_root_ != nullptr;
+    const auto move = [](Ogre::OverlayElement* element, Ogre::OverlayContainer* to) {
+        if (element == nullptr || element->getParent() == to) return;
+        if (Ogre::OverlayContainer* from = element->getParent()) {
+            from->removeChild(element->getName());
+        }
+        to->addChild(element);
+    };
+    for (Node& node : nodes_) {
+        const bool there = away && node.second;
+        move(node.panel, there ? second_panel_root_ : panel_root_);
+        move(node.drop, there ? second_text_root_ : text_root_);
+        move(node.text, there ? second_text_root_ : text_root_);
+    }
+    for (Ogre::OverlayContainer* root : {panel_root_, second_panel_root_}) {
+        if (root == nullptr) continue;
+        const auto base = static_cast<Ogre::ushort>(root->getZOrder());
+        Ogre::ushort z = static_cast<Ogre::ushort>(base + 1);
+        for (Node& node : nodes_) {
+            if (node.panel == nullptr || node.panel->getParent() != root) continue;
+            node.panel->_notifyZOrder(z);
+            // Room for 100 per overlay (`Overlay::setZOrder` multiplies by that); stopping at the
+            // top of the band keeps a modded layout out of the next overlay.
+            if (z < static_cast<Ogre::ushort>(base + 99)) ++z;
+        }
+    }
+}
+
+// PORT (a second display): the skill slots, the bag and the experience bar drawn on it, along
+// its top edge (layout()), or back in the HUD. `width` and `height` are that display's, in pixels.
+void GameHud::set_second_screen(bool on, unsigned width, unsigned height) {
+    if (on == second_on_ && width == second_width_ && height == second_height_) return;
+    second_on_ = on;
+    second_width_ = width;
+    second_height_ = height;
+    if (!built_) return;
+    place_skill_nodes();
+    layout();
+}
+
 void GameHud::destroy() {
     destroy_labels();
     if (overlay_ != nullptr || text_overlay_ != nullptr) {
         auto& overlays = Ogre::OverlayManager::getSingleton();
-        for (Ogre::Overlay* overlay : {overlay_, text_overlay_}) {
+        for (Ogre::Overlay* overlay :
+             {overlay_, text_overlay_, second_overlay_, second_text_overlay_}) {
             if (overlay != nullptr) overlay->hide();
         }
         for (Node& node : nodes_) {
-            if (node.panel != nullptr && panel_root_ != nullptr) {
-                panel_root_->removeChild(node.panel->getName());
+            for (Ogre::OverlayElement* element :
+                 {static_cast<Ogre::OverlayElement*>(node.panel),
+                  static_cast<Ogre::OverlayElement*>(node.drop),
+                  static_cast<Ogre::OverlayElement*>(node.text)}) {
+                if (element == nullptr) continue;
+                if (Ogre::OverlayContainer* parent = element->getParent()) {
+                    parent->removeChild(element->getName());
+                }
+                overlays.destroyOverlayElement(element);
             }
-            for (Ogre::TextAreaOverlayElement* area : {node.drop, node.text}) {
-                if (area == nullptr || text_root_ == nullptr) continue;
-                text_root_->removeChild(area->getName());
-            }
-            if (node.panel != nullptr) overlays.destroyOverlayElement(node.panel);
-            if (node.drop != nullptr) overlays.destroyOverlayElement(node.drop);
-            if (node.text != nullptr) overlays.destroyOverlayElement(node.text);
         }
-        if (panel_root_ != nullptr && overlay_ != nullptr) overlay_->remove2D(panel_root_);
-        if (text_root_ != nullptr && text_overlay_ != nullptr) text_overlay_->remove2D(text_root_);
-        if (panel_root_ != nullptr) overlays.destroyOverlayElement(panel_root_);
-        if (text_root_ != nullptr) overlays.destroyOverlayElement(text_root_);
-        if (overlay_ != nullptr) overlays.destroy(overlay_);
-        if (text_overlay_ != nullptr) overlays.destroy(text_overlay_);
+        const auto drop_root = [&](Ogre::OverlayContainer* root, Ogre::Overlay* from) {
+            if (root != nullptr && from != nullptr) from->remove2D(root);
+            if (root != nullptr) overlays.destroyOverlayElement(root);
+        };
+        drop_root(panel_root_, overlay_);
+        drop_root(text_root_, text_overlay_);
+        drop_root(second_panel_root_, second_overlay_);
+        drop_root(second_text_root_, second_text_overlay_);
+        for (Ogre::Overlay* overlay :
+             {overlay_, text_overlay_, second_overlay_, second_text_overlay_}) {
+            if (overlay != nullptr) overlays.destroy(overlay);
+        }
     }
+    second_panel_root_ = nullptr;
+    second_text_root_ = nullptr;
+    second_overlay_ = nullptr;
+    second_text_overlay_ = nullptr;
     nodes_.clear();
     sprites_.clear();
     materials_.clear();
@@ -581,23 +659,115 @@ void GameHud::layout() {
         node.top = parent_top + top / down;
         node.width = wide / across;
         node.height = tall / down;
+    }
 
+    // PORT (a second display): the strip drawn there, along its top edge. Everything that goes
+    // is kept as the layout arranges it on this screen - the slots either side of the middle,
+    // the bag beside them, the experience bar under them - and moved as one piece: the box round
+    // what is drawn of it, centred across that screen and scaled to its width.
+    //
+    // The slots and the bag are then enlarged where they stand: each from the outer end of its
+    // own side of the strip and from the strip's top, with the bar moved down to make the room.
+    const bool second = second_on_ && second_width_ > 0 && second_height_ > 0;
+    // Which part of the strip each node is: -1 none of it (or an empty `SkillSet` window), 0 the
+    // experience bar, 1 an icon left of the middle, 2 one right of it. A node under another
+    // part's node is of that part.
+    std::vector<int> part(nodes_.size(), -1);
+    float left_edge = across, right_edge = 0.0f, top_edge = down, bottom_edge = 0.0f;
+    float icons_left = across, icons_right = 0.0f, icons_top = down, icons_bottom = 0.0f;
+    if (second) {
+        for (size_t index = 0; index < nodes_.size(); ++index) {
+            const Node& node = nodes_[index];
+            if (!node.second) continue;
+            const int above = node.parent < 0 ? -1 : part[static_cast<size_t>(node.parent)];
+            if (node.widget == "SkillSet1" || node.widget == "SkillSet2") continue;
+            if (node.widget == "PlayerXP") part[index] = 0;
+            else if (above >= 0) part[index] = above;
+            else part[index] = (node.left + node.width * 0.5f) < 0.5f ? 1 : 2;
+
+            // The edges are those of what is drawn: a picture, or a slot's own window.
+            const bool drawn = !node.hidden && node.panel != nullptr &&
+                               (!node.image.empty() || hotbar_slot_of(node.widget, "SkillSlot") >= 0);
+            if (!drawn) continue;
+            const float x0 = node.left * across, x1 = (node.left + node.width) * across;
+            const float y0 = node.top * down, y1 = (node.top + node.height) * down;
+            left_edge = std::min(left_edge, x0);
+            right_edge = std::max(right_edge, x1);
+            top_edge = std::min(top_edge, y0);
+            bottom_edge = std::max(bottom_edge, y1);
+            if (part[index] == 0) continue;
+            icons_left = std::min(icons_left, x0);
+            icons_right = std::max(icons_right, x1);
+            icons_top = std::min(icons_top, y0);
+            icons_bottom = std::max(icons_bottom, y1);
+        }
+    }
+    const bool strip = second && right_edge > left_edge && bottom_edge > top_edge;
+    const bool icons = strip && icons_right > icons_left && icons_bottom > icons_top;
+    const float second_across = static_cast<float>(second_width_ > 0 ? second_width_ : 1);
+    const float second_down = static_cast<float>(second_height_ > 0 ? second_height_ : 1);
+    // Main-screen pixels to the second screen's: the strip's, and the icons'.
+    const float grow =
+        strip ? std::min(second_across * kSecondScreenStripWidth / (right_edge - left_edge),
+                         (second_down / native) * kSecondScreenMaxScale / scale_)
+              : 1.0f;
+    const float icon_grow = grow * kSecondScreenIconScale;
+    const float margin = second_down * kSecondScreenMargin;
+    const float strip_left = (second_across - (right_edge - left_edge) * grow) * 0.5f;
+    // What the larger icons add to the strip's height, which the bar moves down by.
+    const float pushed = icons ? (icons_bottom - icons_top) * (icon_grow - grow) : 0.0f;
+    second_band_ =
+        strip ? (margin * 2.0f + (bottom_edge - top_edge) * grow + pushed) / second_down : 0.0f;
+
+    for (size_t index = 0; index < nodes_.size(); ++index) {
+        Node& node = nodes_[index];
+        const int piece = strip && node.second ? part[index] : -1;
+        const bool moved = strip && node.second;
+        const bool icon = icons && piece >= 1;
+        const float scale = icon ? icon_grow : grow;
+        // A point and a length in main-screen pixels, as fractions of the screen it is drawn on.
+        const auto to_x = [&](float x) {
+            if (!moved) return x / across;
+            const float placed = strip_left + (x - left_edge) * grow;  // as part of the strip
+            if (!icon) return placed / second_across;
+            // From where its side's outer end is in the strip.
+            const float anchor = piece == 1 ? icons_left : icons_right;
+            const float anchored = strip_left + (anchor - left_edge) * grow;
+            return (anchored + (x - anchor) * icon_grow) / second_across;
+        };
+        const auto to_y = [&](float y) {
+            if (!moved) return y / down;
+            if (icon) return (margin + (icons_top - top_edge) * grow + (y - icons_top) * icon_grow) /
+                             second_down;
+            return (margin + (y - top_edge) * grow + pushed) / second_down;
+        };
+        const float wide_scale = moved ? scale / second_across : 1.0f / across;
+        const float tall_scale = moved ? scale / second_down : 1.0f / down;
+
+        const float left = node.left * across;
+        const float top = node.top * down;
+        const float wide = node.width * across;
+        const float tall = node.height * down;
+        node.draw_left = to_x(left);
+        node.draw_top = to_y(top);
+        node.draw_width = wide * wide_scale;
+        node.draw_height = tall * tall_scale;
         if (node.panel != nullptr) {
-            node.panel->setPosition(node.left, node.top);
-            node.panel->setDimensions(node.width, node.height);
+            node.panel->setPosition(node.draw_left, node.draw_top);
+            node.panel->setDimensions(node.draw_width, node.draw_height);
         }
         for (Ogre::TextAreaOverlayElement* area : {node.drop, node.text}) {
             if (area == nullptr) continue;
             const float line = node.points * ui_points_to_pixels() * scale_;
-            float x = node.left;
-            if (node.h_text == 1) x = node.left + node.width * 0.5f;
-            else if (node.h_text == 2) x = node.left + node.width;
-            float y = node.top;
-            if (node.v_text == 1) y = node.top + (tall - line) * 0.5f / down;
-            else if (node.v_text == 2) y = node.top + (tall - line) / down;
+            float x = left;
+            if (node.h_text == 1) x = left + wide * 0.5f;
+            else if (node.h_text == 2) x = left + wide;
+            float y = top;
+            if (node.v_text == 1) y = top + (tall - line) * 0.5f;
+            else if (node.v_text == 2) y = top + (tall - line);
             const float nudge = (area == node.drop) ? kLabelShadow * scale_ : 0.0f;
-            set_char_height(area, line / down);
-            area->setPosition(x + nudge / across, y + nudge / down);
+            set_char_height(area, line * tall_scale);
+            area->setPosition(to_x(x + nudge), to_y(y + nudge));
         }
     }
     apply_state();
@@ -814,12 +984,13 @@ void GameHud::apply_state() {
                 on = false;
             } else if (node.fill == kFillDown) {
                 // The liquid level falls: the top of the ball is cut away, the rest stays.
-                set_position(node.panel, node.left, node.top + node.height * (1.0f - amount));
-                set_dimensions(node.panel, node.width, node.height * amount);
+                set_position(node.panel, node.draw_left,
+                             node.draw_top + node.draw_height * (1.0f - amount));
+                set_dimensions(node.panel, node.draw_width, node.draw_height * amount);
                 set_uv(node, 0.0f, 1.0f - amount, 1.0f, 1.0f);
             } else {
-                set_position(node.panel, node.left, node.top);
-                set_dimensions(node.panel, node.width * amount, node.height);
+                set_position(node.panel, node.draw_left, node.draw_top);
+                set_dimensions(node.panel, node.draw_width * amount, node.draw_height);
                 set_uv(node, 0.0f, 0.0f, amount, 1.0f);
             }
         }

@@ -42,6 +42,7 @@
 #include "render/quest_dialog.h"
 #include "render/render_system_choice.h"
 #include "render/renderer_archive.h"
+#include "render/second_screen.h"
 #include "render/touch_camera.h"
 #include "render/touch_overlay.h"
 #include "render/unit_opacity.h"
@@ -636,6 +637,10 @@ struct Renderer::Impl : tl::core::World {
     /// arrives and kept for the run; its EGL surface goes and comes back with the display's.
     Ogre::RenderWindow* second_window = nullptr;
     void second_screen_arrived(void* native_window, void* configuration);
+    /// What the second display shows besides the map, and the three told at once whether there
+    /// is one: the map (Automap), the skill slots (GameHud) and the backdrop under both.
+    SecondScreen second_screen;
+    void apply_second_screen(bool up);
     void second_screen_gone();
     /// The render system's current GL context made the one EGL has current, the main window's:
     /// a window made, or given a new surface, makes its own context current behind OGRE's back.

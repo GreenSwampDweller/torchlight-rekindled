@@ -101,7 +101,7 @@ void Renderer::Impl::second_screen_arrived(void* native_window, void* configurat
     sync_gl_context();
     TL_LOG_INFO("second screen: window %ux%u", second_window->getWidth(),
                 second_window->getHeight());
-    if (automap_initialized) automap.set_second_screen(second_window);
+    apply_second_screen(true);
 }
 
 // The display's surface taken away (the game in the background, the display unplugged): the
@@ -109,7 +109,7 @@ void Renderer::Impl::second_screen_arrived(void* native_window, void* configurat
 // stay for the surface that comes back.
 void Renderer::Impl::second_screen_gone() {
     if (second_window == nullptr) return;
-    if (automap_initialized) automap.set_second_screen(nullptr);
+    apply_second_screen(false);
     // The frame's last swap was this window's, so its context and surface are the current
     // ones, and EGL keeps a current surface alive after it is destroyed: the main window's
     // made current first, so the surface is gone when this returns.
@@ -131,6 +131,32 @@ void Renderer::Impl::sync_gl_context() {
     if (window->isActive()) render_system->_setRenderTarget(window);
 }
 #endif
+
+// The second display's window taken up by, or taken from, everything drawn on it. Not before
+// the map exists: its backdrop viewport there is what the rest is drawn in.
+void Renderer::Impl::apply_second_screen(bool up) {
+    const bool there = up && second_window != nullptr && second_window->isActive() &&
+                       automap_initialized;
+    if (automap_initialized) automap.set_second_screen(there ? second_window : nullptr);
+    game_hud.set_second_screen(there, there ? second_window->getWidth() : 0,
+                               there ? second_window->getHeight() : 0);
+    if (!there) {
+        second_screen.detach();
+        return;
+    }
+    // The HUD's strip along the top, the map in the room under it, the backdrop round both.
+    const float band = game_hud.second_band();
+    automap.set_second_screen_top(band);
+    SecondScreen::Shape shape;
+    shape.strip_bottom = band * static_cast<float>(second_window->getHeight());
+    float left = 0.0f, top = 0.0f, side = 0.0f;
+    if (automap.second_screen_square(left, top, side)) {
+        shape.centre_x = left + side * 0.5f;
+        shape.centre_y = top + side * 0.5f;
+        shape.radius = side * 0.5f;
+    }
+    second_screen.attach(second_window, &game_hud, shape);
+}
 
 void Renderer::Impl::adopt_window_size() {
 #if !defined(TL_PLATFORM_SWITCH) && !defined(TL_PLATFORM_ANDROID) && !defined(TL_PLATFORM_IOS)

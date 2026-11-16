@@ -2183,6 +2183,7 @@ void Renderer::shutdown() {
     m.inventory_menu.destroy();
     m.menu.destroy();
     m.mouse.reset();
+    m.second_screen.detach();
     m.game_hud.destroy();
     m.hud.destroy();
     m.automap.shutdown();
