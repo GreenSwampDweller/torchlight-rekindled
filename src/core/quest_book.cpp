@@ -1362,6 +1362,38 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     return true;
 }
 
+// PORT: `accept`'s objectives, on an entry of the caller's.
+void QuestLog::roll_offered_objectives(QuestEntry& entry) const {
+    if (entry.definition == nullptr) return;
+    const QuestDefinition& quest = *entry.definition;
+    const uint64_t g_rand_kept = game_random().state();
+    uint32_t groups = 0;
+    if (const Offered* rolled = offered(quest); rolled != nullptr && 0 <= rolled->defeat_groups) {
+        groups = static_cast<uint32_t>(rolled->defeat_groups);
+    } else {
+        groups = take_defeat_groups(quest, game_random());
+    }
+    entry.defeat.assign(quest.defeat.begin(),
+                        quest.defeat.begin() + std::min<size_t>(groups, quest.defeat.size()));
+    entry.defeat_repeats = quest.defeat.empty() || groups <= quest.defeat.size()
+                               ? 0u
+                               : groups - static_cast<uint32_t>(quest.defeat.size());
+    entry.acquire = quest.acquire;
+    entry.populate = quest.populate;
+    number_objectives(entry.defeat);
+    number_objectives(entry.acquire);
+    number_objectives(entry.populate);
+    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_);
+    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_);
+    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_);
+    if (unit_namer_) {
+        name_objectives(entry.defeat, unit_namer_);
+        name_objectives(entry.acquire, unit_namer_);
+        name_objectives(entry.populate, unit_namer_);
+    }
+    game_random().set_state(g_rand_kept);
+}
+
 // `CQuest::reinitializeQuest(quest, units, false)`: the giver
 // cleared (`+0x1d4`), the floor and the `[DEFEAT]` groups rolled again on the quest's seed; with
 // `units`, `CQuestUnitData::reinitialize(true)` on the populate units, the
