@@ -64,6 +64,8 @@ void pump_events() {
     }
     // In the background: nothing is drawn or advanced until the window is back.
     android::wait_for_window();
+    // A second display's surface, made or taken away since the last frame.
+    android::service_second_screen(glue->window != nullptr);
     // The pad is laid out in the frame's pixels (touches are scaled to them),
     // and a foldable phone changes the frame's size when it folds.
     touch_pad().set_screen(static_cast<float>(android::render_width()),

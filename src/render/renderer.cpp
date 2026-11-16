@@ -2269,6 +2269,10 @@ bool Renderer::init(const RendererConfig& requested) {
     m.automap.set_zoom(config.map_zoom);
     m.automap.hide();  // Never render outside active gameplay
     m.automap_initialized = true;
+    // A second display's window made before the map was (watch_window_surface()).
+    if (m.second_window != nullptr && m.second_window->isActive()) {
+        m.automap.set_second_screen(m.second_window);
+    }
 
     // The first thing on the display, before the character or the level is
     // read. Startup and `restart()` both come through here, so the New Game

@@ -631,6 +631,15 @@ struct Renderer::Impl : tl::core::World {
     Ogre::RenderWindow* window = nullptr;
     /// Android: the EGL surface let go in the background and remade, the context kept.
     void watch_window_surface();
+    /// Android, `config.second_screen`: a window on a two-screen handheld's other display, for
+    /// the small map (Automap::set_second_screen). Made when the activity's surface there
+    /// arrives and kept for the run; its EGL surface goes and comes back with the display's.
+    Ogre::RenderWindow* second_window = nullptr;
+    void second_screen_arrived(void* native_window, void* configuration);
+    void second_screen_gone();
+    /// The render system's current GL context made the one EGL has current, the main window's:
+    /// a window made, or given a new surface, makes its own context current behind OGRE's back.
+    void sync_gl_context();
     void fit_camera_to_window() const;  ///< to the window's first viewport, the world's
     /// config.txt's `fps_limit`: the rest of the frame slept out, after the present.
     void pace_frame();
@@ -1335,6 +1344,13 @@ struct Renderer::Impl : tl::core::World {
             return true;
         }
         bool frameEnded(const Ogre::FrameEvent&) override {
+#if defined(TL_PLATFORM_ANDROID)
+            // A second display's window is drawn and swapped last, which leaves its context
+            // the current one: whatever is bound before the next frame's window (the light
+            // map's and the shadow map's frame buffers, the timer's queries) would belong to
+            // it, and be lost with that display's surface. Every frame ends on the main one.
+            if (owner != nullptr) owner->sync_gl_context();
+#endif
             if (owner != nullptr) owner->pace_frame();
             return true;
         }

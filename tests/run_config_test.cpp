@@ -97,6 +97,17 @@ TL_TEST(the_mods_menu_line_reads_back) {
     TL_CHECK(parse_run_config("mods_menu = 1\n", off).mods_menu);
 }
 
+/// The second screen's switch: in every new file, on unless the file says 0.
+TL_TEST(the_second_screen_line_reads_back) {
+    RunConfig off;
+    off.second_screen = false;
+    TL_CHECK(run_config_text(off).find("second_screen=0") != std::string::npos);
+    TL_CHECK(run_config_text(RunConfig{}).find("second_screen=1") != std::string::npos);
+    TL_CHECK(parse_run_config("debug=1\n", RunConfig{}).second_screen);
+    TL_CHECK(!parse_run_config("second_screen=0\n", RunConfig{}).second_screen);
+    TL_CHECK(parse_run_config("second_screen = 1\n", off).second_screen);
+}
+
 /// The free camera is a mod now: a new file has no line for it, and one from before is still read
 /// (it says whether the mod starts on).
 TL_TEST(the_free_camera_line_is_read_not_written) {

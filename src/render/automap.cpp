@@ -78,6 +78,16 @@ constexpr TileDef kTiles[34] = {
 /// factor (.rodata = 5.0) and aspect are not applied yet (MapMode::Fullscreen).
 constexpr float kZoomToOrtho = 2.0f;
 
+/// PORT: how much more of the level a second screen's map shows than the corner circle. The
+/// circle there is some four times the corner's across; at the same window the icons' 32 pixel
+/// tiles would be drawn four times their size.
+constexpr float kSecondScreenView = 2.0f;
+
+/// The viewports' z-orders: the map's on either window (the world is 0 on the main one), and on
+/// a second screen the black the rest of it is cleared to.
+constexpr int kMapZOrder = 2;
+constexpr int kBackdropZOrder = 0;
+
 constexpr float kAtlasSize = 512.0f;
 constexpr float kTexelHalfOffset = 0.005f;  // half-texel inset to prevent bleeding
 constexpr float kTileBasis = 4.0f;
@@ -205,7 +215,7 @@ bool Automap::init(Ogre::SceneManager* scene_mgr, Ogre::RenderWindow* window, fl
     mCamera->setNearClipDistance(0.1f);
     mCamera->setFarClipDistance(5000.0f);
     mCamera->setAspectRatio(1.0f);
-    mCamera->setOrthoWindow(mZoom, mZoom);
+    apply_zoom();
     mCamera->setVisibilityFlags(kVisibilityAutomap);
 
     if (mSceneMgr->hasSceneNode("tl/automap_cam_node")) {
@@ -328,8 +338,40 @@ void Automap::OwnQueue::preRenderQueues() {
     }
 }
 
+// PORT: the small map moved to a second display's window, or back.
+void Automap::set_second_screen(Ogre::RenderWindow* second) {
+    const bool was_visible = mVisible;
+    if (second != mSecond) {
+        hide();
+        if (mSecond != nullptr) {
+            if (mSecond->hasViewportWithZOrder(kBackdropZOrder)) {
+                mSecond->removeViewport(kBackdropZOrder);
+            }
+            detach(mSecond);
+        }
+        mSecond = second;
+        if (mSecond != nullptr && mCamera != nullptr) {
+            // The whole screen cleared to black under the map: a viewport of the map's camera
+            // that sees nothing (OwnQueue queues only what the viewport's mask lets through).
+            attach(mSecond);
+            Ogre::Viewport* backdrop = mSecond->addViewport(mCamera, kBackdropZOrder);
+            backdrop->setClearEveryFrame(true);
+            backdrop->setBackgroundColour(Ogre::ColourValue::Black);
+            backdrop->setVisibilityMask(0);
+            backdrop->setOverlaysEnabled(false);
+            backdrop->setMaterialScheme(Ogre::MSN_SHADERGEN);
+        }
+        TL_LOG_INFO("automap: %s", mSecond != nullptr ? "the small map is on the second screen"
+                                                      : "the small map is back on the main screen");
+    }
+    // Shown again on the window it now belongs to; the same window again is a new size.
+    if (was_visible && mMode != MapMode::Hidden) show();
+    apply_zoom();
+}
+
 void Automap::shutdown() {
     hide();
+    set_second_screen(nullptr);
 
     detach(mWindow);
     if (mSceneMgr) mSceneMgr->removeRenderQueueListener(&mOwnQueue);
@@ -882,8 +924,8 @@ void Automap::update(const Ogre::Vector3& player_pos, float delta) {
 
 void Automap::hide() {
     mVisible = false;
-    if (mWindow && mWindow->hasViewportWithZOrder(2)) {
-        mWindow->removeViewport(2);
+    for (Ogre::RenderWindow* window : {mWindow, mSecond}) {
+        if (window && window->hasViewportWithZOrder(kMapZOrder)) window->removeViewport(kMapZOrder);
     }
     mViewport = nullptr;
     if (mCullQuad) mCullQuad->setVisible(false);
@@ -897,10 +939,14 @@ void Automap::show() {
     mVisible = true;
     if (!mWindow || !mCamera) return;
 
-    if (!mWindow->hasViewportWithZOrder(2)) {
-        mViewport = mWindow->addViewport(mCamera, 2, 0.0f, 0.0f, 1.0f, 1.0f);
+    // On one window only: the second screen's for the small map, when there is one.
+    Ogre::RenderWindow* target = map_window();
+    Ogre::RenderWindow* other = target == mWindow ? mSecond : mWindow;
+    if (other && other->hasViewportWithZOrder(kMapZOrder)) other->removeViewport(kMapZOrder);
+    if (!target->hasViewportWithZOrder(kMapZOrder)) {
+        mViewport = target->addViewport(mCamera, kMapZOrder, 0.0f, 0.0f, 1.0f, 1.0f);
     } else {
-        mViewport = mWindow->getViewportByZOrder(2);
+        mViewport = target->getViewportByZOrder(kMapZOrder);
         mViewport->setCamera(mCamera);
     }
     mViewport->setClearEveryFrame(true, Ogre::FBT_DEPTH);
@@ -917,8 +963,9 @@ void Automap::set_mode(MapMode mode) {
     if (mMode == MapMode::Hidden) {
         hide();
     } else if (mVisible) {
-        update_viewport_dimensions();
+        show();  // the mode may put the map on the other window
     }
+    apply_zoom();
 }
 
 // `CLevel::toggleAutomap`: shown small it
@@ -941,12 +988,15 @@ void Automap::set_zoom(float zoom_val) {
     // `CAutomap::zoom` (Linux) clamps the running total to 20..60 and
     // persists it as KSETTINGS_F_AUTOMAP_ZOOM (default 30).
     mZoom = std::clamp(zoom_val, 20.0f, 60.0f);
-    if (mCamera) {
-        // The setting is not the window: `CAutomap::zoom` passes the extents
-        // (-zoom, +zoom, +zoom, -zoom), a window of `2 * zoom` on both axes.
-        const float window = mZoom * kZoomToOrtho;
-        mCamera->setOrthoWindow(window, window);
-    }
+    apply_zoom();
+}
+
+// The setting is not the window: `CAutomap::zoom` passes the extents
+// (-zoom, +zoom, +zoom, -zoom), a window of `2 * zoom` on both axes.
+void Automap::apply_zoom() {
+    if (!mCamera) return;
+    const float window = mZoom * kZoomToOrtho * (on_second_screen() ? kSecondScreenView : 1.0f);
+    mCamera->setOrthoWindow(window, window);
 }
 
 void Automap::update_viewport_dimensions() {
@@ -971,6 +1021,19 @@ void Automap::update_viewport_dimensions() {
         mCamera->setAspectRatio(win_w / win_h);
         if (mCullQuad) mCullQuad->setVisible(false);
         if (mRingQuad) mRingQuad->setVisible(false);
+    } else if (on_second_screen()) {
+        // PORT: the second screen's own: the circle as large as fits, in its middle.
+        const float second_w = static_cast<float>(mSecond->getWidth());
+        const float second_h = static_cast<float>(mSecond->getHeight());
+        if (second_w <= 0.0f || second_h <= 0.0f) return;
+        const float side = std::min(second_w, second_h);
+        const float w = side / second_w;
+        const float h = side / second_h;
+        mViewport->setDimensions((1.0f - w) * 0.5f, (1.0f - h) * 0.5f, w, h);
+        mCamera->setAspectRatio(1.0f);
+
+        if (mCullQuad) mCullQuad->setVisible(true);
+        if (mRingQuad) mRingQuad->setVisible(true);
     } else {
         // Minimap mode: a bottom-right circle.
         const float aspect = win_w / win_h;

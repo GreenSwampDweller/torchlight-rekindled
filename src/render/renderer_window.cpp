@@ -32,11 +32,105 @@ void Renderer::Impl::watch_window_surface() {
             window->getViewport(i)->_updateDimensions();
         }
         fit_camera_to_window();
+        sync_gl_context();
         TL_LOG_INFO("window: surface made again, %ux%u", window->getWidth(), window->getHeight());
     };
     tl::core::android::set_surface_hooks(std::move(hooks));
+
+    // A two-screen handheld's other display: the activity puts a window on it when asked and
+    // its surface arrives here, now if a renderer before this one (New Game) already had it.
+    const bool second_screen = config.second_screen && !config.headless;
+    tl::core::android::SecondScreenHooks second;
+    if (second_screen) {
+        second.arrived = [this](ANativeWindow* native, AConfiguration* configuration) {
+            second_screen_arrived(native, configuration);
+        };
+        second.gone = [this] { second_screen_gone(); };
+    }
+    tl::core::android::set_second_screen_hooks(std::move(second));
+    tl::core::android::show_second_screen(second_screen);
+    if (second_screen) {
+        if (ANativeWindow* native = tl::core::android::second_screen_window()) {
+            second_screen_arrived(native, nullptr);
+        }
+    }
 #endif
 }
+
+#if defined(TL_PLATFORM_ANDROID)
+// The second display's surface: a render window of its own on it the first time, a new EGL
+// surface for that window after. The window shares the main one's GL objects (OGRE makes its
+// context in the main context's share group) and is not held to its display's refresh: only
+// the main window's swap paces the frame.
+void Renderer::Impl::second_screen_arrived(void* native_window, void* configuration) {
+    if (root == nullptr || window == nullptr || native_window == nullptr) return;
+    try {
+        if (second_window == nullptr) {
+            // The depth and stencil sizes the main window asks for (platform_window_params):
+            // the same EGL config, which sharing with its context needs.
+            Ogre::NameValuePairList params{{"FSAA", "0"}};
+            params["externalWindowHandle"] =
+                std::to_string(reinterpret_cast<std::size_t>(native_window));
+            if (configuration != nullptr) {
+                params["androidConfig"] =
+                    std::to_string(reinterpret_cast<std::size_t>(configuration));
+            }
+            params["preserveContext"] = "true";
+            params["maxDepthBufferSize"] = "24";
+            params["maxStencilBufferSize"] = "8";
+            second_window =
+                root->createRenderWindow("Torchlight Rekindled second screen", 0, 0, true, &params);
+        } else {
+            static_cast<Ogre::AndroidEGLWindow*>(second_window)
+                ->_notifySurfaceCreated(native_window, configuration);
+            for (unsigned short i = 0; i < second_window->getNumViewports(); ++i) {
+                second_window->getViewport(i)->_updateDimensions();
+            }
+        }
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_ERROR("second screen: no window on it: %s", e.getFullDescription().c_str());
+        sync_gl_context();
+        return;
+    }
+    try {
+        second_window->setVSyncEnabled(false);
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_WARN("second screen: held to its display's refresh: %s",
+                    e.getFullDescription().c_str());
+    }
+    sync_gl_context();
+    TL_LOG_INFO("second screen: window %ux%u", second_window->getWidth(),
+                second_window->getHeight());
+    if (automap_initialized) automap.set_second_screen(second_window);
+}
+
+// The display's surface taken away (the game in the background, the display unplugged): the
+// map goes back to the main window and the EGL surface is released. The window and its context
+// stay for the surface that comes back.
+void Renderer::Impl::second_screen_gone() {
+    if (second_window == nullptr) return;
+    if (automap_initialized) automap.set_second_screen(nullptr);
+    // The frame's last swap was this window's, so its context and surface are the current
+    // ones, and EGL keeps a current surface alive after it is destroyed: the main window's
+    // made current first, so the surface is gone when this returns.
+    if (root != nullptr && window != nullptr && window->isActive()) {
+        root->getRenderSystem()->_setRenderTarget(window);
+    }
+    static_cast<Ogre::AndroidEGLWindow*>(second_window)->_notifySurfaceDestroyed();
+}
+
+// AndroidEGLWindow::create() and _notifySurfaceCreated() make the window's own context current
+// in EGL without telling the render system, which goes on issuing the next target's calls to
+// whichever context it believes current. With two windows that is two contexts: each is made
+// the render target in turn, the main window last, so the two agree again.
+void Renderer::Impl::sync_gl_context() {
+    if (root == nullptr || window == nullptr || second_window == nullptr) return;
+    Ogre::RenderSystem* render_system = root->getRenderSystem();
+    if (render_system == nullptr) return;
+    if (second_window->isActive()) render_system->_setRenderTarget(second_window);
+    if (window->isActive()) render_system->_setRenderTarget(window);
+}
+#endif
 
 void Renderer::Impl::adopt_window_size() {
 #if !defined(TL_PLATFORM_SWITCH) && !defined(TL_PLATFORM_ANDROID) && !defined(TL_PLATFORM_IOS)

@@ -146,6 +146,13 @@ public:
     void attach(Ogre::RenderTarget* target);
     void detach(Ogre::RenderTarget* target);
 
+    /// PORT: a second display's window (a two-screen handheld), or null for none. While there is
+    /// one the small map is drawn on it, as large as fits, in place of the main window's corner
+    /// circle; the full screen map stays on the main window. The window must outlive the map or
+    /// be taken away again (null) first.
+    void set_second_screen(Ogre::RenderWindow* second);
+    bool on_second_screen() const { return mSecond != nullptr && mMode == MapMode::Minimap; }
+
     MapMode mode() const { return mMode; }
     bool visible() const { return mVisible; }
     bool is_visible() const { return mVisible && mMode != MapMode::Hidden; }
@@ -169,6 +176,10 @@ private:
     OwnQueue mOwnQueue;
 
     void ensure_materials();
+    /// The window the map's viewport is on in this mode.
+    Ogre::RenderWindow* map_window() const { return on_second_screen() ? mSecond : mWindow; }
+    /// The camera's window from the zoom, wider on a second screen.
+    void apply_zoom();
     void update_viewport_dimensions();
     /// The map's mesh, texture and entity let go.
     void destroy_map();
@@ -184,6 +195,7 @@ private:
     Ogre::Camera* mCamera = nullptr;
     Ogre::SceneNode* mCameraNode = nullptr;
     Ogre::Viewport* mViewport = nullptr;
+    Ogre::RenderWindow* mSecond = nullptr;  ///< set_second_screen()
     Ogre::SceneNode* mNodeTiles = nullptr;
     Ogre::SceneNode* mNodeCull = nullptr;
     Ogre::SceneNode* mNodeRing = nullptr;
