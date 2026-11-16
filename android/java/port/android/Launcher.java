@@ -40,6 +40,7 @@ import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
+import android.view.KeyEvent;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.Switch;
@@ -232,7 +233,7 @@ public final class Launcher extends Activity {
                 .setTitle("Torchlight")
                 .setView(box)
                 .setCancelable(false)
-                .setPositiveButton("Play", (d, w) -> {
+                .setPositiveButton("Play (press Start)", (d, w) -> {
                     prefs().edit().putInt(KEY_SCALE, MIN_SCALE + scale.getProgress() * SCALE_STEP).apply();
                     if (limitMoved[0]) {
                         writeConfig(folder, "fps_limit", LIMITS[frames.getProgress()], DEFAULT_LIMIT,
@@ -252,6 +253,15 @@ public final class Launcher extends Activity {
                 .setNeutralButton("Game folder", (d, w) ->
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER))
                 .setNegativeButton("Quit", (d, w) -> finish())
+                // A controller's Start is Play, from wherever the focus is: the settings are
+                // usually as they were left, and the pad is already in the hands.
+                .setOnKeyListener((d, code, event) -> {
+                    if (code != KeyEvent.KEYCODE_BUTTON_START) return false;
+                    if (event.getAction() == KeyEvent.ACTION_UP) {
+                        ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+                    }
+                    return true;
+                })
                 .show();
     }
 
