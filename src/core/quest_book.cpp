@@ -864,6 +864,15 @@ void QuestLog::initialize_with_npc(const QuestDefinition& quest, const std::stri
     }
 }
 
+void QuestLog::set_giver(const QuestDefinition& quest, const std::string& unit) {
+    const std::string key = upper(quest.name);
+    if (unit.empty()) {
+        givers_.erase(key);
+    } else {
+        givers_[key] = upper(unit);
+    }
+}
+
 // PORT: the log's state set from outside.
 void QuestLog::restore_offer(const QuestDefinition& quest, const Offered& rolled,
                              const std::string& giver) {
