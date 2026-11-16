@@ -162,6 +162,44 @@ const GameHud::Sprite* GameHud::sprite(const std::string& name) const {
     return found == sprites_.end() ? nullptr : &found->second;
 }
 
+bool GameHud::icon_art(const std::string& name, Ogre::MaterialPtr& material, float& u0,
+                       float& v0, float& u1, float& v1) const {
+    const Sprite* art = name.empty() ? nullptr : sprite(name);
+    if (art == nullptr || !art->texture || !art->material || art->rect == nullptr) return false;
+    const float tw = static_cast<float>(art->texture->getWidth());
+    const float th = static_cast<float>(art->texture->getHeight());
+    if (tw <= 0.0f || th <= 0.0f) return false;
+    material = art->material;
+    u0 = static_cast<float>(art->rect->x) / tw;
+    v0 = static_cast<float>(art->rect->y) / th;
+    u1 = static_cast<float>(art->rect->x + art->rect->width) / tw;
+    v1 = static_cast<float>(art->rect->y + art->rect->height) / th;
+    return true;
+}
+
+int GameHud::second_tap_at(float x, float y) const {
+    if (!second_shown()) return -1;
+    const auto inside = [&](const Node& node) {
+        return node.panel != nullptr && x >= node.draw_left && x <= node.draw_left + node.draw_width &&
+               y >= node.draw_top && y <= node.draw_top + node.draw_height;
+    };
+    for (const Node& node : nodes_) {
+        if (!node.second || node.hidden) continue;
+        if (lowered(node.image) == "bag" && inside(node)) return kSecondBag;
+        const int slot = hotbar_slot_of(node.widget, "SkillSlot");
+        if (slot < 0 || node.skill_set != state_.skill_set) continue;
+        // The slot's frame where the layout gives it one (the window the slot hangs from, with
+        // a picture of its own), which is a little larger than the slot.
+        const Node* frame = &node;
+        if (node.parent >= 0) {
+            const Node& parent = nodes_[static_cast<size_t>(node.parent)];
+            if (parent.second && !parent.image.empty()) frame = &parent;
+        }
+        if (inside(*frame)) return slot;
+    }
+    return -1;
+}
+
 bool GameHud::load_art(const std::string& group) {
     // The item icons, then the PC's own sets (the panel looks the interface pack leaves out),
     // both optional.

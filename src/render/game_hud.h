@@ -157,6 +157,16 @@ public:
         return {second_overlay_, second_text_overlay_};
     }
     bool second_shown() const { return built_ && visible_ && !layout_hidden_ && second_on_; }
+    /// PORT: one of the HUD's named pictures (a frame, an item's icon), for something else that
+    /// draws beside it: its sheet's material and its rectangle there. False for a name the
+    /// sheets have not got.
+    bool icon_art(const std::string& name, Ogre::MaterialPtr& material, float& u0, float& v0,
+                  float& u1, float& v1) const;
+    /// PORT: what of the strip a touch at (`x`, `y`) on the second display is on, both as
+    /// fractions of that display: a hotbar slot of the bank that is up (0..9, `SkillSlot1`
+    /// being 0), `kSecondBag` for the bag, or -1 for neither. -1 while the strip is not there.
+    static constexpr int kSecondBag = 100;
+    int second_tap_at(float x, float y) const;
     /// How far down the second display the strip reaches, as a fraction of its height: 0 while
     /// nothing is drawn there.
     float second_band() const { return built_ && second_on_ ? second_band_ : 0.0f; }

@@ -23,9 +23,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.InputFilter;
 import android.view.Display;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -84,6 +87,12 @@ public final class GameActivity extends NativeActivity {
      * away. Returns once the engine has stopped drawing into one taken away.
      */
     private static native void secondSurface(Surface surface);
+
+    /**
+     * The engine's too: a tap on the second display, where the finger came
+     * up, in the surface's pixels. The engine takes it on its own thread.
+     */
+    private static native void secondTap(float x, float y);
 
     /**
      * Show the engine's window on the second display, or take it down. Called
@@ -153,6 +162,28 @@ public final class GameActivity extends NativeActivity {
             }
             @Override public void surfaceDestroyed(SurfaceHolder holder) {
                 tellEngine(null);
+            }
+        });
+        // A tap: down and up again soon and nearly where it went down. Anything
+        // longer or further is not the engine's (it has no use for a drag yet).
+        final int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        view.setOnTouchListener(new View.OnTouchListener() {
+            private float downX, downY;
+            @Override public boolean onTouch(View touched, MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    downX = event.getX();
+                    downY = event.getY();
+                } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                        && event.getEventTime() - event.getDownTime() < 500
+                        && Math.abs(event.getX() - downX) <= slop
+                        && Math.abs(event.getY() - downY) <= slop) {
+                    try {
+                        secondTap(event.getX(), event.getY());
+                    } catch (UnsatisfiedLinkError notRegistered) {
+                        // As tellEngine().
+                    }
+                }
+                return true;
             }
         });
         presentation.setContentView(view);

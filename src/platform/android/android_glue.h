@@ -55,6 +55,10 @@ void show_second_screen(bool on);
 /// what a renderer made later (New Game's restart) starts from.
 ANativeWindow* second_screen_window();
 
+/// The oldest tap on the second display not yet taken, in its surface's pixels: where the
+/// finger came up. False when there is none. On the engine's thread.
+bool take_second_screen_tap(float& x, float& y);
+
 /// The activity's natives, registered once before the engine starts (android_main()).
 void register_second_screen();
 

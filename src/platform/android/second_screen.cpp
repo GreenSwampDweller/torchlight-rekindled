@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace tl::core::android {
 
@@ -59,6 +60,22 @@ void JNICALL second_surface(JNIEnv* env, jclass, jobject surface) {
         __android_log_print(ANDROID_LOG_WARN, "torchlight",
                             "second screen: the engine did not let its surface go in time");
     }
+}
+
+// GameActivity.secondTap(float, float): on the UI thread. A few are kept; a tap made while the
+// engine is not taking them (a loading screen) is not acted on long after.
+struct Tap {
+    float x;
+    float y;
+};
+std::mutex g_tap_mutex;
+std::vector<Tap> g_taps;
+constexpr size_t kMostTaps = 8;
+
+void JNICALL second_tap(JNIEnv*, jclass, jfloat x, jfloat y) {
+    const std::lock_guard<std::mutex> lock(g_tap_mutex);
+    if (g_taps.size() >= kMostTaps) g_taps.erase(g_taps.begin());
+    g_taps.push_back(Tap{x, y});
 }
 
 // The engine's thread attached for a call into the activity, and detached after if it was not.
@@ -99,8 +116,9 @@ void register_second_screen() {
     jclass type = jni.env->GetObjectClass(jni.activity);
     const JNINativeMethod methods[] = {
         {"secondSurface", "(Landroid/view/Surface;)V", reinterpret_cast<void*>(second_surface)},
+        {"secondTap", "(FF)V", reinterpret_cast<void*>(second_tap)},
     };
-    const bool registered = jni.env->RegisterNatives(type, methods, 1) == JNI_OK;
+    const bool registered = jni.env->RegisterNatives(type, methods, 2) == JNI_OK;
     jni.env->DeleteLocalRef(type);
     if (!registered) {
         // An activity without the method (NativeActivity itself, started by hand).
@@ -117,6 +135,15 @@ void show_second_screen(bool on) {
     jni.env->DeleteLocalRef(type);
     if (method == nullptr) return;  // the exception is cleared as `jni` goes
     jni.env->CallVoidMethod(jni.activity, method, static_cast<jboolean>(on ? JNI_TRUE : JNI_FALSE));
+}
+
+bool take_second_screen_tap(float& x, float& y) {
+    const std::lock_guard<std::mutex> lock(g_tap_mutex);
+    if (g_taps.empty()) return false;
+    x = g_taps.front().x;
+    y = g_taps.front().y;
+    g_taps.erase(g_taps.begin());
+    return true;
 }
 
 void set_second_screen_hooks(SecondScreenHooks hooks) { g_second_hooks = std::move(hooks); }

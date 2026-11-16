@@ -10,10 +10,16 @@
 #endif
 
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <utility>
 
 namespace tl::render {
+
+namespace {
+/// The item the second display's portal button uses, by the name the game's data gives it.
+constexpr const char* kTownPortalScroll = "Town Portal Scroll";
+}  // namespace
 
 void Renderer::Impl::watch_window_surface() {
     if (!config.headless) tl::core::platform_set_frame_rate(static_cast<float>(config.fps_limit));
@@ -149,13 +155,69 @@ void Renderer::Impl::apply_second_screen(bool up) {
     automap.set_second_screen_top(band);
     SecondScreen::Shape shape;
     shape.strip_bottom = band * static_cast<float>(second_window->getHeight());
+    // No bezel round a level map: it has no circle.
     float left = 0.0f, top = 0.0f, side = 0.0f;
-    if (automap.second_screen_square(left, top, side)) {
+    if (!automap.second_screen_level_map() && automap.second_screen_square(left, top, side)) {
         shape.centre_x = left + side * 0.5f;
         shape.centre_y = top + side * 0.5f;
         shape.radius = side * 0.5f;
     }
     second_screen.attach(second_window, &game_hud, shape);
+}
+
+void Renderer::Impl::step_second_screen() {
+    second_portal_tap = false;
+    second_skill_tap = tl::core::HotbarButton::None;
+    second_bag_tap = false;
+    second_spell_tap = -1;
+#if defined(TL_PLATFORM_ANDROID)
+    float x = 0.0f, y = 0.0f;
+    while (tl::core::android::take_second_screen_tap(x, y)) {
+        if (second_window == nullptr || !second_window->isActive()) continue;
+        int spell = -1;
+        switch (second_screen.hit(x, y, &spell)) {
+            case SecondScreen::Tap::Spell: second_spell_tap = spell; break;
+            case SecondScreen::Tap::Map:
+                // The other view of the map, and the backdrop for it.
+                if (automap.toggle_second_screen_level_map()) apply_second_screen(true);
+                break;
+            case SecondScreen::Tap::Portal: second_portal_tap = true; break;
+            case SecondScreen::Tap::Strip: {
+                // A slot of the bank that is up, as the button the pad fires it with; the bag.
+                const int on = game_hud.second_tap_at(
+                    x / static_cast<float>(second_window->getWidth()),
+                    y / static_cast<float>(second_window->getHeight()));
+                if (on == GameHud::kSecondBag) {
+                    second_bag_tap = true;
+                } else if (on >= 0) {
+                    second_skill_tap = tl::core::hotbar_slot_button(on, player_skills.skill_set());
+                }
+                break;
+            }
+            case SecondScreen::Tap::None: break;
+        }
+    }
+#endif
+    if (second_window == nullptr || !second_window->isActive()) return;
+    SecondScreen::Readout readout;
+    readout.level = player_character.level();
+    readout.fame_level = player_character.fame_level();
+    readout.gold = player_inventory.gold();
+    readout.floor = level_display_name;
+    readout.portal_scrolls = player_inventory.count_by_name(kTownPortalScroll);
+    const int scroll = player_inventory.find_by_name(kTownPortalScroll);
+    if (scroll >= 0) readout.portal_icon = player_inventory.slots()[static_cast<size_t>(scroll)].item.icon;
+    // The spells learned from scrolls, as the hotbar shows a skill: its picture, and the
+    // seconds it is cooling for.
+    for (size_t slot = 0; slot < readout.spells.size(); ++slot) {
+        const tl::core::KnownSkill* spell = player_skills.known_spell(slot);
+        if (spell == nullptr || spell->def == nullptr) continue;
+        readout.spells[slot].known = true;
+        readout.spells[slot].icon = spell->def->icon;
+        readout.spells[slot].cooling =
+            static_cast<int>(std::ceil(player_skill_runner.cooling_time(spell->entry.name)));
+    }
+    second_screen.set_readout(readout);
 }
 
 void Renderer::Impl::adopt_window_size() {

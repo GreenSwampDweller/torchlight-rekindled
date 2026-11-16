@@ -641,6 +641,17 @@ struct Renderer::Impl : tl::core::World {
     /// is one: the map (Automap), the skill slots (GameHud) and the backdrop under both.
     SecondScreen second_screen;
     void apply_second_screen(bool up);
+    /// Each frame of play: the taps made on the second display taken (the map between its two
+    /// views at once; the portal button left in `second_portal_tap` for the hotbar's turn), and
+    /// the readout there brought up to date.
+    void step_second_screen();
+    bool second_portal_tap = false;
+    /// ...and a tap on one of its skill slots, as the pad button that fires that slot, and on
+    /// its bag, for the same turns as the pad's own presses.
+    tl::core::HotbarButton second_skill_tap = tl::core::HotbarButton::None;
+    bool second_bag_tap = false;
+    /// ...and on one of its spell buttons: the slot of the spell to cast, or -1.
+    int second_spell_tap = -1;
     void second_screen_gone();
     /// The render system's current GL context made the one EGL has current, the main window's:
     /// a window made, or given a new surface, makes its own context current behind OGRE's back.

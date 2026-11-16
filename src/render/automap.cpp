@@ -82,6 +82,9 @@ constexpr float kZoomToOrtho = 2.0f;
 /// circle there is some four times the corner's across; at the same window the icons' 32 pixel
 /// tiles would be drawn four times their size.
 constexpr float kSecondScreenView = 2.0f;
+/// ...and how much more its level map shows, top to bottom (the console's own full screen map
+/// has a factor of 5 in its place).
+constexpr float kSecondScreenLevelView = 3.5f;
 
 /// PORT: where the circle is in the mask's and the ring's pictures (`automapmask.dds`,
 /// `automapoverlay.dds`, both 256 square): its centre 0.533 of the way across and down, not the
@@ -1044,8 +1047,25 @@ void Automap::set_zoom(float zoom_val) {
 // (-zoom, +zoom, +zoom, -zoom), a window of `2 * zoom` on both axes.
 void Automap::apply_zoom() {
     if (!mCamera) return;
+    if (on_second_screen() && mSecondLevelMap) {
+        // As tall as the zoom times its factor, and as wide as the room is to its height.
+        const float second_w = static_cast<float>(mSecond->getWidth());
+        const float room = static_cast<float>(mSecond->getHeight()) * (1.0f - mSecondTop);
+        const float tall = mZoom * kZoomToOrtho * kSecondScreenLevelView;
+        const float aspect = room > 0.0f && second_w > 0.0f ? second_w / room : 1.0f;
+        mCamera->setOrthoWindow(tall * aspect, tall);
+        return;
+    }
     const float window = mZoom * kZoomToOrtho * (on_second_screen() ? kSecondScreenView : 1.0f);
     mCamera->setOrthoWindow(window, window);
+}
+
+bool Automap::toggle_second_screen_level_map() {
+    if (!on_second_screen() || !mVisible) return false;
+    mSecondLevelMap = !mSecondLevelMap;
+    update_viewport_dimensions();
+    apply_zoom();
+    return true;
 }
 
 void Automap::update_viewport_dimensions() {
@@ -1072,11 +1092,20 @@ void Automap::update_viewport_dimensions() {
         if (mRingQuad) mRingQuad->setVisible(false);
         place_circle(false);
     } else if (on_second_screen()) {
-        // PORT: the second screen's own: the circle in the middle of the room it has there.
+        // PORT: the second screen's own: the circle in the middle of the room it has there, or
+        // the level map over all of that room, with neither mask nor ring.
         float left = 0.0f, top = 0.0f, side = 0.0f;
         if (!second_screen_square(left, top, side)) return;
         const float second_w = static_cast<float>(mSecond->getWidth());
         const float second_h = static_cast<float>(mSecond->getHeight());
+        if (mSecondLevelMap) {
+            mViewport->setDimensions(0.0f, mSecondTop, 1.0f, 1.0f - mSecondTop);
+            if (mCullQuad) mCullQuad->setVisible(false);
+            if (mRingQuad) mRingQuad->setVisible(false);
+            place_circle(false);
+            apply_zoom();
+            return;
+        }
         mViewport->setDimensions(left / second_w, top / second_h, side / second_w,
                                  side / second_h);
         mCamera->setAspectRatio(1.0f);

@@ -161,6 +161,11 @@ public:
     /// The map's square on the second screen, in its pixels: its left, top and side. False
     /// while there is no second screen.
     bool second_screen_square(float& left, float& top, float& side) const;
+    /// PORT: the second screen's map between the circle round the player and the level map:
+    /// all the room it has there, square-cornered, showing several times as much of the level.
+    /// Nothing happens unless the map is up on that screen. True when it changed.
+    bool toggle_second_screen_level_map();
+    bool second_screen_level_map() const { return mSecondLevelMap; }
 
     MapMode mode() const { return mMode; }
     bool visible() const { return mVisible; }
@@ -208,6 +213,7 @@ private:
     Ogre::Viewport* mViewport = nullptr;
     Ogre::RenderWindow* mSecond = nullptr;  ///< set_second_screen()
     float mSecondTop = 0.0f;                ///< set_second_screen_top()
+    bool mSecondLevelMap = false;           ///< toggle_second_screen_level_map()
     Ogre::SceneNode* mNodeTiles = nullptr;
     Ogre::SceneNode* mNodeCull = nullptr;
     Ogre::SceneNode* mNodeRing = nullptr;

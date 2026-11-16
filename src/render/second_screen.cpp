@@ -4,6 +4,7 @@
 #include "render/automap.h"
 #include "render/game_hud.h"
 #include "render/menu_chrome.h"
+#include "render/overlay_set.h"
 
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreMaterialManager.h>
@@ -11,6 +12,7 @@
 #include <OgreOverlayContainer.h>
 #include <OgreOverlayManager.h>
 #include <OgrePanelOverlayElement.h>
+#include <OgreTextAreaOverlayElement.h>
 #include <OgreRenderWindow.h>
 #include <OgreTextureManager.h>
 #include <OgreViewport.h>
@@ -28,6 +30,31 @@ namespace {
 constexpr int kBackdropZOrder = 0;
 
 constexpr float kPi = 3.14159265358979f;
+
+/// The widgets, as fractions of the window's height: the portal button's side, how far it and
+/// the readout are from the edges, and the gap between the strip and the readout under it.
+constexpr float kButtonSide = 0.125f;
+constexpr float kEdge = 0.03f;
+constexpr float kUnderStrip = 0.012f;
+/// The frame the HUD's own slots are drawn in, and how far inside it a slot's picture is (36
+/// of its 48).
+constexpr const char* kFrameArt = "spells_window";
+constexpr float kFrameInset = 6.0f / 48.0f;
+/// The readout's and the count's sizes, in the interface's points.
+constexpr float kReadoutPoints = 15.0f;
+constexpr float kCountPoints = 14.0f;
+
+const Ogre::ColourValue kWordColour(0.92f, 0.86f, 0.70f, 1.0f);
+const Ogre::ColourValue kDimColour(0.55f, 0.52f, 0.45f, 1.0f);
+
+/// 12345 as "12,345".
+std::string grouped(int value) {
+    std::string digits = std::to_string(value < 0 ? -value : value);
+    for (int at = static_cast<int>(digits.size()) - 3; at > 0; at -= 3) {
+        digits.insert(static_cast<size_t>(at), ",");
+    }
+    return value < 0 ? "-" + digits : digits;
+}
 
 /// The picture, 8 bits a channel, added to and clamped.
 struct Canvas {
@@ -137,10 +164,14 @@ void SecondScreen::attach(Ogre::RenderWindow* window, GameHud* hud, const Shape&
         window_->addListener(this);
     }
     hud_ = hud;
+    shape_ = shape;
     if (window_->hasViewportWithZOrder(kBackdropZOrder)) {
         window_->getViewportByZOrder(kBackdropZOrder)->setOverlaysEnabled(true);
     }
     build_backdrop(window_->getWidth(), window_->getHeight(), shape);
+    build_widgets();
+    layout_widgets();
+    apply_readout();
 }
 
 void SecondScreen::detach() {
@@ -155,6 +186,7 @@ void SecondScreen::detach() {
     hidden_.clear();
     shown_.clear();
     swapped_ = false;
+    destroy_widgets();
     destroy_backdrop();
 }
 
@@ -178,6 +210,8 @@ void SecondScreen::preViewportUpdate(const Ogre::RenderTargetViewportEvent& evt)
     show(backdrop_);
     if (hud_ != nullptr && hud_->second_shown()) {
         for (Ogre::Overlay* overlay : hud_->second_overlays()) show(overlay);
+        show(widgets_);
+        show(words_);
     }
 }
 
@@ -188,6 +222,286 @@ void SecondScreen::postViewportUpdate(const Ogre::RenderTargetViewportEvent&) {
     for (Ogre::Overlay* overlay : hidden_) overlay->show();
     shown_.clear();
     hidden_.clear();
+}
+
+void SecondScreen::set_readout(const Readout& readout) {
+    const bool same = readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
+                      readout.gold == readout_.gold && readout.floor == readout_.floor &&
+                      readout.portal_scrolls == readout_.portal_scrolls &&
+                      readout.portal_icon == readout_.portal_icon &&
+                      readout.spells == readout_.spells;
+    if (same) return;
+    // The scroll's picture is kept once seen: the button shows it, dimmed, with none carried.
+    const std::string icon = readout.portal_icon.empty() ? readout_.portal_icon : readout.portal_icon;
+    readout_ = readout;
+    readout_.portal_icon = icon;
+    apply_readout();
+}
+
+SecondScreen::Tap SecondScreen::hit(float x, float y, int* spell) const {
+    if (window_ == nullptr || hud_ == nullptr || !hud_->second_shown()) return Tap::None;
+    const auto on = [&](float left, float top) {
+        return portal_size_ > 0.0f && x >= left && x <= left + portal_size_ && y >= top &&
+               y <= top + portal_size_;
+    };
+    if (on(portal_left_, portal_top_)) return Tap::Portal;
+    for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
+        if (!readout_.spells[slot].known || !on(spell_buttons_[slot].left, spell_buttons_[slot].top)) {
+            continue;
+        }
+        if (spell != nullptr) *spell = static_cast<int>(slot);
+        return Tap::Spell;
+    }
+    return y > shape_.strip_bottom ? Tap::Map : Tap::Strip;
+}
+
+void SecondScreen::build_widgets() {
+    if (widgets_ != nullptr) return;
+    if (!ensure_menu_font()) return;
+    try {
+        auto& overlays = Ogre::OverlayManager::getSingleton();
+        widgets_ = overlays.create("tl/second/widgets");
+        widgets_->setZOrder(475);  // over the HUD's strip (473, 474), which it never overlaps
+        words_ = overlays.create("tl/second/words");
+        words_->setZOrder(476);
+        const auto root = [&](const char* name, Ogre::Overlay* into) {
+            auto* box =
+                static_cast<Ogre::OverlayContainer*>(overlays.createOverlayElement("Panel", name));
+            box->setMetricsMode(Ogre::GMM_RELATIVE);
+            box->setPosition(0.0f, 0.0f);
+            box->setDimensions(1.0f, 1.0f);
+            static_cast<Ogre::PanelOverlayElement*>(box)->setTransparent(true);
+            into->add2D(box);
+            return box;
+        };
+        widget_root_ = root("tl/second/widgetroot", widgets_);
+        word_root_ = root("tl/second/wordroot", words_);
+        const auto panel = [&](const char* name) {
+            auto* made = static_cast<Ogre::PanelOverlayElement*>(
+                overlays.createOverlayElement("Panel", name));
+            made->setMetricsMode(Ogre::GMM_RELATIVE);
+            made->setTransparent(true);  // until it has a picture
+            widget_root_->addChild(made);
+            return made;
+        };
+        // The frame's name sorts before the icon's: a container draws its children by name.
+        portal_frame_ = panel("tl/second/portal/0frame");
+        portal_icon_ = panel("tl/second/portal/1icon");
+        for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
+            const std::string stem = "tl/second/spell/" + std::to_string(slot);
+            spell_buttons_[slot].frame = panel((stem + "/0frame").c_str());
+            spell_buttons_[slot].icon = panel((stem + "/1icon").c_str());
+        }
+        const auto words = [&](const char* name, Ogre::TextAreaOverlayElement::Alignment align) {
+            auto* made = static_cast<Ogre::TextAreaOverlayElement*>(
+                overlays.createOverlayElement("TextArea", name));
+            made->setMetricsMode(Ogre::GMM_RELATIVE);
+            made->setFontName(kFontName, Ogre::RGN_INTERNAL);
+            made->setColour(kWordColour);
+            made->setAlignment(align);
+            word_root_->addChild(made);
+            return made;
+        };
+        using Align = Ogre::TextAreaOverlayElement;
+        portal_count_ = words("tl/second/portal/count", Align::Right);
+        portal_label_ = words("tl/second/portal/label", Align::Left);
+        level_text_ = words("tl/second/level", Align::Left);
+        fame_text_ = words("tl/second/fame", Align::Left);
+        floor_text_ = words("tl/second/floor", Align::Right);
+        gold_text_ = words("tl/second/gold", Align::Right);
+        for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
+            const std::string name = "tl/second/spell/" + std::to_string(slot) + "/cooling";
+            spell_buttons_[slot].cooling = words(name.c_str(), Align::Center);
+        }
+        // Never shown here: preViewportUpdate() shows them for the second window's viewport.
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_WARN("second screen: no readout: %s", e.getDescription().c_str());
+        destroy_widgets();
+    }
+}
+
+void SecondScreen::destroy_widgets() {
+    if (Ogre::OverlayManager* overlays = Ogre::OverlayManager::getSingletonPtr()) {
+        for (Ogre::Overlay* overlay : {widgets_, words_}) {
+            if (overlay != nullptr) overlay->hide();
+        }
+        for (SpellButton& button : spell_buttons_) {
+            for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(button.frame),
+                                                  static_cast<Ogre::OverlayElement*>(button.icon),
+                                                  static_cast<Ogre::OverlayElement*>(button.cooling)}) {
+                if (element == nullptr) continue;
+                if (Ogre::OverlayContainer* parent = element->getParent()) {
+                    parent->removeChild(element->getName());
+                }
+                overlays->destroyOverlayElement(element);
+            }
+        }
+        for (Ogre::OverlayElement* element :
+             {static_cast<Ogre::OverlayElement*>(portal_frame_),
+              static_cast<Ogre::OverlayElement*>(portal_icon_),
+              static_cast<Ogre::OverlayElement*>(portal_count_),
+              static_cast<Ogre::OverlayElement*>(portal_label_),
+              static_cast<Ogre::OverlayElement*>(level_text_),
+              static_cast<Ogre::OverlayElement*>(fame_text_),
+              static_cast<Ogre::OverlayElement*>(floor_text_),
+              static_cast<Ogre::OverlayElement*>(gold_text_)}) {
+            if (element == nullptr) continue;
+            if (Ogre::OverlayContainer* parent = element->getParent()) {
+                parent->removeChild(element->getName());
+            }
+            overlays->destroyOverlayElement(element);
+        }
+        if (widget_root_ != nullptr && widgets_ != nullptr) widgets_->remove2D(widget_root_);
+        if (word_root_ != nullptr && words_ != nullptr) words_->remove2D(word_root_);
+        if (widget_root_ != nullptr) overlays->destroyOverlayElement(widget_root_);
+        if (word_root_ != nullptr) overlays->destroyOverlayElement(word_root_);
+        if (widgets_ != nullptr) overlays->destroy(widgets_);
+        if (words_ != nullptr) overlays->destroy(words_);
+    }
+    widgets_ = nullptr;
+    words_ = nullptr;
+    widget_root_ = nullptr;
+    word_root_ = nullptr;
+    portal_frame_ = nullptr;
+    portal_icon_ = nullptr;
+    portal_count_ = nullptr;
+    portal_label_ = nullptr;
+    level_text_ = nullptr;
+    fame_text_ = nullptr;
+    floor_text_ = nullptr;
+    gold_text_ = nullptr;
+    shown_icon_.clear();
+    portal_size_ = 0.0f;
+    spell_buttons_ = {};
+}
+
+// The readout in the two corners under the strip - the character on the left, the place and
+// the purse on the right - and the portal button in the bottom left corner, all clear of the
+// map's circle.
+void SecondScreen::layout_widgets() {
+    if (window_ == nullptr || widgets_ == nullptr) return;
+    const float across = static_cast<float>(window_->getWidth());
+    const float down = static_cast<float>(window_->getHeight());
+    if (across <= 0.0f || down <= 0.0f) return;
+    const float edge = kEdge * down;
+    // The interface's own rule for a text's size: its points at 768 lines, scaled to the screen.
+    const float scale = down / kNativeHeight;
+    const float line = kReadoutPoints * ui_points_to_pixels() * scale;
+    const float count_line = kCountPoints * ui_points_to_pixels() * scale;
+
+    const float first = shape_.strip_bottom + kUnderStrip * down;
+    const auto place = [&](Ogre::TextAreaOverlayElement* text, float x, float y, float height) {
+        if (text == nullptr) return;
+        set_char_height(text, height / down);
+        text->setPosition(x / across, y / down);
+    };
+    place(level_text_, edge, first, line);
+    place(fame_text_, edge, first + line * 1.15f, line);
+    place(floor_text_, across - edge, first, line);
+    place(gold_text_, across - edge, first + line * 1.15f, line);
+
+    portal_size_ = kButtonSide * down;
+    portal_left_ = edge;
+    portal_top_ = down - edge - portal_size_;
+    if (portal_frame_ != nullptr) {
+        portal_frame_->setPosition(portal_left_ / across, portal_top_ / down);
+        portal_frame_->setDimensions(portal_size_ / across, portal_size_ / down);
+    }
+    if (portal_icon_ != nullptr) {
+        const float inset = portal_size_ * kFrameInset;
+        portal_icon_->setPosition((portal_left_ + inset) / across, (portal_top_ + inset) / down);
+        portal_icon_->setDimensions((portal_size_ - inset * 2.0f) / across,
+                                    (portal_size_ - inset * 2.0f) / down);
+    }
+    // The count in the button's bottom right corner, the word beside the button.
+    place(portal_count_, portal_left_ + portal_size_ * 0.86f,
+          portal_top_ + portal_size_ * 0.86f - count_line, count_line);
+    place(portal_label_, portal_left_ + portal_size_ + edge * 0.4f,
+          portal_top_ + (portal_size_ - count_line) * 0.5f, count_line);
+
+    // The spells: the first slot in the bottom right corner, the rest above it. The seconds a
+    // spell is cooling for are written across the middle of its picture.
+    const float inset = portal_size_ * kFrameInset;
+    const float gap = edge * 0.3f;
+    for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
+        SpellButton& button = spell_buttons_[slot];
+        button.left = across - edge - portal_size_;
+        button.top = down - edge - portal_size_ - static_cast<float>(slot) * (portal_size_ + gap);
+        if (button.frame != nullptr) {
+            button.frame->setPosition(button.left / across, button.top / down);
+            button.frame->setDimensions(portal_size_ / across, portal_size_ / down);
+        }
+        if (button.icon != nullptr) {
+            button.icon->setPosition((button.left + inset) / across, (button.top + inset) / down);
+            button.icon->setDimensions((portal_size_ - inset * 2.0f) / across,
+                                       (portal_size_ - inset * 2.0f) / down);
+        }
+        place(button.cooling, button.left + portal_size_ * 0.5f,
+              button.top + (portal_size_ - line * 1.4f) * 0.5f, line * 1.4f);
+    }
+}
+
+void SecondScreen::apply_readout() {
+    if (widgets_ == nullptr) return;
+    if (level_text_ != nullptr) set_caption(level_text_, "Level " + std::to_string(readout_.level));
+    if (fame_text_ != nullptr) {
+        set_caption(fame_text_, "Fame " + std::to_string(readout_.fame_level));
+    }
+    if (floor_text_ != nullptr) set_caption(floor_text_, readout_.floor);
+    if (gold_text_ != nullptr) set_caption(gold_text_, grouped(readout_.gold) + " gold");
+
+    const bool carried = readout_.portal_scrolls > 0;
+    if (portal_count_ != nullptr) {
+        set_caption(portal_count_, std::to_string(readout_.portal_scrolls));
+        set_colour(portal_count_, carried ? kWordColour : kDimColour);
+    }
+    if (portal_label_ != nullptr) {
+        set_caption(portal_label_, "Town Portal");
+        set_colour(portal_label_, carried ? kWordColour : kDimColour);
+    }
+    // The pictures are the HUD's: its slot frame, and the scroll's own icon.
+    const auto picture = [this](Ogre::PanelOverlayElement* panel, const std::string& name) {
+        if (panel == nullptr) return false;
+        Ogre::MaterialPtr material;
+        float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+        if (hud_ == nullptr || !hud_->icon_art(name, material, u0, v0, u1, v1)) return false;
+        panel->setMaterial(material);
+        panel->setUV(u0, v0, u1, v1);
+        panel->setTransparent(false);
+        return true;
+    };
+    if (portal_frame_ != nullptr && portal_frame_->isTransparent()) picture(portal_frame_, kFrameArt);
+    if (portal_icon_ != nullptr && readout_.portal_icon != shown_icon_) {
+        if (picture(portal_icon_, readout_.portal_icon)) shown_icon_ = readout_.portal_icon;
+    }
+
+    // A button for each slot that holds a spell; nothing at all for an empty one.
+    for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
+        SpellButton& button = spell_buttons_[slot];
+        const Readout::Spell& spell = readout_.spells[slot];
+        if (button.frame == nullptr || button.icon == nullptr) continue;
+        if (!spell.known) {
+            button.frame->hide();
+            button.icon->hide();
+            if (button.cooling != nullptr) set_caption(button.cooling, "");
+            continue;
+        }
+        if (button.frame->isTransparent()) picture(button.frame, kFrameArt);
+        if (spell.icon != button.shown_icon) {
+            // A picture the sheets have not got leaves the frame bare.
+            if (picture(button.icon, spell.icon)) {
+                button.shown_icon = spell.icon;
+            } else {
+                button.icon->setTransparent(true);
+                button.shown_icon.clear();
+            }
+        }
+        button.frame->show();
+        button.icon->show();
+        if (button.cooling != nullptr) {
+            set_caption(button.cooling, spell.cooling > 0 ? std::to_string(spell.cooling) : "");
+        }
+    }
 }
 
 void SecondScreen::build_backdrop(unsigned width, unsigned height, const Shape& shape) {
