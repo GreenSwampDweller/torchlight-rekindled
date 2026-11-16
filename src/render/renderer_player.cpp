@@ -786,7 +786,10 @@ void Renderer::Impl::drive_player(float delta) {
     // closes it (`vfunc_2`'s default case).
     const bool pet_dialog_up =
         inventory_menu.pet_commands_open() || inventory_menu.spell_remove_open();
-    if (pet_stance_edge && pet.alive() && !skills_tab_open && !pet_dialog_up) {
+    // PORT: and under any of the menu's screens the D-pad moves the cursor, so a press there
+    // is not one of the pet's commands as well.
+    const bool pet_commands_wait = skills_tab_open || pet_dialog_up || inventory_menu.visible();
+    if (pet_stance_edge && pet.alive() && !pet_commands_wait) {
         pet.cycle_stance();
         apply_pet_stance();
         const tl::core::PetStance stance = pet.stance();
@@ -795,7 +798,7 @@ void Renderer::Impl::drive_player(float delta) {
                                                                           : "passive");
         refresh_game_hud();
     }
-    if (pet_town_edge && !skills_tab_open && !pet_dialog_up) {
+    if (pet_town_edge && !pet_commands_wait) {
         send_pet_to_town();
         update_menu();
     }
