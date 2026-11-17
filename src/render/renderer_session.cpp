@@ -2048,6 +2048,21 @@ bool Renderer::save_character(const std::string& path, bool force) {
     return impl_->save_character(path, force);
 }
 
+// PORT: see renderer.h. A scene is the bars up, a line being spoken, or the level's script
+// still running one.
+bool Renderer::save_for_background(const std::string& path) {
+    Impl& m = *impl_;
+    if (!m.player_control || path.empty()) return false;
+    if (m.hud.letterboxed() || m.quest_dialog.visible() || m.script_dialog_open() ||
+        m.cinematic_open) {
+        TL_LOG_INFO("save: not saved on the way to the background: a scene is playing");
+        return false;
+    }
+    const bool saved = m.save_character(path, false);
+    TL_LOG_INFO("save: %s on the way to the background", saved ? "saved" : "not saved");
+    return saved;
+}
+
 namespace renderer_detail {
 // The directory a save file sits in, with its separator.
 // PORT: file I/O, the directory of a save file.
