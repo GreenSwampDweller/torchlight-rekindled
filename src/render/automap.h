@@ -166,6 +166,9 @@ public:
     /// Nothing happens unless the map is up on that screen. True when it changed.
     bool toggle_second_screen_level_map();
     bool second_screen_level_map() const { return mSecondLevelMap; }
+    /// PORT: the second screen given to something else for a while (the item windows,
+    /// render/second_screen.h): the map there is not drawn, and comes back as it was.
+    void set_second_screen_covered(bool covered);
 
     MapMode mode() const { return mMode; }
     bool visible() const { return mVisible; }
@@ -214,6 +217,7 @@ private:
     Ogre::RenderWindow* mSecond = nullptr;  ///< set_second_screen()
     float mSecondTop = 0.0f;                ///< set_second_screen_top()
     bool mSecondLevelMap = false;           ///< toggle_second_screen_level_map()
+    bool mSecondCovered = false;            ///< set_second_screen_covered()
     Ogre::SceneNode* mNodeTiles = nullptr;
     Ogre::SceneNode* mNodeCull = nullptr;
     Ogre::SceneNode* mNodeRing = nullptr;

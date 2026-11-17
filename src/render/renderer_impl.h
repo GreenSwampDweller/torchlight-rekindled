@@ -1009,6 +1009,13 @@ struct Renderer::Impl : tl::core::World {
     void toggle_item_compare();
     void step_item_tooltips(float dt);
     void show_item_tooltips();
+    bool focused_tray_item(const tl::core::Inventory*& held_in, int& slot,
+                           tl::core::EquipmentTooltipContext& context);
+    /// PORT: the second display's item windows (render/second_screen.h), and the cursor they
+    /// were last made for and how many frames ago.
+    void step_second_item_tips();
+    int second_item_key = -1;
+    int second_item_age = 0;
     std::vector<tl::core::EquipmentTooltip> item_tooltips(const tl::core::Inventory& held_in,
                                                           int slot,
                                                           tl::core::EquipmentTooltipContext context,

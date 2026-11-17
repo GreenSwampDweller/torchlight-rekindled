@@ -89,11 +89,25 @@ void Renderer::Impl::step_item_tooltips(float dt) {
 // tray's selected item and, with item compare on, for the worn items
 // `CInventory::getComparisonItems` names.
 void Renderer::Impl::show_item_tooltips() {
-    const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
-    const InventoryMenu::Tray tray = inventory_menu.focused_tray();
-    const tl::core::Inventory* held_in = &player_inventory;
+    const tl::core::Inventory* held_in = nullptr;
     int slot = -1;
     tl::core::EquipmentTooltipContext context;
+    item_tip_shown = true;
+    if (!focused_tray_item(held_in, slot, context)) {
+        inventory_menu.set_item_tooltips({});
+        return;
+    }
+    inventory_menu.set_item_tooltips(item_tooltips(*held_in, slot, context, item_compare));
+}
+
+/// The item under the focused tray's cursor: the inventory it is in, its slot there, and
+/// whose it is. False with nothing under it.
+bool Renderer::Impl::focused_tray_item(const tl::core::Inventory*& held_in, int& slot,
+                                       tl::core::EquipmentTooltipContext& context) {
+    const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
+    const InventoryMenu::Tray tray = inventory_menu.focused_tray();
+    held_in = &player_inventory;
+    slot = -1;
     if (vendor_screen && tray == InventoryMenu::Tray::Vendor) {
         held_in = inventory_menu.vendor_stock();
         slot = inventory_menu.selected_vendor_slot();
@@ -108,13 +122,40 @@ void Renderer::Impl::show_item_tooltips() {
     } else {
         slot = inventory_menu.selected_slot_index();
     }
-    item_tip_shown = true;
     if (held_in == nullptr || slot < 0 || !held_in->occupied(static_cast<size_t>(slot))) {
-        inventory_menu.set_item_tooltips({});
-        return;
+        return false;
     }
     context.merchant_open = inventory_menu.vendor() == VendorScreen::Merchant;
-    inventory_menu.set_item_tooltips(item_tooltips(*held_in, slot, context, item_compare));
+    return true;
+}
+
+// PORT: the second display's item windows: the item under the inventory's cursor and the
+// worn items it stands against, whatever the item compare switch says and with no wait,
+// while the inventory's own screen is up and nothing is open over it.
+void Renderer::Impl::step_second_item_tips() {
+    const bool up = second_window != nullptr && second_window->isActive() &&
+                    inventory_menu.visible() &&
+                    inventory_menu.menu_mode() == MenuMode::Inventory &&
+                    !inventory_menu.item_select_open() && !inventory_menu.pet_commands_open() &&
+                    !inventory_menu.spell_remove_open();
+    const tl::core::Inventory* held_in = nullptr;
+    int slot = -1;
+    tl::core::EquipmentTooltipContext context;
+    if (!up || !focused_tray_item(held_in, slot, context)) {
+        second_item_key = -1;
+        second_screen.set_item_tips({});
+        if (automap_initialized) automap.set_second_screen_covered(false);
+        return;
+    }
+    // The windows are made again when the cursor moves, and a few times a second besides:
+    // an item put on or sold changes what they say with the cursor where it was.
+    const int key = static_cast<int>(inventory_menu.focused_tray()) * 100000 +
+                    (held_in == &player_inventory ? 0 : 50000) + slot;
+    if (key == second_item_key && ++second_item_age < 20) return;
+    second_item_key = key;
+    second_item_age = 0;
+    second_screen.set_item_tips(item_tooltips(*held_in, slot, context, /*compare=*/true));
+    if (automap_initialized) automap.set_second_screen_covered(second_screen.item_tips_shown());
 }
 
 /// The details of the item in `slot` of `held_in` and, with `compare`, of the worn items

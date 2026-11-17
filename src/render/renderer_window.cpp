@@ -218,6 +218,7 @@ void Renderer::Impl::step_second_screen() {
             static_cast<int>(std::ceil(player_skill_runner.cooling_time(spell->entry.name)));
     }
     second_screen.set_readout(readout);
+    step_second_item_tips();
 }
 
 void Renderer::Impl::adopt_window_size() {
