@@ -1,7 +1,5 @@
 #include "core/pet.h"
 
-#include "core/mods.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -31,9 +29,6 @@ void Pet::spawn(const std::string& unit, const UnitStats& stats, const Vec3& at,
     mirror_ = PetMirror{};
     mirror_.position = at;
     mirror_.facing = facing;
-    // DIVERGENCE: the Big Backpack mod's size when it is on (core/mods.h); a bag fuller than it
-    // keeps its items.
-    bag_.set_backpack_capacity(player_backpack_capacity());
 }
 
 // PORT: the pet record emptied (a new game, or no pet).

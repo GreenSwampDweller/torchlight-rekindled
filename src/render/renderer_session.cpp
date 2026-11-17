@@ -2301,24 +2301,6 @@ bool Renderer::Impl::save_character(const std::string& path, bool force) {
     return true;
 }
 
-namespace {
-
-// DIVERGENCE: a bag sized for a save's items: the Big Backpack mod's capacity (core/mods.h),
-// and a slot for every item the save placed, so one made with the mod on loads whole with it
-// off (it then takes no more until it holds fewer than the capacity).
-tl::core::Inventory bag_for_save(const std::vector<tl::formats::ItemSaveState>& items) {
-    size_t slots = 0;
-    for (const tl::formats::ItemSaveState& item : items) {
-        if (item.slot < 0 || tl::core::is_stash_save_slot(item.slot)) continue;
-        slots = std::max(slots, static_cast<size_t>(item.slot) + 1);
-    }
-    tl::core::Inventory bag;
-    bag.set_backpack_capacity(tl::core::player_backpack_capacity(), slots);
-    return bag;
-}
-
-}  // namespace
-
 CarriedPlayer Renderer::carried_from_file(const tl::formats::CharacterFile& file) {
     Impl& m = *impl_;
     CarriedPlayer carried;
@@ -2404,7 +2386,7 @@ CarriedPlayer Renderer::carried_from_file(const tl::formats::CharacterFile& file
 
     m.ensure_item_index();
     m.load_unit_types();
-    tl::core::Inventory bag = bag_for_save(p.inventory);
+    tl::core::Inventory bag;
     tl::core::Inventory stash = tl::core::make_player_stash();
     for (const tl::formats::ItemSaveState& item : p.inventory) {
         const std::optional<tl::core::ItemStats> copy = m.item_from_save(item);
@@ -2540,7 +2522,6 @@ CarriedPlayer Renderer::carried_from_file(const tl::formats::CharacterFile& file
             carried.pet_spells = pet.spells;
             carried.pet_spell_levels = pet.spell_levels;
             carried.has_pet_bag = true;
-            carried.pet_bag = bag_for_save(pet.inventory);
             carried.pet_bag.set_players_pet(true);
             for (const tl::formats::ItemSaveState& item : pet.inventory) {
                 const std::optional<tl::core::ItemStats> copy = m.item_from_save(item);

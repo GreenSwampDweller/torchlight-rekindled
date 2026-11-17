@@ -1,6 +1,5 @@
 #include "core/mods.h"
 
-#include "core/inventory.h"
 #include "core/log.h"
 #include "core/run_config.h"
 #include "formats/dat_text.h"
@@ -108,7 +107,6 @@ bool make_directory(const std::string& path) {
 
 bool g_free_camera = false;
 bool g_fps_overlay = false;
-uint32_t g_backpack_size = 0;
 ModArchiveReader g_archive_reader;
 
 bool ends_with_upper(const std::string& text, const char* suffix) {
@@ -320,7 +318,6 @@ ModList load_mods(const std::string& mods_dir) {
                 mod.description = info.string_or("DESCRIPTION", "");
                 mod.free_camera = info.bool_or("FREE_CAMERA", false);
                 mod.fps_overlay = info.bool_or("FPS_OVERLAY", false);
-                mod.backpack_size = info.integer_or("BACKPACK_SIZE", 0);
             }
         }
         // `reloadModFiles` runs for a mod that is on, and only that one learns it is empty.
@@ -336,8 +333,8 @@ ModList load_mods(const std::string& mods_dir) {
     return list;
 }
 
-// DIVERGENCE (platform): the free camera, the frame-rate overlay and the big backpack are the
-// port's own, each a mod of its own so it is switched where the mods are. Made once: a `mods.dat` naming one (a
+// DIVERGENCE (platform): the free camera and the frame-rate overlay are the port's own, each a
+// mod of its own so it is switched where the mods are. Made once: a `mods.dat` naming one (a
 // player who deleted it) is left be.
 bool make_port_mod(const std::string& dir, const char* mod_folder, const std::string& info) {
     for (const std::string& folder : list_entries(dir, true)) {
@@ -366,11 +363,6 @@ bool free_camera_mod_on() { return g_free_camera; }
 
 bool fps_overlay_mod_on() { return g_fps_overlay; }
 
-size_t player_backpack_capacity() {
-    if (g_backpack_size == 0) return Inventory::kDefaultBackpackCapacity;
-    return std::min(g_backpack_size, kMaxBackpackSize);
-}
-
 // `CFileSystem::reload`.
 ModList load_game_mods(const std::string& game_data, const std::string& mods_dir, bool free_camera,
                        bool fps_overlay) {
@@ -385,32 +377,21 @@ ModList load_game_mods(const std::string& game_data, const std::string& mods_dir
         "<STRING>NAME:FPS Overlay\r\n<STRING>AUTHOR:Torchlight Rekindled\r\n"
         "<STRING>DESCRIPTION:The frame rate and the screen's size in a corner. L3 hides and "
         "shows it while the game runs.\r\n<BOOL>FPS_OVERLAY:true\r\n");
-    const bool made_backpack = make_port_mod(
-        dir, kBigBackpackMod,
-        "<STRING>NAME:Big Backpack\r\n<STRING>AUTHOR:Torchlight Rekindled\r\n"
-        "<STRING>DESCRIPTION:You and your pet each carry up to " +
-            std::to_string(kBigBackpackSize) +
-            " items instead of 50 (worn gear counts). Switched off again, nothing is lost: a "
-            "fuller bag just takes no more until it is under 50.\r\n<INTEGER>BACKPACK_SIZE:" +
-            std::to_string(kBigBackpackSize) + "\r\n");
     ModList mods = load_mods(dir);
     g_free_camera = false;
     g_fps_overlay = false;
-    g_backpack_size = 0;
     for (ModInfo& mod : mods.mods) {
         const std::string folder = upper_ascii(mod.folder);
         if ((made_camera && !free_camera && folder == upper_ascii(kFreeCameraMod)) ||
-            (made_overlay && !fps_overlay && folder == upper_ascii(kFpsOverlayMod)) ||
-            (made_backpack && folder == upper_ascii(kBigBackpackMod))) {
+            (made_overlay && !fps_overlay && folder == upper_ascii(kFpsOverlayMod))) {
             mod.priority = -1;
         }
         g_free_camera = g_free_camera || (mod.active() && mod.free_camera);
         g_fps_overlay = g_fps_overlay || (mod.active() && mod.fps_overlay);
-        if (mod.active()) g_backpack_size = std::max(g_backpack_size, mod.backpack_size);
     }
     // DIVERGENCE (platform): `mods.dat` is written now rather than by the filter's destructor at
     // exit (`CModFileFilter::~CModFileFilter`), which a device's game seldom reaches.
-    if ((mods.found_new || made_camera || made_overlay || made_backpack) && !save_mods(mods)) {
+    if ((mods.found_new || made_camera || made_overlay) && !save_mods(mods)) {
         TL_LOG_WARN("mods: could not write %smods.dat", mods.mods_dir.c_str());
     }
     return mods;
@@ -433,7 +414,6 @@ void mods_from_command_line(int argc, char** argv, const std::string& game_data,
     // again", and starts as `SAFEMODE` does.
     g_free_camera = false;
     g_fps_overlay = false;
-    g_backpack_size = 0;
     if (safe_mode || (kModsPage && !run_config().mods_menu)) return;
     const ModList mods =
         load_game_mods(game_data, mods_dir, run_config().free_camera, run_config().fps);
@@ -444,11 +424,10 @@ void mods_from_command_line(int argc, char** argv, const std::string& game_data,
 
 namespace {
 
-// The free camera's, the overlay's and the big backpack's: they change no game data.
+// The free camera's and the overlay's: they change no game data.
 bool port_mod(const ModInfo& mod) {
     const std::string folder = upper_ascii(mod.folder);
-    return folder == upper_ascii(kFreeCameraMod) || folder == upper_ascii(kFpsOverlayMod) ||
-           folder == upper_ascii(kBigBackpackMod);
+    return folder == upper_ascii(kFreeCameraMod) || folder == upper_ascii(kFpsOverlayMod);
 }
 
 }  // namespace
