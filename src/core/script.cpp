@@ -3881,15 +3881,31 @@ void LevelScript::skill_update(Object& o, QuestState& quests, std::vector<Script
 // Animation Controller (`CAnimationPlayer`)
 // ---------------------------------------------------------------------------
 
+namespace {
+// PORT: two unit names the same but for the case of their ASCII letters.
+bool same_unit_name(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c; };
+        if (lower(a[i]) != lower(b[i])) return false;
+    }
+    return true;
+}
+}  // namespace
+
 // `CLevel::getBaseUnitsByDataGroup`: every unit of the
 // level's lists with the data group, over all the level's machines (a room's node can
 // reach a unit another machine runs).
 std::vector<LevelScript::UnitRef> LevelScript::units_named(const std::string& unit) const {
     std::vector<UnitRef> found;
     if (unit.empty()) return found;
+    // PORT: by the name whatever its case. A layout writes `MercPet`; the same unit brought to
+    // the level as the player's companion carries its data's `MERCPET`, and a scene that moves
+    // it must still find it.
     for (LevelScript* machine : level_machines()) {
         for (const Object& o : machine->objects_) {
-            if (o.type == type::kMonster && o.unit == unit && machine->dead_.count(o.id) == 0) {
+            if (o.type == type::kMonster && same_unit_name(o.unit, unit) &&
+                machine->dead_.count(o.id) == 0) {
                 found.push_back({machine, o.id});
             }
         }
@@ -3908,7 +3924,7 @@ bool LevelScript::base_unit_named(const std::string& unit, UnitRef& found) const
     }
     for (LevelScript* machine : level_machines()) {
         for (const Object& o : machine->objects_) {
-            if (o.type == type::kUnitTrigger && o.unit == unit) {
+            if (o.type == type::kUnitTrigger && same_unit_name(o.unit, unit)) {
                 found = {machine, o.id};
                 return true;
             }
