@@ -114,6 +114,9 @@ The button only appears once the workflow file is on the default branch.
 The macOS (`-macos-arm64.zip`) and iOS (`.ipa`) builds that 1.1.0 carried are
 not part of the workflow. Add them as jobs on `macos-latest` if they come back.
 
-The toolchains are pinned only where it is cheap to do so: the NDK version is
-pinned. The MSYS2 packages, the Steam Runtime SDK image and the devkitPro
-image are each the latest at build time, as they were on the maintainer's PC.
+The toolchains are pinned only where it is cheap to do so: the NDK version and
+the devkitPro image's dated tag (`devkitpro/devkita64:<date>` in
+`release.yml`; move it on purpose). The Switch job installs nothing from
+devkitPro's package server, which turns CI runners away at times. The MSYS2
+packages and the Steam Runtime SDK image are each the latest at build time, as
+they were on the maintainer's PC.

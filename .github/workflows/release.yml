@@ -316,7 +316,9 @@ jobs:
     name: Nintendo Switch
     needs: setup
     runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
+    # Pinned, so a release is built with a known compiler and portlibs. Move
+    # it to a newer dated tag on purpose (hub.docker.com/r/devkitpro/devkita64/tags).
+    container: devkitpro/devkita64:20260219
     timeout-minutes: 150
     steps:
       # Before the checkout: without git in the container it downloads the
@@ -330,10 +332,15 @@ jobs:
           python3 -m venv /opt/venv
           /opt/venv/bin/pip install --quiet pillow meson mako setuptools
           echo /opt/venv/bin >> "$GITHUB_PATH"
+          # The image already holds every devkitPro package the build needs.
+          # Nothing is installed from pkg.devkitpro.org: it refuses CI runners
+          # at times (HTTP 403), and an upgrade would replace the pinned
+          # image's compiler. This only checks, offline, that they are there.
           pacman=$(command -v dkp-pacman || command -v pacman || echo /opt/devkitpro/pacman/bin/pacman)
-          "$pacman" -Syu --needed --noconfirm switch-dev switch-mesa switch-libdrm_nouveau \
-            switch-freetype switch-harfbuzz switch-libpng switch-bzip2 switch-zlib \
-            switch-pkg-config dkp-meson-scripts dkp-toolchain-vars
+          "$pacman" -Qg switch-dev > /dev/null
+          "$pacman" -Q switch-mesa switch-libdrm_nouveau switch-freetype switch-harfbuzz \
+            switch-libpng switch-bzip2 switch-zlib switch-pkg-config dkp-meson-scripts \
+            dkp-toolchain-vars devkita64-gcc
 
       - uses: actions/checkout@v7
         with:
