@@ -67,7 +67,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.version.outputs.ref }}
           fetch-depth: 0
@@ -114,7 +114,7 @@ jobs:
     env:
       ZIP: TorchlightRekindled-${{ needs.setup.outputs.version }}-windows-x64.zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.setup.outputs.ref }}
           submodules: recursive
@@ -170,7 +170,7 @@ jobs:
           cd ../..
           python -m zipfile -l "$ZIP" | tail -n 5
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: ${{ env.ZIP }}
@@ -184,7 +184,7 @@ jobs:
     env:
       ZIP: TorchlightRekindled-${{ needs.setup.outputs.version }}-linux-x64.zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.setup.outputs.ref }}
           submodules: recursive
@@ -201,7 +201,7 @@ jobs:
           python3 scripts/build_linux_release.py --zip "$ZIP" 2>&1 | tee build.log
           if grep -q "NOT READY TO PUBLISH" build.log; then exit 1; fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
           path: ${{ env.ZIP }}
@@ -219,18 +219,18 @@ jobs:
       HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       PUBLISH: ${{ needs.setup.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.setup.outputs.ref }}
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       # Android Studio's JDK is what signs on the maintainer's PC; here it is
       # this one (scripts/android_sdk.py's jdk()).
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -306,7 +306,7 @@ jobs:
             "::warning::ANDROID_CERT_SHA256 is not set: compare the digest above with the last release's by hand"
           }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android
           path: ${{ env.APK }}
@@ -335,7 +335,7 @@ jobs:
             switch-freetype switch-harfbuzz switch-libpng switch-bzip2 switch-zlib \
             switch-pkg-config dkp-meson-scripts dkp-toolchain-vars
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.setup.outputs.ref }}
           submodules: recursive
@@ -367,7 +367,7 @@ jobs:
           cmake --build build-switch
           ls -l build-switch/torchlight.nro
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: switch
           path: build-switch/torchlight.nro
@@ -382,7 +382,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

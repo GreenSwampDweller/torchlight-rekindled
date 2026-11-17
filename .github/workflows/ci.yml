@@ -35,9 +35,9 @@ jobs:
     timeout-minutes: 30
     steps:
       # No submodules: tl_formats, tl_core and the tests link no OGRE.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -65,11 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -99,7 +99,7 @@ jobs:
 
       - name: Restore OGRE
         id: ogre-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             build-ogre-linux/include
@@ -112,7 +112,7 @@ jobs:
 
       - name: Save OGRE
         if: steps.ogre-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             build-ogre-linux/include
@@ -133,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker://rhysd/actionlint:1.7.7
+      - uses: actions/checkout@v7
+      - uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -color
