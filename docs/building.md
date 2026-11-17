@@ -2,6 +2,8 @@
 
 How to build the engine from source for each platform. To play, you need
 your own copy of the game too; see [Game data](../README.md#game-data) in the README.
+The published releases are built by GitHub Actions instead; see
+[Releasing](releasing.md).
 
 - [Every platform](#every-platform)
 - [Windows](#windows)

@@ -104,6 +104,14 @@ SWITCH_ONLY = [
     "-DOGRE_MEDIA_PATH=share/OGRE/Media",
     "-DOGRE_PLUGINS_PATH=lib/OGRE",
     "-DOGRE_CFG_INSTALL_PATH=share/OGRE",
+    # The docs path is unset too, which matters only where Doxygen is
+    # installed (devkitPro's container has it): configure then fails with
+    # "install DIRECTORY given no DESTINATION". No docs are installed anyway.
+    "-DOGRE_INSTALL_DOCS=OFF",
+    # Likewise Bullet, if the switch-bullet portlib is installed (it is in the
+    # container): OGRE's Bullet component then fails to generate, on a
+    # relative include path. The engine has no use for it.
+    "-DOGRE_BUILD_COMPONENT_BULLET=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
     "-DOGRE_BUILD_RENDERSYSTEM_GL=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF",
@@ -306,7 +314,9 @@ def main() -> int:
            prefix_map]
 
     def run(command) -> int:
-        if args.platform != "switch":
+        # On Linux (WSL, or the devkitpro/devkita64 container the release
+        # workflow builds in) devkitPro's CMake setup is the ordinary shell's.
+        if args.platform != "switch" or os.name != "nt":
             return subprocess.run(command).returncode
         line = " ".join(shlex.quote(a) for a in command)
         return subprocess.run(

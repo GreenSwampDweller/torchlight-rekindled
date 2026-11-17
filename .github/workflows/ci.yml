@@ -1,0 +1,139 @@
+# Every push and pull request: the unit tests, and the Linux engine built
+# against OGRE, so a change that breaks either is seen before it is merged.
+#
+# The tests need no game data: those that read the game's files skip by
+# themselves (tests/game_data.cpp). Nothing here uses any secret.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # GCC 14, as in the Linux release (scripts/build_linux_release.py).
+  CC: gcc-14
+  CXX: g++-14
+
+jobs:
+  tests:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # No submodules: tl_formats, tl_core and the tests link no OGRE.
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install the compiler and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build g++-14 libx11-dev libasound2-dev
+          # Every configure looks for a Python with Pillow (cmake/ui_pack.cmake).
+          python -m pip install pillow
+
+      - name: Fetch stb_vorbis
+        run: python scripts/fetch_stb.py
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTL_PYTHON="$(command -v python)"
+
+      - name: Build tl_formats, tl_core and the tests
+        run: cmake --build build --target tl_tests tl_fuzz
+
+      - name: Run the tests
+        run: ctest --test-dir build --output-on-failure
+
+  engine:
+    name: Engine build (Linux, OGRE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install the compiler and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build g++-14 \
+            libx11-dev libxrandr-dev libgl-dev libegl-dev libgles-dev \
+            libfreetype-dev zlib1g-dev libasound2-dev
+          python -m pip install pillow
+
+      - name: Fetch stb_vorbis and patch the submodules
+        run: |
+          python scripts/fetch_stb.py
+          python scripts/apply_patches.py
+
+      # OGRE takes most of the build. Its libraries and generated headers are
+      # cached by everything that makes them: the pinned commit, our patches,
+      # the flags in build_ogre.py and the compiler. On a hit OGRE is not
+      # rebuilt at all (a fresh checkout's sources are newer than any cached
+      # object, so Ninja would rebuild the lot). Saved as soon as it is built,
+      # so a failing engine build does not throw it away.
+      - name: OGRE cache key
+        id: ogre
+        run: |
+          echo "key=ogre-linux-gcc14-$(git rev-parse HEAD:external/ogre)-${{ hashFiles('patches/ogre/**', 'scripts/build_ogre.py', 'cmake/file_prefix_map.cmake') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore OGRE
+        id: ogre-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build-ogre-linux/include
+            build-ogre-linux/lib
+          key: ${{ steps.ogre.outputs.key }}
+
+      - name: Build OGRE
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        run: python scripts/build_ogre.py --platform linux
+
+      - name: Save OGRE
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build-ogre-linux/include
+            build-ogre-linux/lib
+          key: ${{ steps.ogre.outputs.key }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTL_OGRE_BUILD_DIR="$PWD/build-ogre-linux" -DTL_PYTHON="$(command -v python)" \
+            -DBUILD_TESTING=OFF
+
+      - name: Build the engine
+        run: cmake --build build-linux --target torchlight
+
+  actionlint:
+    name: Lint the workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color

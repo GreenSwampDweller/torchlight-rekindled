@@ -27,6 +27,7 @@ The game's files are never part of the folder unless asked for with --pak and
 --music, which copy the user's own for a run on this machine.
 """
 import argparse
+import os
 import pathlib
 import re
 import shutil
@@ -37,7 +38,8 @@ from package_notices import report, write_notices
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXE = ROOT / "build-desktop" / "torchlight.exe"
-MINGW_BIN = pathlib.Path("C:/msys64/mingw64/bin")
+# TL_MINGW_BIN: an MSYS2 installed elsewhere (the release workflow's runner).
+MINGW_BIN = pathlib.Path(os.environ.get("TL_MINGW_BIN", "C:/msys64/mingw64/bin"))
 OBJDUMP = MINGW_BIN / "objdump.exe"
 MEDIA = ROOT / "external" / "ogre" / "Media"
 OUT = ROOT / "build-desktop" / "package" / "Torchlight"
