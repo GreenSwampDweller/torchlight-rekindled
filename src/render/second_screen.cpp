@@ -689,7 +689,7 @@ void SecondScreen::destroy_item_overlays() {
     }
 }
 
-// The windows side by side under the strip, the item's own first: all at one size, the
+// The windows side by side under the strip, the item's own last: all at one size, the
 // largest at which the row fits the screen's width and the tallest fits its height.
 void SecondScreen::layout_item_tips() {
     for (ItemWindow& window : item_windows_) {
@@ -746,7 +746,10 @@ void SecondScreen::layout_item_tips() {
     const TipView view{scale, across, down};
     const float edge = std::max(1.0f, kItemEdge * down);
     float x = (across - (wide + gaps)) * 0.5f;
-    for (size_t index : shown) {
+    // The item's own window on the right and the worn ones to its left, as the main
+    // screen's item compare sets them out.
+    for (size_t at = shown.size(); at-- > 0;) {
+        const size_t index = shown[at];
         ItemWindow& window = item_windows_[index];
         const TipBuilt& made = built[index];
         if (window.edge != nullptr) {
