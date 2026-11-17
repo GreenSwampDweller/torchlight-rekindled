@@ -169,6 +169,7 @@ void Renderer::Impl::step_second_screen() {
     second_portal_tap = false;
     second_skill_tap = tl::core::HotbarButton::None;
     second_bag_tap = false;
+    second_set_tap = false;
     second_spell_tap = -1;
 #if defined(TL_PLATFORM_ANDROID)
     float x = 0.0f, y = 0.0f;
@@ -182,6 +183,7 @@ void Renderer::Impl::step_second_screen() {
                 if (automap.toggle_second_screen_level_map()) apply_second_screen(true);
                 break;
             case SecondScreen::Tap::Portal: second_portal_tap = true; break;
+            case SecondScreen::Tap::SkillSet: second_set_tap = true; break;
             case SecondScreen::Tap::Strip: {
                 // A slot of the bank that is up, as the button the pad fires it with; the bag.
                 const int on = game_hud.second_tap_at(
@@ -205,6 +207,7 @@ void Renderer::Impl::step_second_screen() {
     readout.gold = player_inventory.gold();
     readout.floor = level_display_name;
     readout.portal_scrolls = player_inventory.count_by_name(kTownPortalScroll);
+    readout.skill_set = player_skills.skill_set();
     const int scroll = player_inventory.find_by_name(kTownPortalScroll);
     if (scroll >= 0) readout.portal_icon = player_inventory.slots()[static_cast<size_t>(scroll)].item.icon;
     // The spells learned from scrolls, as the hotbar shows a skill: its picture, and the

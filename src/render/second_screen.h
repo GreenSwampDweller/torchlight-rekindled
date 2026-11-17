@@ -73,6 +73,7 @@ public:
         int gold = 0;
         std::string floor;        ///< the level's name, as the HUD's own top right has it
         int portal_scrolls = 0;   ///< Town Portal Scrolls carried
+        int skill_set = 0;        ///< the skill set that is up, 0 or 1: what its button says
         std::string portal_icon;  ///< the scroll's icon, while one is carried
         /// The spells learned from scrolls, by their slot: whether there is one, its picture,
         /// and the whole seconds left before it can be cast again (0 when it can).
@@ -100,7 +101,7 @@ public:
     /// What a tap at (`x`, `y`), in the window's pixels, is on. Nothing while the game's HUD
     /// is down; the strip is the HUD's own (GameHud::second_tap_at says what of it); the map is
     /// everything under the strip that is not a button.
-    enum class Tap { None, Map, Portal, Strip, Spell };
+    enum class Tap { None, Map, Portal, Strip, Spell, SkillSet };
     /// `spell` is given the slot of the spell a `Tap::Spell` is on.
     Tap hit(float x, float y, int* spell = nullptr) const;
 
@@ -133,6 +134,11 @@ private:
     Ogre::OverlayContainer* widget_root_ = nullptr;
     Ogre::OverlayContainer* word_root_ = nullptr;
     Ogre::PanelOverlayElement* portal_frame_ = nullptr;
+    /// The button that swaps the skill sets, in the strip's band left of its first slot: its
+    /// frame, the set it names, and where it is in the window's pixels.
+    Ogre::PanelOverlayElement* set_frame_ = nullptr;
+    Ogre::TextAreaOverlayElement* set_text_ = nullptr;
+    float set_left_ = 0.0f, set_top_ = 0.0f, set_size_ = 0.0f;
     Ogre::PanelOverlayElement* portal_icon_ = nullptr;
     Ogre::TextAreaOverlayElement* portal_count_ = nullptr;
     Ogre::TextAreaOverlayElement* portal_label_ = nullptr;

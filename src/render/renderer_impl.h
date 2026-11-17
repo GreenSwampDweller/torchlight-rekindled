@@ -650,6 +650,9 @@ struct Renderer::Impl : tl::core::World {
     /// its bag, for the same turns as the pad's own presses.
     tl::core::HotbarButton second_skill_tap = tl::core::HotbarButton::None;
     bool second_bag_tap = false;
+    /// ...and a tap on its skill set button; the D-pad's left or right, the same in play, held.
+    bool second_set_tap = false;
+    bool skill_set_dpad_held = false;
     /// ...and on one of its spell buttons: the slot of the spell to cast, or -1.
     int second_spell_tap = -1;
     void second_screen_gone();

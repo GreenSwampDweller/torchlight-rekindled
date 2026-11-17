@@ -257,6 +257,7 @@ void SecondScreen::set_readout(const Readout& readout) {
     const bool same = readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
                       readout.gold == readout_.gold && readout.floor == readout_.floor &&
                       readout.portal_scrolls == readout_.portal_scrolls &&
+                      readout.skill_set == readout_.skill_set &&
                       readout.portal_icon == readout_.portal_icon &&
                       readout.spells == readout_.spells;
     if (same) return;
@@ -276,6 +277,10 @@ SecondScreen::Tap SecondScreen::hit(float x, float y, int* spell) const {
                y <= top + portal_size_;
     };
     if (on(portal_left_, portal_top_)) return Tap::Portal;
+    if (set_size_ > 0.0f && x >= set_left_ && x <= set_left_ + set_size_ && y >= set_top_ &&
+        y <= set_top_ + set_size_) {
+        return Tap::SkillSet;
+    }
     for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
         if (!readout_.spells[slot].known || !on(spell_buttons_[slot].left, spell_buttons_[slot].top)) {
             continue;
@@ -317,6 +322,7 @@ void SecondScreen::build_widgets() {
         };
         // The frame's name sorts before the icon's: a container draws its children by name.
         portal_frame_ = panel("tl/second/portal/0frame");
+        set_frame_ = panel("tl/second/set/0frame");
         portal_icon_ = panel("tl/second/portal/1icon");
         for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
             const std::string stem = "tl/second/spell/" + std::to_string(slot);
@@ -335,6 +341,7 @@ void SecondScreen::build_widgets() {
         };
         using Align = Ogre::TextAreaOverlayElement;
         portal_count_ = words("tl/second/portal/count", Align::Right);
+        set_text_ = words("tl/second/set/label", Align::Center);
         portal_label_ = words("tl/second/portal/label", Align::Left);
         level_text_ = words("tl/second/level", Align::Left);
         fame_text_ = words("tl/second/fame", Align::Left);
@@ -369,6 +376,8 @@ void SecondScreen::destroy_widgets() {
         }
         for (Ogre::OverlayElement* element :
              {static_cast<Ogre::OverlayElement*>(portal_frame_),
+              static_cast<Ogre::OverlayElement*>(set_frame_),
+              static_cast<Ogre::OverlayElement*>(set_text_),
               static_cast<Ogre::OverlayElement*>(portal_icon_),
               static_cast<Ogre::OverlayElement*>(portal_count_),
               static_cast<Ogre::OverlayElement*>(portal_label_),
@@ -394,6 +403,9 @@ void SecondScreen::destroy_widgets() {
     widget_root_ = nullptr;
     word_root_ = nullptr;
     portal_frame_ = nullptr;
+    set_frame_ = nullptr;
+    set_text_ = nullptr;
+    set_size_ = 0.0f;
     portal_icon_ = nullptr;
     portal_count_ = nullptr;
     portal_label_ = nullptr;
@@ -476,6 +488,17 @@ void SecondScreen::layout_widgets() {
     place(portal_label_, portal_left_ + portal_size_ + edge * 0.4f,
           portal_top_ + (portal_size_ - count_line) * 0.5f, count_line);
 
+    // The skill set's button: in the strip's own band, in the room left of its first slot.
+    set_size_ = std::min(portal_size_, shape_.strip_bottom * 0.6f);
+    set_left_ = edge * 0.5f;
+    set_top_ = std::max(0.0f, (shape_.strip_bottom - set_size_) * 0.3f);
+    if (set_frame_ != nullptr) {
+        set_frame_->setPosition(set_left_ / across, set_top_ / down);
+        set_frame_->setDimensions(set_size_ / across, set_size_ / down);
+    }
+    place(set_text_, set_left_ + set_size_ * 0.5f, set_top_ + (set_size_ - count_line) * 0.5f,
+          count_line);
+
     // The spells: the first slot in the bottom right corner, the rest above it. The seconds a
     // spell is cooling for are written across the middle of its picture.
     const float inset = portal_size_ * kFrameInset;
@@ -528,6 +551,10 @@ void SecondScreen::apply_readout() {
         return true;
     };
     if (portal_frame_ != nullptr && portal_frame_->isTransparent()) picture(portal_frame_, kFrameArt);
+    if (set_frame_ != nullptr && set_frame_->isTransparent()) picture(set_frame_, kFrameArt);
+    if (set_text_ != nullptr) {
+        set_caption(set_text_, readout_.skill_set == 0 ? "Set 1" : "Set 2");
+    }
     if (portal_icon_ != nullptr && readout_.portal_icon != shown_icon_) {
         if (picture(portal_icon_, readout_.portal_icon)) shown_icon_ = readout_.portal_icon;
     }

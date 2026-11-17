@@ -1218,6 +1218,23 @@ void Renderer::Impl::drive_player(float delta) {
     }
     // The hotbar: LB/RB potions; Y, B, LT, RT the mapped skills (over
     // CPlayer +0x840/+0x890). Nothing under the letterbox; B stays a cutscene's skip.
+    // PORT: the other skill set, in play: the D-pad's left or right, or the second display's
+    // button. `switch_skill_set` with the skills menu shut refuses a set with nothing on its
+    // four buttons, as the console does.
+    const bool set_edge = in.dpad_x != 0.0f && !skill_set_dpad_held;
+    skill_set_dpad_held = in.dpad_x != 0.0f;
+    if (free_to_act && !hud.letterboxed() && (set_edge || second_set_tap)) {
+        const int other = player_skills.skill_set() == 0 ? 1 : 0;
+        const tl::core::SkillSetSwitch switched =
+            tl::core::switch_skill_set(player_skills, other, /*skills_menu_open=*/false);
+        if (switched == tl::core::SkillSetSwitch::Switched) {
+            play_ui(tl::core::InterfaceSound::SkillAssign);
+            refresh_game_hud();
+        } else if (switched == tl::core::SkillSetSwitch::Refused) {
+            play_ui(tl::core::InterfaceSound::Error);
+        }
+    }
+    second_set_tap = false;
     if (free_to_act && !hud.letterboxed()) {
         // PORT: the second display's portal button: the first Town Portal Scroll carried, used
         // as the bag's A uses it (and refused where it is: in town, the voice says so).
@@ -1286,6 +1303,8 @@ void Renderer::Impl::drive_player(float delta) {
     // Under the hold the stick aims and does not walk (the walk
     // is called only with `+0x1fe` clear).
     tl::core::InputState walk_in = in;
+    // PORT: the D-pad's left and right swap the skill sets (above) and do not walk.
+    if (in.dpad_x != 0.0f) walk_in.move_x = in.stick_x;
     if (held_before) {
         walk_in.move_x = 0.0f;
         walk_in.move_y = 0.0f;
