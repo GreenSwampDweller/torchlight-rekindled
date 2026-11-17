@@ -356,13 +356,18 @@ void MainMenu::hide_copyright() {
 
 // The mods page's own: its Start prompt says what Start does there.
 void MainMenu::set_bar_caption(const std::string& window, const std::string& text) {
+    bool shown_again = false;
     for (BarItem& item : bar_items_) {
         if (item.window != window) continue;
+        // A prompt the main screen left off (`offer_start_continue`, nothing to continue) is
+        // put back, and placed: the layout that hid it skipped it.
+        shown_again = shown_again || item.hidden;
         item.hidden = false;
         for (Ogre::TextAreaOverlayElement* label : {item.shadow, item.label}) {
             if (label != nullptr) label->setCaption(text);
         }
     }
+    if (shown_again) layout();
 }
 
 // PORT: the FPS overlay as the mods page leaves its mod.
