@@ -183,7 +183,7 @@ function(tl_configure_platform target)
     nx_generate_nacp(${target}.nacp
         NAME    "${TL_NRO_NAME}"
         AUTHOR  "SwampDweller"
-        VERSION "1.1.1"
+        VERSION "1.2.0"
     )
     # OGRE's shader library, inside the .nro: its RomFS holds `RTShaderLib/`
     # with OGRE's `Main/` inside it, read at run time as `romfs:/RTShaderLib`
