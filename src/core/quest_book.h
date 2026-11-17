@@ -863,6 +863,10 @@ public:
     /// manager's reset left them (its lookup had no level template); `populate` resolves them.
     bool accept(const QuestDefinition& quest, int level, uint32_t seed, const StatBook& graphs,
                 int depth = -1, bool resolve_units = true);
+    /// PORT: the objectives `accept` would give a quest not yet held, put on a stand-in entry
+    /// that already has its definition, level, seed and floor: what the offer's text names
+    /// (`[ACQUIRE1]`, `[DEFEAT1COUNT]`, ..). Nothing of the log or of `g_Rand` changes.
+    void roll_offered_objectives(QuestEntry& entry) const;
     /// The quest dialog's refusal, before it accepts: a quest that takes a
     /// journal row while the six are taken (`CQuestDialogMenu::onClick`).
     bool log_full_for(const QuestDefinition& quest) const;

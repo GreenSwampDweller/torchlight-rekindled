@@ -216,6 +216,8 @@ bool Renderer::Impl::open_quest_offer(const std::string& unit) {
         if (const tl::core::QuestLog::Offered* rolled = quest_log.offered(*quest)) {
             offered.depth = rolled->depth;
         }
+        // Its objectives as accepting will roll them, for the tags the line carries.
+        quest_log.roll_offered_objectives(offered);
     }
     offered.dungeon_display_name = quest_log.dungeon_display_name(*quest);
     const std::string picked = tl::core::get_dialog(
