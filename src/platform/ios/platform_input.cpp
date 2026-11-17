@@ -33,8 +33,10 @@ InputState poll_platform_input() {
     in.tab_next = (b & TouchPad::kR1) != 0;
     in.map_toggle = (b & TouchPad::kThumbR) != 0;
     in.fps_toggle = (b & TouchPad::kThumbL) != 0;
-    in.pet_stance = (b & TouchPad::kUp) != 0;
-    in.pet_town = (b & TouchPad::kDown) != 0;
+    in.pet_stance = (b & TouchPad::kLeft) != 0;
+    in.pet_town = (b & TouchPad::kRight) != 0;
+    in.dpad_up = (b & TouchPad::kUp) != 0;
+    in.dpad_down = (b & TouchPad::kDown) != 0;
     const float magnitude = std::sqrt(x * x + y * y);
     if (magnitude > 1.0f) {
         x /= magnitude;

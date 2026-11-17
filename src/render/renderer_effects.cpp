@@ -551,7 +551,14 @@ void Renderer::Impl::activate_item_slot(int index) {
     if (index < 0 || index >= tl::core::kSkillFunctionSlots) return;
     const int64_t guid = player_skills.second_slots()[static_cast<size_t>(index)];
     if (guid == -1) return;
-    const int slot = tl::core::equipment_of_guid(player_inventory, guid);
+    int slot = tl::core::equipment_of_guid(player_inventory, guid);
+    // PORT: a bumper out of its own potion drinks the next size up (`potion_slot_for`).
+    if (slot < 0 && index < 2) {
+        ensure_item_index();
+        if (const tl::core::ItemStats* bound = items.find_by_guid(guid)) {
+            slot = tl::core::potion_slot_for(player_inventory, *bound);
+        }
+    }
     if (slot < 0) return;
     load_unit_types();
     // `CGameUI::processIngameInput`, the requested slot:

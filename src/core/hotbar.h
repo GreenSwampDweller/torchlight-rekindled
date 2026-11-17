@@ -90,6 +90,20 @@ HotbarSlotView skill_slot_view(const std::string& icon, float cooling_time);
 /// resource manager does not know (`icon` empty) is an empty slot.
 HotbarSlotView item_slot_view(const std::string& icon, int count);
 
+/// PORT: whether `item` is a potion of `bound`'s kind: the same `UNITTYPE` and the same first
+/// effect (`MANA RECHARGE`, `HP RECHARGE PLAYER`), which is all that tells the sizes of one
+/// potion from another potion in the data.
+bool same_potion_kind(const ItemStats& bound, const ItemStats& item);
+
+/// PORT: what a bumper drinks. The console binds each bumper to the smallest potion's GUID and
+/// has nothing to drink once those are gone, whatever larger ones are carried. Here the slot
+/// of the bound unit while one is carried, else of the carried potion of the same kind with
+/// the lowest `LEVEL` (the next size up); -1 for none.
+int potion_slot_for(const Inventory& inventory, const ItemStats& bound);
+
+/// PORT: every potion of `bound`'s kind carried, all sizes: the bumper's count.
+int potion_count_for(const Inventory& inventory, const ItemStats& bound);
+
 /// `CInventory::getEquipmentCountOfGuid`: every item of unit `guid`
 /// in the bag, an unstackable one (`+0x23c` below 1) counting 1 and any other
 /// its stack (`+0x238`).

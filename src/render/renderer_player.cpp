@@ -791,6 +791,11 @@ void Renderer::Impl::drive_player(float delta) {
     const bool pet_town_edge = in.pet_town && !pet_town_held;
     pet_stance_held = in.pet_stance;
     pet_town_held = in.pet_town;
+    // PORT: the D-pad's up and down, the two skill sets on the skills tab and in play.
+    const bool dpad_up_edge = in.dpad_up && !dpad_up_held;
+    const bool dpad_down_edge = in.dpad_down && !dpad_down_held;
+    dpad_up_held = in.dpad_up;
+    dpad_down_held = in.dpad_down;
     // The skills tab gives the D-pad's up and down to the two skill sets
     // (buttons 1 and 2), so the pet's two jobs wait.
     const bool skills_tab_open =
@@ -838,14 +843,15 @@ void Renderer::Impl::drive_player(float delta) {
             edges.start = quit_edge;
             edges.back = back_edge;
             edges.other = menu_next_edge || menu_prev_edge || tab_next_edge || tab_prev_edge ||
-                          pet_stance_edge || pet_town_edge;
+                          pet_stance_edge || pet_town_edge || dpad_up_edge || dpad_down_edge;
             handle_pet_commands(in, edges);
         } else if (inventory_menu.spell_remove_open()) {
             // The replace-spell dialog, the third of `CGameUI`'s modal messages
             // (`+0x1898`), takes the pad the same way.
             handle_spell_remove(in, action_x_edge, action_y_edge, quit_edge, back_edge,
                                 menu_next_edge || menu_prev_edge || tab_next_edge ||
-                                    tab_prev_edge || pet_stance_edge || pet_town_edge);
+                                    tab_prev_edge || pet_stance_edge || pet_town_edge ||
+                                    dpad_up_edge || dpad_down_edge);
             confirm_held = in.confirm;
             skip_held = in.skip;
             tl::core::InputState zero_in = in;
@@ -905,8 +911,8 @@ void Renderer::Impl::drive_player(float delta) {
 
         if (inventory_menu.visible() && skills_tab) {
             SkillsTabPad pad;
-            pad.dpad_up = pet_stance_edge;
-            pad.dpad_down = pet_town_edge;
+            pad.dpad_up = dpad_up_edge;
+            pad.dpad_down = dpad_down_edge;
             pad.lt = menu_prev_edge;
             pad.rt = menu_next_edge;
             pad.y = action_y_edge;
@@ -1221,15 +1227,16 @@ void Renderer::Impl::drive_player(float delta) {
     }
     // The hotbar: LB/RB potions; Y, B, LT, RT the mapped skills (over
     // CPlayer +0x840/+0x890). Nothing under the letterbox; B stays a cutscene's skip.
-    // PORT: the other skill set, in play: the D-pad's left or right, or the second display's
-    // button. `switch_skill_set` with the skills menu shut refuses a set with nothing on its
-    // four buttons, as the console does.
-    const bool set_edge = in.dpad_x != 0.0f && !skill_set_dpad_held;
-    skill_set_dpad_held = in.dpad_x != 0.0f;
-    if (free_to_act && !hud.letterboxed() && (set_edge || second_set_tap)) {
-        const int other = player_skills.skill_set() == 0 ? 1 : 0;
+    // PORT: the skill sets in play, as the skills tab has them: the D-pad's up is the first
+    // and its down the second; the second display's button is the other one. `switch_skill_set`
+    // with the skills menu shut refuses a set with nothing on its four buttons, as the console
+    // does.
+    if (free_to_act && !hud.letterboxed() && (dpad_up_edge || dpad_down_edge || second_set_tap)) {
+        const int wanted = dpad_up_edge     ? 0
+                           : dpad_down_edge ? 1
+                                            : (player_skills.skill_set() == 0 ? 1 : 0);
         const tl::core::SkillSetSwitch switched =
-            tl::core::switch_skill_set(player_skills, other, /*skills_menu_open=*/false);
+            tl::core::switch_skill_set(player_skills, wanted, /*skills_menu_open=*/false);
         if (switched == tl::core::SkillSetSwitch::Switched) {
             play_ui(tl::core::InterfaceSound::SkillAssign);
             refresh_game_hud();
@@ -1294,20 +1301,22 @@ void Renderer::Impl::drive_player(float delta) {
             second_skill_tap = tl::core::HotbarButton::None;
         }
         release_held_skill(pressed, held, (in.confirm && !confirm_held) || action_x_edge);
-        step_hotbar(pressed, held, in.move_x, in.move_y);
+        step_hotbar(pressed, held, in.stick_x, in.stick_y);
     }
     // After the slot loop: the hold and aim, the press, the
     // handler. attack_held is +0x55; a menu marks X in +0x57 instead,
     // so X still down when a menu goes is a fresh press.
-    step_attack_button(delta, attack_down, attack_down && !attack_held, in.move_x, in.move_y);
+    step_attack_button(delta, attack_down, attack_down && !attack_held, in.stick_x, in.stick_y);
     confirm_held = in.confirm;
     attack_held = attack_down;
 
     // Under the hold the stick aims and does not walk (the walk
     // is called only with `+0x1fe` clear).
     tl::core::InputState walk_in = in;
-    // PORT: the D-pad's left and right swap the skill sets (above) and do not walk.
-    if (in.dpad_x != 0.0f) walk_in.move_x = in.stick_x;
+    // PORT: the D-pad in play is the skill sets and the pet's commands, and does not walk:
+    // the stick alone does.
+    walk_in.move_x = in.stick_x;
+    walk_in.move_y = in.stick_y;
     if (held_before) {
         walk_in.move_x = 0.0f;
         walk_in.move_y = 0.0f;

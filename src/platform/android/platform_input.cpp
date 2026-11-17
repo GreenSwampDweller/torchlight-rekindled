@@ -335,8 +335,10 @@ InputState poll_platform_input() {
     in.map_toggle = (b & kThumbR) != 0;
     in.fps_toggle = (b & kThumbL) != 0;
     // The same two D-pad jobs the console and the desktop give it.
-    in.pet_stance = (b & kUp) != 0;
-    in.pet_town = (b & kDown) != 0;
+    in.pet_stance = (b & kLeft) != 0;
+    in.pet_town = (b & kRight) != 0;
+    in.dpad_up = (b & kUp) != 0;
+    in.dpad_down = (b & kDown) != 0;
 
     const float m = std::sqrt(x * x + y * y);
     if (m > 1.0f) {
