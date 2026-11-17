@@ -104,6 +104,10 @@ SWITCH_ONLY = [
     "-DOGRE_MEDIA_PATH=share/OGRE/Media",
     "-DOGRE_PLUGINS_PATH=lib/OGRE",
     "-DOGRE_CFG_INSTALL_PATH=share/OGRE",
+    # The docs path is unset too, which matters only where Doxygen is
+    # installed (devkitPro's container has it): configure then fails with
+    # "install DIRECTORY given no DESTINATION". No docs are installed anyway.
+    "-DOGRE_INSTALL_DOCS=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
     "-DOGRE_BUILD_RENDERSYSTEM_GL=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF",
