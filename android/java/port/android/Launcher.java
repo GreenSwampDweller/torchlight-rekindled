@@ -23,6 +23,9 @@
 // Under them, a "Mod menu" switch: `config.txt`'s `mods_menu`. On, the game opens on its own
 // mods page (the engine's, as on the Switch and the desktop), where each mod in the game
 // folder's `mods/` is switched; off, it skips that page and starts without any mods.
+//
+// Then, only on a device with a second display, a "Map on second screen" switch: `config.txt`'s
+// `second_screen`. On, the minimap is drawn on that display; off, it is not.
 package port.android;
 
 import android.app.Activity;
@@ -32,10 +35,12 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.graphics.Rect;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
+import android.view.KeyEvent;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.Switch;
@@ -213,12 +218,22 @@ public final class Launcher extends Activity {
                 () -> limitMoved[0] = true);
         boolean modMenu = readConfig(folder, "mods_menu", 1) != 0;
         Switch mods = toggle(box, "Mod menu", modMenu);
+        // Only on a device with a second display; hidden, the switch is never written.
+        // Counted as GameActivity.secondDisplay() chooses: not another app's private display.
+        int screens = 0;
+        for (android.view.Display display
+                : ((DisplayManager) getSystemService(DISPLAY_SERVICE)).getDisplays()) {
+            if ((display.getFlags() & android.view.Display.FLAG_PRIVATE) == 0) ++screens;
+        }
+        boolean twoScreens = screens > 1;
+        boolean secondScreenOn = readConfig(folder, "second_screen", 1) != 0;
+        Switch secondScreen = twoScreens ? toggle(box, "Map on second screen", secondScreenOn) : null;
 
         new AlertDialog.Builder(this)
                 .setTitle("Torchlight")
                 .setView(box)
                 .setCancelable(false)
-                .setPositiveButton("Play", (d, w) -> {
+                .setPositiveButton("Play (press Start)", (d, w) -> {
                     prefs().edit().putInt(KEY_SCALE, MIN_SCALE + scale.getProgress() * SCALE_STEP).apply();
                     if (limitMoved[0]) {
                         writeConfig(folder, "fps_limit", LIMITS[frames.getProgress()], DEFAULT_LIMIT,
@@ -228,12 +243,25 @@ public final class Launcher extends Activity {
                         writeConfig(folder, "mods_menu", mods.isChecked() ? 1 : 0, 1,
                                 "1 shows the mods page before the game; 0 skips it and starts without any mods.");
                     }
+                    if (secondScreen != null && secondScreen.isChecked() != secondScreenOn) {
+                        writeConfig(folder, "second_screen", secondScreen.isChecked() ? 1 : 0, 1,
+                                "1 shows the minimap on a second display (a two-screen handheld); 0 keeps it off that screen.");
+                    }
                     waiting = false;
                     start(folder);
                 })
                 .setNeutralButton("Game folder", (d, w) ->
                         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER))
                 .setNegativeButton("Quit", (d, w) -> finish())
+                // A controller's Start is Play, from wherever the focus is: the settings are
+                // usually as they were left, and the pad is already in the hands.
+                .setOnKeyListener((d, code, event) -> {
+                    if (code != KeyEvent.KEYCODE_BUTTON_START) return false;
+                    if (event.getAction() == KeyEvent.ACTION_UP) {
+                        ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+                    }
+                    return true;
+                })
                 .show();
     }
 

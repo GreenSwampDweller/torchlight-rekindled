@@ -9,13 +9,26 @@
 // opens it (startTextEntry) and reads its answer (textEntryState,
 // textEntryText) through JNI, as the console's XamShowKeyboardUI is opened and
 // waited on.
+//
+// And a two-screen handheld's other display: when the engine asks
+// (setSecondScreen) a window of the game's is put on it, whose surface is
+// handed to the engine (secondSurface) to draw the minimap on.
 package port.android;
 
 import android.app.AlertDialog;
 import android.app.NativeActivity;
+import android.app.Presentation;
+import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputFilter;
+import android.view.Display;
+import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -31,6 +44,12 @@ public final class GameActivity extends NativeActivity {
     /** The keyboard's answer: 0 while it is open, 1 accepted, 2 cancelled. */
     private int entryState = 2;
     private String entryText = "";
+
+    /** The second display's window (setSecondScreen), all on the UI thread. */
+    private boolean secondWanted;
+    private boolean foreground;
+    private Presentation second;
+    private DisplayManager.DisplayListener displayListener;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +79,159 @@ public final class GameActivity extends NativeActivity {
         controller.setSystemBarsBehavior(
                 WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         controller.hide(WindowInsets.Type.systemBars());
+    }
+
+    /**
+     * The engine's, registered by it (second_screen.cpp): the surface on the
+     * second display when it is made or changes size, null when it is taken
+     * away. Returns once the engine has stopped drawing into one taken away.
+     */
+    private static native void secondSurface(Surface surface);
+
+    /**
+     * The engine's too: a tap on the second display, where the finger came
+     * up, in the surface's pixels. The engine takes it on its own thread.
+     */
+    private static native void secondTap(float x, float y);
+
+    /**
+     * Show the engine's window on the second display, or take it down. Called
+     * from the engine's thread; nothing happens on a device with one screen.
+     */
+    public void setSecondScreen(boolean on) {
+        runOnUiThread(() -> {
+            secondWanted = on;
+            if (on && displayListener == null) {
+                // A display plugged in or taken away while the game runs.
+                displayListener = new DisplayManager.DisplayListener() {
+                    @Override public void onDisplayAdded(int id) { updateSecondScreen(); }
+                    @Override public void onDisplayRemoved(int id) { updateSecondScreen(); }
+                    @Override public void onDisplayChanged(int id) {}
+                };
+                getSystemService(DisplayManager.class).registerDisplayListener(displayListener, null);
+            }
+            updateSecondScreen();
+        });
+    }
+
+    /**
+     * The display for the second window: one the system offers for
+     * presentations (a two-screen handheld's other screen, a television), else
+     * any other display than the game's own. Null with one screen.
+     */
+    private Display secondDisplay() {
+        DisplayManager displays = getSystemService(DisplayManager.class);
+        int own = getDisplay() != null ? getDisplay().getDisplayId() : Display.DEFAULT_DISPLAY;
+        for (Display display : displays.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)) {
+            if (display.getDisplayId() != own) return display;
+        }
+        for (Display display : displays.getDisplays()) {
+            if (display.getDisplayId() != own && (display.getFlags() & Display.FLAG_PRIVATE) == 0) {
+                return display;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The second window as it should be now: up while the engine wants it, the
+     * game is in the foreground and there is a display for it. A Presentation:
+     * a dialog of this activity shown on another display, here one black view
+     * whose surface the engine draws into. It never takes the focus, so the
+     * controller's buttons stay with the game's own window.
+     */
+    private void updateSecondScreen() {
+        Display display = secondWanted && foreground ? secondDisplay() : null;
+        if (second != null && (display == null
+                || second.getDisplay().getDisplayId() != display.getDisplayId()
+                || !second.isShowing())) {
+            second.dismiss();  // surfaceDestroyed() tells the engine
+            second = null;
+        }
+        if (display == null || second != null) return;
+        Presentation presentation = new Presentation(this, display);
+        presentation.setCancelable(false);
+        Window window = presentation.getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        SurfaceView view = new SurfaceView(presentation.getContext());
+        view.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder holder) {}
+            @Override public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+                tellEngine(holder.getSurface());
+            }
+            @Override public void surfaceDestroyed(SurfaceHolder holder) {
+                tellEngine(null);
+            }
+        });
+        // A tap: down and up again soon and nearly where it went down. Anything
+        // longer or further is not the engine's (it has no use for a drag yet).
+        final int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        view.setOnTouchListener(new View.OnTouchListener() {
+            private float downX, downY;
+            @Override public boolean onTouch(View touched, MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    downX = event.getX();
+                    downY = event.getY();
+                } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                        && event.getEventTime() - event.getDownTime() < 500
+                        && Math.abs(event.getX() - downX) <= slop
+                        && Math.abs(event.getY() - downY) <= slop) {
+                    try {
+                        secondTap(event.getX(), event.getY());
+                    } catch (UnsatisfiedLinkError notRegistered) {
+                        // As tellEngine().
+                    }
+                }
+                return true;
+            }
+        });
+        presentation.setContentView(view);
+        try {
+            presentation.show();
+        } catch (WindowManager.InvalidDisplayException gone) {
+            return;  // the display went between the choice and the show
+        }
+        second = presentation;
+        // The whole of that screen too, as hideSystemBars() does this one.
+        window.setDecorFitsSystemWindows(false);
+        WindowInsetsController controller = window.getInsetsController();
+        if (controller != null) {
+            controller.setSystemBarsBehavior(
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            controller.hide(WindowInsets.Type.systemBars());
+        }
+    }
+
+    private static void tellEngine(Surface surface) {
+        try {
+            secondSurface(surface);
+        } catch (UnsatisfiedLinkError notRegistered) {
+            // An engine that never registered the method never asked for the window.
+        }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        foreground = true;
+        updateSecondScreen();
+    }
+
+    @Override
+    protected void onStop() {
+        foreground = false;
+        updateSecondScreen();
+        super.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (displayListener != null) {
+            getSystemService(DisplayManager.class).unregisterDisplayListener(displayListener);
+            displayListener = null;
+        }
+        super.onDestroy();
     }
 
     @Override

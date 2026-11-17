@@ -482,6 +482,7 @@ void Renderer::Impl::drive_player(float delta) {
     // reached below leaves this false for the next.
     const bool hotbar_had_pad_before = hotbar_had_pad;
     hotbar_had_pad = false;
+    step_second_screen();  // PORT: a second display's taps and readout
     if (!player_control || !subject_node) return;
 
     // `CGameClient::processIngameInput` takes
@@ -741,7 +742,8 @@ void Renderer::Impl::drive_player(float delta) {
 
     // Toggle Inventory/Stats/Quest menu with "-" button / 'I' / Tab. The pet
     // commands dialog hears Back first (code 0xe) and closes only itself.
-    const bool back_edge = in.inventory && !inventory_button_held;
+    // PORT: a tap on the second display's bag is Back's press.
+    const bool back_edge = (in.inventory && !inventory_button_held) || second_bag_tap;
     if (back_edge && !inventory_menu.pet_commands_open() && !inventory_menu.spell_remove_open()) {
         // Menus play a sound in and out (CInventoryMenu: InventoryOpen / InventoryClose,
         // played by setOpen); on the console the
@@ -1200,6 +1202,32 @@ void Renderer::Impl::drive_player(float delta) {
     // The hotbar: LB/RB potions; Y, B, LT, RT the mapped skills (over
     // CPlayer +0x840/+0x890). Nothing under the letterbox; B stays a cutscene's skip.
     if (free_to_act && !hud.letterboxed()) {
+        // PORT: the second display's portal button: the first Town Portal Scroll carried, used
+        // as the bag's A uses it (and refused where it is: in town, the voice says so).
+        if (second_portal_tap) {
+            second_portal_tap = false;
+            const int scroll = player_inventory.find_by_name("Town Portal Scroll");
+            if (scroll >= 0) {
+                use_player_item(static_cast<size_t>(scroll), /*from_tray=*/true);
+                sync_equipped_weapon();
+                update_menu();
+                refresh_game_hud();
+            } else {
+                play_ui(tl::core::InterfaceSound::Error);
+            }
+        }
+        // PORT: one of the second display's spell buttons: the spell in that slot cast as a
+        // mapped skill's button casts it, aimed as the pad leaves it with nothing pushed.
+        if (second_spell_tap >= 0) {
+            const tl::core::KnownSkill* spell =
+                player_skills.known_spell(static_cast<size_t>(second_spell_tap));
+            second_spell_tap = -1;
+            if (spell != nullptr) {
+                set_player_target_direction(pad_skill_point(*spell, 0.0f, 0.0f, 0.0f, 0.0f));
+                cast_player_skill(*spell, true);
+                refresh_game_hud();
+            }
+        }
         using tl::core::HotbarButton;
         std::array<bool, 7> pressed{};
         std::array<bool, 7> held{};
@@ -1223,6 +1251,11 @@ void Renderer::Impl::drive_player(float delta) {
         set(HotbarButton::LT, in.menu_prev, menu_prev_edge);
         set(HotbarButton::RT, in.menu_next, menu_next_edge);
         add_hotbar_keys(pressed, held);
+        // PORT: a tap on one of the second display's skill slots is its button's press.
+        if (second_skill_tap != tl::core::HotbarButton::None) {
+            pressed[static_cast<size_t>(second_skill_tap)] = true;
+            second_skill_tap = tl::core::HotbarButton::None;
+        }
         release_held_skill(pressed, held, (in.confirm && !confirm_held) || action_x_edge);
         step_hotbar(pressed, held, in.move_x, in.move_y);
     }

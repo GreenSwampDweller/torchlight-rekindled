@@ -13,6 +13,10 @@
 //   mods_menu=1   the mods page before the game (not on iOS, `kModsPage`); 0 skips it and
 //                 starts without any mods. The page's "Don't show this menu again" sets it, and
 //                 the Android launcher's "Mod menu" switch.
+//   second_screen=1   a second display (a two-screen Android handheld) shows the minimap;
+//                     0 keeps it off that screen. The launcher's "Map on second screen" switch
+//                     (shown on a device with two screens); `--no-second-screen` does the same
+//                     for one run.
 //
 // The desktop builds read four more (a device's screen is its own):
 //
@@ -55,6 +59,8 @@ struct RunConfig {
 #endif
     /// Where `kModsPage`: false skips the page and starts with no mods at all.
     bool mods_menu = true;
+    /// A second display shows the minimap (nothing changes with one screen).
+    bool second_screen = true;
     /// The PC's mouse and keyboard controls in place of the pad's.
     bool mouse = false;
 };

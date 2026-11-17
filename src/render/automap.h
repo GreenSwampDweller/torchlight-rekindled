@@ -146,6 +146,27 @@ public:
     void attach(Ogre::RenderTarget* target);
     void detach(Ogre::RenderTarget* target);
 
+    /// PORT: a second display's window (a two-screen handheld), or null for none. While there is
+    /// one the small map is drawn on it, as large as fits, in place of the main window's corner
+    /// circle; the full screen map stays on the main window. The window must outlive the map or
+    /// be taken away again (null) first.
+    void set_second_screen(Ogre::RenderWindow* second);
+    bool on_second_screen() const { return mSecond != nullptr && mMode == MapMode::Minimap; }
+    /// How much of the room it has on the second screen the map's circle takes, across the
+    /// shorter way: the rest is the bezel drawn round it (render/second_screen.h).
+    static constexpr float kSecondScreenFill = 0.86f;
+    /// The top of the second screen left to something else (the HUD's strip, GameHud), as a
+    /// fraction of its height: the map is centred in what is under it.
+    void set_second_screen_top(float fraction);
+    /// The map's square on the second screen, in its pixels: its left, top and side. False
+    /// while there is no second screen.
+    bool second_screen_square(float& left, float& top, float& side) const;
+    /// PORT: the second screen's map between the circle round the player and the level map:
+    /// all the room it has there, square-cornered, showing several times as much of the level.
+    /// Nothing happens unless the map is up on that screen. True when it changed.
+    bool toggle_second_screen_level_map();
+    bool second_screen_level_map() const { return mSecondLevelMap; }
+
     MapMode mode() const { return mMode; }
     bool visible() const { return mVisible; }
     bool is_visible() const { return mVisible && mMode != MapMode::Hidden; }
@@ -169,6 +190,12 @@ private:
     OwnQueue mOwnQueue;
 
     void ensure_materials();
+    /// The window the map's viewport is on in this mode.
+    Ogre::RenderWindow* map_window() const { return on_second_screen() ? mSecond : mWindow; }
+    /// The camera's window from the zoom, wider on a second screen.
+    void apply_zoom();
+    /// The mask and the ring over the viewport, or their circle centred in it.
+    void place_circle(bool centred);
     void update_viewport_dimensions();
     /// The map's mesh, texture and entity let go.
     void destroy_map();
@@ -184,6 +211,9 @@ private:
     Ogre::Camera* mCamera = nullptr;
     Ogre::SceneNode* mCameraNode = nullptr;
     Ogre::Viewport* mViewport = nullptr;
+    Ogre::RenderWindow* mSecond = nullptr;  ///< set_second_screen()
+    float mSecondTop = 0.0f;                ///< set_second_screen_top()
+    bool mSecondLevelMap = false;           ///< toggle_second_screen_level_map()
     Ogre::SceneNode* mNodeTiles = nullptr;
     Ogre::SceneNode* mNodeCull = nullptr;
     Ogre::SceneNode* mNodeRing = nullptr;

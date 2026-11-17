@@ -42,6 +42,7 @@
 #include "render/quest_dialog.h"
 #include "render/render_system_choice.h"
 #include "render/renderer_archive.h"
+#include "render/second_screen.h"
 #include "render/touch_camera.h"
 #include "render/touch_overlay.h"
 #include "render/unit_opacity.h"
@@ -631,6 +632,30 @@ struct Renderer::Impl : tl::core::World {
     Ogre::RenderWindow* window = nullptr;
     /// Android: the EGL surface let go in the background and remade, the context kept.
     void watch_window_surface();
+    /// Android, `config.second_screen`: a window on a two-screen handheld's other display, for
+    /// the small map (Automap::set_second_screen). Made when the activity's surface there
+    /// arrives and kept for the run; its EGL surface goes and comes back with the display's.
+    Ogre::RenderWindow* second_window = nullptr;
+    void second_screen_arrived(void* native_window, void* configuration);
+    /// What the second display shows besides the map, and the three told at once whether there
+    /// is one: the map (Automap), the skill slots (GameHud) and the backdrop under both.
+    SecondScreen second_screen;
+    void apply_second_screen(bool up);
+    /// Each frame of play: the taps made on the second display taken (the map between its two
+    /// views at once; the portal button left in `second_portal_tap` for the hotbar's turn), and
+    /// the readout there brought up to date.
+    void step_second_screen();
+    bool second_portal_tap = false;
+    /// ...and a tap on one of its skill slots, as the pad button that fires that slot, and on
+    /// its bag, for the same turns as the pad's own presses.
+    tl::core::HotbarButton second_skill_tap = tl::core::HotbarButton::None;
+    bool second_bag_tap = false;
+    /// ...and on one of its spell buttons: the slot of the spell to cast, or -1.
+    int second_spell_tap = -1;
+    void second_screen_gone();
+    /// The render system's current GL context made the one EGL has current, the main window's:
+    /// a window made, or given a new surface, makes its own context current behind OGRE's back.
+    void sync_gl_context();
     void fit_camera_to_window() const;  ///< to the window's first viewport, the world's
     /// config.txt's `fps_limit`: the rest of the frame slept out, after the present.
     void pace_frame();
@@ -1335,6 +1360,13 @@ struct Renderer::Impl : tl::core::World {
             return true;
         }
         bool frameEnded(const Ogre::FrameEvent&) override {
+#if defined(TL_PLATFORM_ANDROID)
+            // A second display's window is drawn and swapped last, which leaves its context
+            // the current one: whatever is bound before the next frame's window (the light
+            // map's and the shadow map's frame buffers, the timer's queries) would belong to
+            // it, and be lost with that display's surface. Every frame ends on the main one.
+            if (owner != nullptr) owner->sync_gl_context();
+#endif
             if (owner != nullptr) owner->pace_frame();
             return true;
         }

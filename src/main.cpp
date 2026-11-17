@@ -401,6 +401,9 @@ struct Options {
 
     /// Whether the minimap is disabled.
     bool no_minimap = false;
+
+    /// Whether the second screen's minimap is off for this run, whatever `config.txt` says.
+    bool no_second_screen = false;
     int fps_overlay = -1;  ///< `--fps` 1, `--no-fps` 0, -1 the default
     int fps_limit = -1;    ///< `--fps-limit N` (0 none), -1 config.txt's
     int tips = -1;         ///< `--tips` 1, `--no-tips` 0, -1 the default
@@ -604,6 +607,7 @@ bool set_flag_option(Options& o, const std::string& arg) {
         {"--send-pet-to-town", &Options::send_pet_to_town},
         {"--no-hud", &Options::no_hud},
         {"--no-minimap", &Options::no_minimap},
+        {"--no-second-screen", &Options::no_second_screen},
         {"--fullscreen-map", &Options::fullscreen_map},
     };
     for (const auto& [name, field] : kOptions) {
@@ -1438,6 +1442,7 @@ int main(int argc, char** argv) {
     tl::core::mods_from_command_line(argc, argv, opts.game_data, rc.mod_data, rc.mod_names);
     rc.game_hud = !opts.no_hud;
     rc.minimap = !opts.no_minimap;
+    rc.second_screen = !opts.no_second_screen && tl::core::run_config().second_screen;
     // `--fps` and `--no-fps` before the FPS Overlay mod.
     rc.stats_overlay_from_mods = opts.fps_overlay == -1 && !rc.headless;
     rc.stats_overlay =

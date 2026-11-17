@@ -36,6 +36,36 @@ struct SurfaceHooks {
 };
 void set_surface_hooks(SurfaceHooks hooks);
 
+/// A second display (a two-screen handheld's other screen, second_screen.cpp). The activity puts
+/// a window of its own on it when asked (GameActivity.setSecondScreen) and hands its surface
+/// over; the renderer draws on it through these, as it does the main window through
+/// SurfaceHooks. Both run on the engine's thread, inside pump_events(), and `arrived` only while
+/// the main window is up. A surface of another size is `gone`, then `arrived`.
+struct SecondScreenHooks {
+    std::function<void(ANativeWindow* window, AConfiguration* config)> arrived;
+    std::function<void()> gone;
+};
+void set_second_screen_hooks(SecondScreenHooks hooks);
+
+/// Ask the activity for its window on the second display, or to take it down. Nothing happens
+/// on a device with one screen.
+void show_second_screen(bool on);
+
+/// The second display's surface the engine holds now (after `arrived`, until `gone`), or null:
+/// what a renderer made later (New Game's restart) starts from.
+ANativeWindow* second_screen_window();
+
+/// The oldest tap on the second display not yet taken, in its surface's pixels: where the
+/// finger came up. False when there is none. On the engine's thread.
+bool take_second_screen_tap(float& x, float& y);
+
+/// The activity's natives, registered once before the engine starts (android_main()).
+void register_second_screen();
+
+/// Take what the activity's thread left: `gone` for a surface taken away, and with the main
+/// window up `arrived` for a new one. From pump_events() and the wait for the main window.
+void service_second_screen(bool main_window_up);
+
 /// The fraction of the screen's pixels the game renders at: `render_scale.txt`
 /// in the data root (a percentage, written by the launcher), 1 without it. The
 /// system's compositor scales the smaller buffer up to the screen.
