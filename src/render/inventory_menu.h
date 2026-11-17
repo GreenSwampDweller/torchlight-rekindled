@@ -433,6 +433,8 @@ private:
     int find_node_index_by_widget(const std::string& widget_name) const;
     void set_widget_text(const std::string& widget_name, const std::string& text);
     void set_widget_image(const std::string& widget_name, const std::string& image_name);
+    /// PORT: the item compare caption's picture as the right stick, which is its button here.
+    void show_compare_glyph();
     void set_widget_visible(const std::string& widget_name, bool visible);
     /// Each direct child of the widget hidden, or back to its authored
     /// `VISIBLE`.

@@ -1394,6 +1394,30 @@ void InventoryMenu::set_widget_image(const std::string& widget_name,
     }
 }
 
+// PORT: item compare is the right stick's click, and the console's layout draws the D-pad
+// beside its caption. The console's art has no stick being pressed: this is its right stick
+// with the arrows over and under it left off (the middle 32 x 32 of the 36 x 48). The pack's
+// own layout names a picture of its own and is left alone.
+void InventoryMenu::show_compare_glyph() {
+    const int parent = find_node_index_by_widget("master/ToggleItemCompare");
+    if (parent < 0) return;
+    const Sprite* stick = sprite("analog_button_right_ud");
+    if (stick == nullptr || !stick->texture) return;
+    for (Node& n : nodes_) {
+        if (n.parent != parent || n.panel == nullptr || n.image != "dpad_leftright") continue;
+        const float tw = static_cast<float>(stick->texture->getWidth());
+        const float th = static_cast<float>(stick->texture->getHeight());
+        const float w = static_cast<float>(stick->rect.width);
+        const float h = static_cast<float>(stick->rect.height);
+        const float x = static_cast<float>(stick->rect.x) + w * (2.0f / 36.0f);
+        const float y = static_cast<float>(stick->rect.y) + h * (8.0f / 48.0f);
+        n.panel->setTransparent(false);
+        n.panel->setMaterialName(material_for(*stick, n.alpha));
+        n.panel->setUV(x / tw, y / th, (x + w * (32.0f / 36.0f)) / tw,
+                       (y + h * (32.0f / 48.0f)) / th);
+    }
+}
+
 void InventoryMenu::set_children_visible(const std::string& widget_name, bool visible) {
     // By node rather than by name: not every child has a `WIDGET NAME` (the
     // rows' coin window has none). Shown again, each takes its authored
@@ -2547,6 +2571,7 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         set_widget_text("master/itemcomparetext",
                         item_compare_ ? "disable item compare"
                                       : "enable item compare");
+        show_compare_glyph();
     } else if (menu_mode_ == MenuMode::Skills) {
         // The ring's neighbours either side, as the other three tabs name theirs.
         set_widget_text("master/MenuLeft", "Stats");
