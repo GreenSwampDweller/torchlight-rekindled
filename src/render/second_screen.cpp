@@ -12,8 +12,8 @@
 #include <OgreOverlayContainer.h>
 #include <OgreOverlayManager.h>
 #include <OgrePanelOverlayElement.h>
-#include <OgreTextAreaOverlayElement.h>
 #include <OgreRenderWindow.h>
+#include <OgreTextAreaOverlayElement.h>
 #include <OgreTextureManager.h>
 #include <OgreViewport.h>
 
@@ -90,9 +90,11 @@ void draw_bezel(Canvas& canvas, float cx, float cy, float radius, float unit) {
     const float outer = radius + 30.0f * unit;
     const float r = 0.78f, g = 0.56f, b = 0.24f;
     const int x0 = std::max(0, static_cast<int>(cx - outer - 2.0f));
-    const int x1 = std::min(static_cast<int>(canvas.width) - 1, static_cast<int>(cx + outer + 2.0f));
+    const int x1 =
+        std::min(static_cast<int>(canvas.width) - 1, static_cast<int>(cx + outer + 2.0f));
     const int y0 = std::max(0, static_cast<int>(cy - outer - 2.0f));
-    const int y1 = std::min(static_cast<int>(canvas.height) - 1, static_cast<int>(cy + outer + 2.0f));
+    const int y1 =
+        std::min(static_cast<int>(canvas.height) - 1, static_cast<int>(cy + outer + 2.0f));
     const float step = kPi / 36.0f;  // five degrees
     for (int y = y0; y <= y1; ++y) {
         for (int x = x0; x <= x1; ++x) {
@@ -133,8 +135,7 @@ void draw_speck(Canvas& canvas, float cx, float cy, float size, float r, float g
 
 /// The corners: ember, the game's blue crystal, and a few sparks of its orange, thinning out
 /// away from the map. None over the map or its bezel.
-void draw_embers(Canvas& canvas, float cx, float cy, float radius, float unit,
-                 float strip_bottom) {
+void draw_embers(Canvas& canvas, float cx, float cy, float radius, float unit, float strip_bottom) {
     Dice dice{0x7041c417u};
     const float clear = radius + 46.0f * unit;
     int placed = 0;
@@ -225,14 +226,15 @@ void SecondScreen::postViewportUpdate(const Ogre::RenderTargetViewportEvent&) {
 }
 
 void SecondScreen::set_readout(const Readout& readout) {
-    const bool same = readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
-                      readout.gold == readout_.gold && readout.floor == readout_.floor &&
-                      readout.portal_scrolls == readout_.portal_scrolls &&
-                      readout.portal_icon == readout_.portal_icon &&
-                      readout.spells == readout_.spells;
+    const bool same =
+        readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
+        readout.gold == readout_.gold && readout.floor == readout_.floor &&
+        readout.portal_scrolls == readout_.portal_scrolls &&
+        readout.portal_icon == readout_.portal_icon && readout.spells == readout_.spells;
     if (same) return;
     // The scroll's picture is kept once seen: the button shows it, dimmed, with none carried.
-    const std::string icon = readout.portal_icon.empty() ? readout_.portal_icon : readout.portal_icon;
+    const std::string icon =
+        readout.portal_icon.empty() ? readout_.portal_icon : readout.portal_icon;
     readout_ = readout;
     readout_.portal_icon = icon;
     apply_readout();
@@ -246,7 +248,8 @@ SecondScreen::Tap SecondScreen::hit(float x, float y, int* spell) const {
     };
     if (on(portal_left_, portal_top_)) return Tap::Portal;
     for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
-        if (!readout_.spells[slot].known || !on(spell_buttons_[slot].left, spell_buttons_[slot].top)) {
+        if (!readout_.spells[slot].known ||
+            !on(spell_buttons_[slot].left, spell_buttons_[slot].top)) {
             continue;
         }
         if (spell != nullptr) *spell = static_cast<int>(slot);
@@ -326,9 +329,10 @@ void SecondScreen::destroy_widgets() {
             if (overlay != nullptr) overlay->hide();
         }
         for (SpellButton& button : spell_buttons_) {
-            for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(button.frame),
-                                                  static_cast<Ogre::OverlayElement*>(button.icon),
-                                                  static_cast<Ogre::OverlayElement*>(button.cooling)}) {
+            for (Ogre::OverlayElement* element :
+                 {static_cast<Ogre::OverlayElement*>(button.frame),
+                  static_cast<Ogre::OverlayElement*>(button.icon),
+                  static_cast<Ogre::OverlayElement*>(button.cooling)}) {
                 if (element == nullptr) continue;
                 if (Ogre::OverlayContainer* parent = element->getParent()) {
                     parent->removeChild(element->getName());
@@ -336,15 +340,14 @@ void SecondScreen::destroy_widgets() {
                 overlays->destroyOverlayElement(element);
             }
         }
-        for (Ogre::OverlayElement* element :
-             {static_cast<Ogre::OverlayElement*>(portal_frame_),
-              static_cast<Ogre::OverlayElement*>(portal_icon_),
-              static_cast<Ogre::OverlayElement*>(portal_count_),
-              static_cast<Ogre::OverlayElement*>(portal_label_),
-              static_cast<Ogre::OverlayElement*>(level_text_),
-              static_cast<Ogre::OverlayElement*>(fame_text_),
-              static_cast<Ogre::OverlayElement*>(floor_text_),
-              static_cast<Ogre::OverlayElement*>(gold_text_)}) {
+        for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(portal_frame_),
+                                              static_cast<Ogre::OverlayElement*>(portal_icon_),
+                                              static_cast<Ogre::OverlayElement*>(portal_count_),
+                                              static_cast<Ogre::OverlayElement*>(portal_label_),
+                                              static_cast<Ogre::OverlayElement*>(level_text_),
+                                              static_cast<Ogre::OverlayElement*>(fame_text_),
+                                              static_cast<Ogre::OverlayElement*>(floor_text_),
+                                              static_cast<Ogre::OverlayElement*>(gold_text_)}) {
             if (element == nullptr) continue;
             if (Ogre::OverlayContainer* parent = element->getParent()) {
                 parent->removeChild(element->getName());
@@ -470,7 +473,8 @@ void SecondScreen::apply_readout() {
         panel->setTransparent(false);
         return true;
     };
-    if (portal_frame_ != nullptr && portal_frame_->isTransparent()) picture(portal_frame_, kFrameArt);
+    if (portal_frame_ != nullptr && portal_frame_->isTransparent())
+        picture(portal_frame_, kFrameArt);
     if (portal_icon_ != nullptr && readout_.portal_icon != shown_icon_) {
         if (picture(portal_icon_, readout_.portal_icon)) shown_icon_ = readout_.portal_icon;
     }

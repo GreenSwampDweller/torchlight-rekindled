@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/platform.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <exception>
@@ -17,9 +18,22 @@
 #include <vector>
 
 #include <switch.h>
+#include <unistd.h>
+
+#if defined(__SWITCH2__)
+extern "C" size_t tl_switch2_guard_summary(char* out, size_t size);  // platform_guard.cpp
+#endif
 
 namespace tl::core::detail {
 namespace {
+
+// What the Switch 2's guard has seen: the services asked for, and anything it refused.
+void log_guard() {
+#if defined(__SWITCH2__)
+    char text[4096];
+    if (tl_switch2_guard_summary(text, sizeof text) > 0) sink_write(LogLevel::Info, text);
+#endif
+}
 
 /// The mixer's core (platform_audio.cpp); the game has 0, and 1 is kept free.
 constexpr s32 kWriterCore = 2;
@@ -58,6 +72,16 @@ void put(std::FILE* file, const std::vector<std::string>& lines) {
             std::fputc('\n', file);
         }
         std::fflush(file);
+#if defined(__SWITCH2__)
+        // Committed to the card at most once a second: a game closed from the HOME menu is ended
+        // without its files being closed, and what was not committed is lost.
+        static auto last_sync = std::chrono::steady_clock::time_point();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_sync >= std::chrono::seconds(1)) {
+            (void)fsync(fileno(file));
+            last_sync = now;
+        }
+#endif
     }
     for (const std::string& line : lines) std::printf("%s\n", line.c_str());
 }
@@ -109,6 +133,7 @@ void sink_open(const std::string& path_hint) {
     } catch (const std::exception&) {
         // No thread: sink_write() writes in the caller, as it always used to.
     }
+    log_guard();
 }
 
 void sink_write(LogLevel level, const std::string& line) {
@@ -133,6 +158,7 @@ void sink_write(LogLevel level, const std::string& line) {
 void sink_close() {
     // Every exit path shuts the log down; the sampler's file is finished first.
     stop_profiler();
+    log_guard();
     Writer& w = writer();
     {
         std::lock_guard<std::mutex> guard(w.lock);

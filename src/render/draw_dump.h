@@ -3,6 +3,7 @@
 // textures with their sampling, and the pass's fixed state. Nothing here changes what is drawn.
 #pragma once
 
+#include <OgreMatrix4.h>
 #include <OgreRenderObjectListener.h>
 #include <OgreRenderTargetListener.h>
 
@@ -13,6 +14,8 @@
 namespace Ogre {
 class SceneManager;
 class RenderTarget;
+class VertexData;
+class IndexData;
 }  // namespace Ogre
 
 namespace tl::render {
@@ -40,10 +43,14 @@ public:
     void preViewportUpdate(const Ogre::RenderTargetViewportEvent& event) override;
 
 private:
+    void write_buffers(std::FILE* f, const Ogre::Affine3& world, const Ogre::VertexData* vd,
+                       const Ogre::IndexData* id);
+
     Ogre::SceneManager* scene_;
     std::string dir_;
     std::FILE* file_ = nullptr;
     int draw_ = 0;
+    bool buffers_ = false;
     std::set<std::string> programs_written_;
     std::set<std::string> textures_written_;
     std::set<Ogre::RenderTarget*> watched_;

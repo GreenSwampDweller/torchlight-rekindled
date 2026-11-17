@@ -10,6 +10,7 @@
 #include <OgreGpuProgram.h>
 #include <OgreGpuProgramParams.h>
 #include <OgreHardwareBuffer.h>
+#include <OgreHardwareIndexBuffer.h>
 #include <OgreHardwareVertexBuffer.h>
 #include <OgreImage.h>
 #include <OgreLight.h>
@@ -29,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 
@@ -91,6 +93,9 @@ DrawDump::DrawDump(Ogre::SceneManager* scene, const std::string& dir) : scene_(s
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(dir) / "glsl", ec);
     std::filesystem::create_directories(std::filesystem::path(dir) / "tex", ec);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read once, on the render thread
+    buffers_ = std::getenv("TL_DRAW_DUMP_BUFFERS") != nullptr;
+    if (buffers_) std::filesystem::create_directories(std::filesystem::path(dir) / "buf", ec);
     file_ = std::fopen((std::filesystem::path(dir) / "frame.txt").string().c_str(), "w");
     if (!file_) {
         TL_LOG_ERROR("draw dump: cannot write '%s/frame.txt'", dir.c_str());
@@ -119,6 +124,52 @@ DrawDump::~DrawDump() {
     if (file_) {
         std::fprintf(file_, "end %d\n", draw_);
         std::fclose(file_);
+    }
+}
+
+// PORT: `TL_DRAW_DUMP_BUFFERS`, the draw's world matrix and the vertex and index ranges it
+// reads, as raw bytes in `buf/`, so a frame can be rebuilt elsewhere.
+void DrawDump::write_buffers(std::FILE* f, const Ogre::Affine3& world, const Ogre::VertexData* vd,
+                             const Ogre::IndexData* id) {
+    if (!buffers_) return;
+    std::fprintf(f, "world3x4");
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) std::fprintf(f, " %.7g", static_cast<double>(world[r][c]));
+    }
+    std::fprintf(f, "\n");
+    const auto save = [&](const std::string& name, Ogre::HardwareBuffer& buffer, size_t offset,
+                          size_t bytes) {
+        try {
+            const void* data = buffer.lock(offset, bytes, Ogre::HardwareBuffer::HBL_READ_ONLY);
+            if (std::FILE* out = std::fopen(
+                    (std::filesystem::path(dir_) / "buf" / name).string().c_str(), "wb")) {
+                std::fwrite(data, 1, bytes, out);
+                std::fclose(out);
+            }
+            buffer.unlock();
+            return true;
+        } catch (const Ogre::Exception&) {
+            return false;
+        }
+    };
+    if (vd && vd->vertexBufferBinding && vd->vertexCount > 0) {
+        for (const auto& [source, buffer] : vd->vertexBufferBinding->getBindings()) {
+            const size_t stride = buffer->getVertexSize();
+            const std::string name =
+                std::to_string(draw_ - 1) + "_vb" + std::to_string(source) + ".bin";
+            if (save(name, *buffer, vd->vertexStart * stride, vd->vertexCount * stride)) {
+                std::fprintf(f, "vb %u buf/%s %zu %zu\n", source, name.c_str(), stride,
+                             static_cast<size_t>(vd->vertexCount));
+            }
+        }
+    }
+    if (id && id->indexBuffer && id->indexCount > 0) {
+        const size_t size = id->indexBuffer->getIndexSize();
+        const std::string name = std::to_string(draw_ - 1) + "_ib.bin";
+        if (save(name, *id->indexBuffer, id->indexStart * size, id->indexCount * size)) {
+            std::fprintf(f, "ib buf/%s %zu %zu\n", name.c_str(), size * 8,
+                         static_cast<size_t>(id->indexCount));
+        }
     }
 }
 
@@ -193,6 +244,7 @@ void DrawDump::notifyRenderSingleObject(Ogre::Renderable* rend, const Ogre::Pass
                          e.getIndex());
         }
     }
+    write_buffers(f, world, vd, id);
 
     // A billboard set's billboards (the particles): each quad's centre, size and colour, read back
     // from the vertex buffer the set filled (ParticleUniverse injects them for the draw only).

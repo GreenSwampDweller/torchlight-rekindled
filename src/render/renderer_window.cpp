@@ -9,12 +9,67 @@
 #include <OgreAndroidEGLWindow.h>
 #endif
 
+#if defined(__SWITCH2__)
+#include <OgreOverlayManager.h>
+#endif
+
 #include <chrono>
 #include <cmath>
 #include <thread>
 #include <utility>
 
+#if defined(__SWITCH2__)
+extern "C" bool tl_switch2_follow_mode(unsigned* width, unsigned* height);  // platform_frame.cpp
+#endif
+
 namespace tl::render {
+
+#if defined(__SWITCH2__)
+namespace {
+
+unsigned g_mode_width = 0;  ///< the size the window was last set to
+unsigned g_mode_height = 0;
+int g_mode_frames = 0;  ///< frames left to wait for the surface to take that size
+
+// The window follows the console's mode (docked or in the hand) and the display settings; its size
+// is the platform's to set. The interface stays laid out at config's size: once the surface has
+// the new size, OGRE's overlays take that layout scaled by the pixel ratio. True when the camera
+// is to fit the new size. `layout_width` x `layout_height`: the size the interface was laid out at.
+bool follow_console_mode(Ogre::RenderWindow* window, unsigned layout_width,
+                         unsigned layout_height) {
+    if (window == nullptr || layout_height == 0) return false;
+    unsigned width = 0;
+    unsigned height = 0;
+    if (tl_switch2_follow_mode(&width, &height)) {
+        g_mode_width = width;
+        g_mode_height = height;
+        g_mode_frames = 120;  // the driver remakes its swapchain at the next present or two
+    }
+    if (g_mode_frames > 0) {
+        --g_mode_frames;
+        window->windowMovedOrResized();
+        const bool there =
+            window->getWidth() == g_mode_width && window->getHeight() == g_mode_height;
+        if (!there && g_mode_frames > 0) return false;
+        if (!there) {
+            TL_LOG_WARN("display: the surface stayed %ux%u, asked %ux%u", window->getWidth(),
+                        window->getHeight(), g_mode_width, g_mode_height);
+        }
+        g_mode_frames = 0;
+    }
+    // Checked against the overlays themselves: a new Root (New Game) starts them at 1 again.
+    Ogre::OverlayManager& overlays = Ogre::OverlayManager::getSingleton();
+    const float ratio = static_cast<float>(window->getHeight()) / static_cast<float>(layout_height);
+    if (std::abs(overlays.getPixelRatio() - ratio) < 1e-4f) return false;
+    overlays.setPixelRatio(ratio);
+    TL_LOG_INFO("display: drawing %ux%u, interface laid out at %ux%u (scale %.3f)",
+                window->getWidth(), window->getHeight(), layout_width, layout_height,
+                static_cast<double>(ratio));
+    return true;
+}
+
+}  // namespace
+#endif
 
 namespace {
 /// The item the second display's portal button uses, by the name the game's data gives it.
@@ -141,8 +196,8 @@ void Renderer::Impl::sync_gl_context() {
 // The second display's window taken up by, or taken from, everything drawn on it. Not before
 // the map exists: its backdrop viewport there is what the rest is drawn in.
 void Renderer::Impl::apply_second_screen(bool up) {
-    const bool there = up && second_window != nullptr && second_window->isActive() &&
-                       automap_initialized;
+    const bool there =
+        up && second_window != nullptr && second_window->isActive() && automap_initialized;
     if (automap_initialized) automap.set_second_screen(there ? second_window : nullptr);
     game_hud.set_second_screen(there, there ? second_window->getWidth() : 0,
                                there ? second_window->getHeight() : 0);
@@ -184,9 +239,9 @@ void Renderer::Impl::step_second_screen() {
             case SecondScreen::Tap::Portal: second_portal_tap = true; break;
             case SecondScreen::Tap::Strip: {
                 // A slot of the bank that is up, as the button the pad fires it with; the bag.
-                const int on = game_hud.second_tap_at(
-                    x / static_cast<float>(second_window->getWidth()),
-                    y / static_cast<float>(second_window->getHeight()));
+                const int on =
+                    game_hud.second_tap_at(x / static_cast<float>(second_window->getWidth()),
+                                           y / static_cast<float>(second_window->getHeight()));
                 if (on == GameHud::kSecondBag) {
                     second_bag_tap = true;
                 } else if (on >= 0) {
@@ -206,7 +261,8 @@ void Renderer::Impl::step_second_screen() {
     readout.floor = level_display_name;
     readout.portal_scrolls = player_inventory.count_by_name(kTownPortalScroll);
     const int scroll = player_inventory.find_by_name(kTownPortalScroll);
-    if (scroll >= 0) readout.portal_icon = player_inventory.slots()[static_cast<size_t>(scroll)].item.icon;
+    if (scroll >= 0)
+        readout.portal_icon = player_inventory.slots()[static_cast<size_t>(scroll)].item.icon;
     // The spells learned from scrolls, as the hotbar shows a skill: its picture, and the
     // seconds it is cooling for.
     for (size_t slot = 0; slot < readout.spells.size(); ++slot) {
@@ -255,6 +311,11 @@ void Renderer::Impl::adopt_window_size() {
 // After the present and before the next frame's input, so the wait adds no lag. A frame that
 // ran late starts the count again rather than hurrying the next ones to catch up.
 void Renderer::Impl::pace_frame() {
+#if defined(__SWITCH2__)
+    if (!config.headless && follow_console_mode(window, config.width, config.height)) {
+        fit_camera_to_window();
+    }
+#endif
     if (config.fps_limit == 0 || config.headless) return;
     using Clock = std::chrono::steady_clock;
     const auto period = std::chrono::duration_cast<Clock::duration>(

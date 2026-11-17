@@ -584,6 +584,8 @@ ModsPageFocus step_mods_page_side(ModsPageFocus focus, int side) {
     return focus;
 }
 
+std::string mods_menu_text(const std::string& text, size_t width) { return wrap_text(text, width); }
+
 std::string mods_menu_checkbox_info(size_t width) {
     return wrap_text(
         "Don't show this menu again\n\nTicked, the game starts straight away from now on, "

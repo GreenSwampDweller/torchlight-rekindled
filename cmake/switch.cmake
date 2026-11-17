@@ -27,7 +27,11 @@ option(TL_SWITCH_GL3PLUS "Switch: link GL3Plus (desktop GL) beside GLES2, select
 # --variant lto|pgogen|pgo` - because that is where most of the frame is spent.
 include(${CMAKE_CURRENT_LIST_DIR}/switch_perf.cmake)
 
-if(TL_SWITCH_GL3PLUS)
+if(NINTENDO_SWITCH2)
+    # Switch 2 (ounce-devkit's Switch2.cmake): its own OGRE,
+    # `python scripts/build_ogre.py --platform switch2`.
+    set(TL_OGRE_DEFAULT_DIR "${CMAKE_SOURCE_DIR}/build-ogre-switch2")
+elseif(TL_SWITCH_GL3PLUS)
     set(TL_OGRE_DEFAULT_DIR "${CMAKE_SOURCE_DIR}/build-ogre-switch-gl3")
 elseif(TL_PGO STREQUAL "generate")
     set(TL_OGRE_DEFAULT_DIR "${CMAKE_SOURCE_DIR}/build-ogre-switch-pgogen")
@@ -70,7 +74,17 @@ set(TL_MESA_LIB_DIR "${CMAKE_SOURCE_DIR}/build-mesa-switch/install/opt/devkitpro
 # drm_nouveau.
 set(TL_MESA26_LIB_DIR "" CACHE PATH "mesa-switch (Mesa 26) install lib directory; empty for the 20.1 driver")
 set(TL_MESA_DRM drm_nouveau)
-if(TL_MESA26_LIB_DIR AND EXISTS "${TL_MESA26_LIB_DIR}/libEGL.a")
+if(NINTENDO_SWITCH2)
+    # OunceVK: EGL, GLES and Vulkan in one archive (NVK with Zink on top). Its
+    # libGLESv2, libglapi and libdrm_nouveau are empty stand-ins.
+    set(TL_OUNCEVK_LIB "${DEVKITPRO}/portlibs/switch2/lib/libEGL.a")
+    if(NOT EXISTS "${TL_OUNCEVK_LIB}")
+        message(FATAL_ERROR "No OunceVK at ${TL_OUNCEVK_LIB}: install ounce-devkit (its install.sh)")
+    endif()
+    message(STATUS "Torchlight: Switch 2, OunceVK from ${TL_OUNCEVK_LIB}")
+    set(TL_MESA_LIBS "${TL_OUNCEVK_LIB}")
+    set(TL_MESA_DRM "")
+elseif(TL_MESA26_LIB_DIR AND EXISTS "${TL_MESA26_LIB_DIR}/libEGL.a")
     message(STATUS "Torchlight: Mesa 26 (mesa-switch) from ${TL_MESA26_LIB_DIR}")
     file(GLOB _tl_mesa26_libs "${TL_MESA26_LIB_DIR}/*.a")
     list(REMOVE_ITEM _tl_mesa26_libs "${TL_MESA26_LIB_DIR}/libGL.a" "${TL_MESA26_LIB_DIR}/libGLESv1_CM.a")
@@ -126,11 +140,26 @@ set(TL_RUN_TAG "" CACHE STRING "Suffix of this build's log and profile names on 
 # Every target: the log is opened in main.cpp, the sampler lives in tl_core.
 add_compile_definitions(TL_RUN_TAG="${TL_RUN_TAG}")
 
+include(${CMAKE_CURRENT_LIST_DIR}/switch2_guard.cmake)
+
 function(tl_configure_platform target)
     target_compile_definitions(${target} PRIVATE
         TL_PLATFORM_SWITCH=1
         _GNU_SOURCE            # newlib hides locale_t and strtod_l without it
     )
+    # Switch 2: no service, mount or SD-card write outside what the game needs
+    # (platform_guard.cpp, in tl_core with the rest of src/platform/switch).
+    tl_switch2_guard(${target})
+    if(NINTENDO_SWITCH2)
+        # The crash handler (platform_crash.cpp): libounce refers to it only weakly, which
+        # does not bring it out of tl_core by itself.
+        target_link_options(${target} PRIVATE "-Wl,--require-defined=__libnx_exception_handler")
+        # The EGL display kept across New Game's restart (platform_egl.cpp).
+        foreach(fn eglTerminate eglCreateWindowSurface eglCreateContext)
+            target_link_options(${target} PRIVATE "-Wl,--wrap=${fn}"
+                "-Wl,--require-defined=__wrap_${fn}")
+        endforeach()
+    endif()
 
     # .nro plus NACP metadata, via helpers from devkitPro's Switch.cmake. Done
     # before the OGRE check so the Switch target still produces a runnable .nro
@@ -251,8 +280,8 @@ function(tl_configure_platform target)
     # (platform_profiler.cpp's __wrap_threadCreate), Mesa's among them.
     target_link_options(${target} PRIVATE -Wl,--wrap=threadCreate)
     # Where the GL driver waits on the GPU (platform_gpu_waits.cpp). Mesa 26 has
-    # no libdrm_nouveau to wrap.
-    if(NOT TL_MESA26_LIB_DIR)
+    # no libdrm_nouveau to wrap, nor has OunceVK on the Switch 2.
+    if(NOT TL_MESA26_LIB_DIR AND NOT NINTENDO_SWITCH2)
         target_link_options(${target} PRIVATE
             -Wl,--wrap=nouveau_bo_map -Wl,--wrap=nouveau_bo_wait -Wl,--wrap=nouveau_fence_wait
             -Wl,--wrap=nouveau_pushbuf_kick -Wl,--wrap=nouveau_pushbuf_space -Wl,--wrap=nvFenceWait

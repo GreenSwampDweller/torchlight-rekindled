@@ -347,7 +347,7 @@ bool World::skill_event_effects_on(const SkillEventSource& src, tl::core::LevelS
         // at once. Its visuals wait for the frame's update.
         player_effects.update_effects(0.0f);
         convert_held_statuses(player_health.dead ? tl::core::ai_state::kDead : 0, &player_effects,
-                              "the player");
+                              "the player", /*is_player=*/true);
         instant_caster_machine = saved_machine;
         instant_caster_node = saved_node;
         instant_caster_none = saved_none;

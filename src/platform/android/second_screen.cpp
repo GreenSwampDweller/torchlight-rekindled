@@ -182,7 +182,8 @@ void service_second_screen(bool main_window_up) {
     __android_log_print(ANDROID_LOG_INFO, "torchlight", "second screen: surface up, %dx%d",
                         ANativeWindow_getWidth(next), ANativeWindow_getHeight(next));
     android_app* glue = app();
-    if (g_second_hooks.arrived) g_second_hooks.arrived(next, glue != nullptr ? glue->config : nullptr);
+    if (g_second_hooks.arrived)
+        g_second_hooks.arrived(next, glue != nullptr ? glue->config : nullptr);
 }
 
 }  // namespace tl::core::android

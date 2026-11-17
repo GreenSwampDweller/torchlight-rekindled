@@ -162,8 +162,8 @@ const GameHud::Sprite* GameHud::sprite(const std::string& name) const {
     return found == sprites_.end() ? nullptr : &found->second;
 }
 
-bool GameHud::icon_art(const std::string& name, Ogre::MaterialPtr& material, float& u0,
-                       float& v0, float& u1, float& v1) const {
+bool GameHud::icon_art(const std::string& name, Ogre::MaterialPtr& material, float& u0, float& v0,
+                       float& u1, float& v1) const {
     const Sprite* art = name.empty() ? nullptr : sprite(name);
     if (art == nullptr || !art->texture || !art->material || art->rect == nullptr) return false;
     const float tw = static_cast<float>(art->texture->getWidth());
@@ -180,8 +180,9 @@ bool GameHud::icon_art(const std::string& name, Ogre::MaterialPtr& material, flo
 int GameHud::second_tap_at(float x, float y) const {
     if (!second_shown()) return -1;
     const auto inside = [&](const Node& node) {
-        return node.panel != nullptr && x >= node.draw_left && x <= node.draw_left + node.draw_width &&
-               y >= node.draw_top && y <= node.draw_top + node.draw_height;
+        return node.panel != nullptr && x >= node.draw_left &&
+               x <= node.draw_left + node.draw_width && y >= node.draw_top &&
+               y <= node.draw_top + node.draw_height;
     };
     for (const Node& node : nodes_) {
         if (!node.second || node.hidden) continue;
@@ -562,10 +563,9 @@ void GameHud::destroy() {
             if (overlay != nullptr) overlay->hide();
         }
         for (Node& node : nodes_) {
-            for (Ogre::OverlayElement* element :
-                 {static_cast<Ogre::OverlayElement*>(node.panel),
-                  static_cast<Ogre::OverlayElement*>(node.drop),
-                  static_cast<Ogre::OverlayElement*>(node.text)}) {
+            for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(node.panel),
+                                                  static_cast<Ogre::OverlayElement*>(node.drop),
+                                                  static_cast<Ogre::OverlayElement*>(node.text)}) {
                 if (element == nullptr) continue;
                 if (Ogre::OverlayContainer* parent = element->getParent()) {
                     parent->removeChild(element->getName());
@@ -724,8 +724,9 @@ void GameHud::layout() {
             else part[index] = (node.left + node.width * 0.5f) < 0.5f ? 1 : 2;
 
             // The edges are those of what is drawn: a picture, or a slot's own window.
-            const bool drawn = !node.hidden && node.panel != nullptr &&
-                               (!node.image.empty() || hotbar_slot_of(node.widget, "SkillSlot") >= 0);
+            const bool drawn =
+                !node.hidden && node.panel != nullptr &&
+                (!node.image.empty() || hotbar_slot_of(node.widget, "SkillSlot") >= 0);
             if (!drawn) continue;
             const float x0 = node.left * across, x1 = (node.left + node.width) * across;
             const float y0 = node.top * down, y1 = (node.top + node.height) * down;
@@ -775,8 +776,9 @@ void GameHud::layout() {
         };
         const auto to_y = [&](float y) {
             if (!moved) return y / down;
-            if (icon) return (margin + (icons_top - top_edge) * grow + (y - icons_top) * icon_grow) /
-                             second_down;
+            if (icon)
+                return (margin + (icons_top - top_edge) * grow + (y - icons_top) * icon_grow) /
+                       second_down;
             return (margin + (y - top_edge) * grow + pushed) / second_down;
         };
         const float wide_scale = moved ? scale / second_across : 1.0f / across;

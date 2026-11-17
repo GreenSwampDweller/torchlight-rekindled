@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
+#include <string>
 
 namespace tl::core {
 namespace {
@@ -104,6 +105,10 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             if (number >= 0 && number <= 1000) config.fps_limit = static_cast<unsigned>(number);
         }
+        if (key == "workers") {
+            const long number = std::strtol(value.c_str(), nullptr, 10);
+            if (number >= 0 && number <= 3) config.workers = static_cast<int>(number);
+        }
         if (key == "width" || key == "height") {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             const unsigned size = number > 0 && number <= 16384 ? static_cast<unsigned>(number) : 0;
@@ -114,8 +119,13 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
 }
 
 std::string set_run_config_value(const std::string& text, const std::string& key, bool value) {
+    return set_run_config_text(text, key, value ? "1" : "0");
+}
+
+std::string set_run_config_text(const std::string& text, const std::string& key,
+                                const std::string& value) {
     const std::string wanted = trimmed_lower(key);
-    const std::string replacement = wanted + "=" + (value ? "1" : "0");
+    const std::string replacement = wanted + "=" + value;
     std::string out;
     bool found = false;
     size_t start = 0;
@@ -166,6 +176,15 @@ bool save_run_config_value(const std::string& key, bool value) {
     std::string text;
     if (!read_file(g_path, text)) text = run_config_text(g_config);
     return write_file(g_path, set_run_config_value(text, key, value));
+}
+
+bool save_run_config_number(const std::string& key, unsigned value) {
+    const std::string wanted = trimmed_lower(key);
+    if (wanted == "fps_limit") g_config.fps_limit = value;
+    if (g_path.empty()) return false;
+    std::string text;
+    if (!read_file(g_path, text)) text = run_config_text(g_config);
+    return write_file(g_path, set_run_config_text(text, key, std::to_string(value)));
 }
 
 const RunConfig& run_config() { return g_config; }

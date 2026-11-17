@@ -39,6 +39,7 @@
 #include "render/particle_systems.h"
 #include "render/particle_universe.h"
 #include "render/particle_wrappers.h"
+#include "render/pose_pass.h"
 #include "render/quest_dialog.h"
 #include "render/render_system_choice.h"
 #include "render/renderer_archive.h"
@@ -1250,9 +1251,9 @@ struct Renderer::Impl : tl::core::World {
     /// The skinned units' poses for the frame about to be drawn, on the job pool
     /// (renderer_poses.cpp); OGRE's own pass then finds them done.
     void evaluate_poses();
-    std::vector<Ogre::Entity*> pose_jobs;
-    /// Entities evaluate_poses() posed since the last timing window.
-    unsigned long long posed_entities = 0;
+    void finish_poses();
+    void install_pose_join();
+    PosePass pose_pass;
     void step_near_poses(float level_delta, float rate);
     void count_player_footsteps(float was, float now);
     void step_linked_machine(NestedScript& machine, float delta, float speed,
@@ -1277,7 +1278,6 @@ struct Renderer::Impl : tl::core::World {
         unsigned long long scene_graph = 0;
         unsigned long long cull = 0;
         unsigned long long draw = 0;
-        unsigned long long poses = 0;  // evaluate_poses(), before the frame
         unsigned long long cull_by[kTargets] = {};
         unsigned long long draw_by[kTargets] = {};
 
@@ -1287,7 +1287,7 @@ struct Renderer::Impl : tl::core::World {
             first = true;
         }
         void reset() {
-            controllers = scene_graph = cull = draw = poses = 0;
+            controllers = scene_graph = cull = draw = 0;
             for (int i = 0; i < kTargets; ++i) cull_by[i] = draw_by[i] = 0;
         }
         void preUpdateSceneGraph(Ogre::SceneManager*, Ogre::Camera*) override {

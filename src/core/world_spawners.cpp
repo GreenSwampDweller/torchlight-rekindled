@@ -219,6 +219,9 @@ tl::core::SpawnedUnitRef World::SpawnerHost::create_unit(const tl::core::SpawnRe
             world_.apply_script_events(range_events, *nodes);
     }
     if (entrance) {
+        // The animation first (`findRandomAnimation`, a draw when the model has several), then
+        // the sample.
+        world_.script.pick_spawn_animation(made.id);
         world_.play_bank_slot(world_.stats_for_unit(name), tl::core::SoundSlot::Spawn, place);
     }
     if (release.target_player) world_.script.hunt_player(made.id);
@@ -365,7 +368,9 @@ void World::step_spawners(float delta) {
 // the client's `+0xfbc` update is not carried.
 void World::settle_loaded_level() {
     constexpr float kLoadStep = 0.001f;
-    const tl::core::Vec3 at{player.position().x, player.position().y, player.position().z};
+    // The player already stands at the level's start.
+    tl::core::Vec3 at{player.position().x, player.position().y, player.position().z};
+    if (have_player_start) at = {player_start.x, player_start.y, player_start.z};
     for (MachineView& view : machines()) {
         std::vector<tl::core::ScriptEvent> events;
         view.script->update_layouts(kLoadStep, at, quest_log.state(), events);

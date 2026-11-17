@@ -1013,7 +1013,9 @@ ogre::Vector3 World::character_to_ground(const ogre::Vector3& at, float collisio
                    (passability.map_passable(p) && passability.position_passable(p));
         },
         tl::core::volatile_random());
-    return ogre::Vector3(ground.x, ground.y, ground.z);
+    // The console's number is the collision sphere's centre (`+0x74 = hit.y + +0x15C`); a unit's
+    // position here is its feet.
+    return ogre::Vector3(ground.x, ground.y - collision_radius, ground.z);
 }
 
 tl::core::GoldPileSounds World::gold_sounds() {

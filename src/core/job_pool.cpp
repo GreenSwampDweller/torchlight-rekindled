@@ -24,7 +24,7 @@ void JobPool::take_slices() {
     for (;;) {
         const size_t begin = next_.fetch_add(grain_, std::memory_order_relaxed);
         if (begin >= count_) return;
-        (*run_)(begin, std::min(begin + grain_, count_));
+        run_(begin, std::min(begin + grain_, count_));
     }
 }
 
@@ -37,16 +37,29 @@ void JobPool::parallel_for(size_t count, size_t grain,
             run(begin, std::min(begin + grain, count));
         return;
     }
+    start(count, grain, run);
+    finish();
+}
+
+void JobPool::start(size_t count, size_t grain, std::function<void(size_t, size_t)> run) {
+    finish();
+    if (count == 0) return;
     {
         const std::lock_guard<std::mutex> hold(lock_);
-        run_ = &run;
+        run_ = std::move(run);
         count_ = count;
-        grain_ = grain;
+        grain_ = std::max<size_t>(grain, 1);
         next_.store(0, std::memory_order_relaxed);
         busy_ = static_cast<unsigned>(threads_.size());
         ++round_;
     }
+    started_ = true;
     wake_.notify_all();
+}
+
+void JobPool::finish() {
+    if (!started_) return;
+    started_ = false;
     take_slices();
     std::unique_lock<std::mutex> hold(lock_);
     done_.wait(hold, [this] { return busy_ == 0; });

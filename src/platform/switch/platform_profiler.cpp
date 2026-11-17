@@ -1,8 +1,10 @@
 // Where the game's thread spends its time on the console, sampled: a thread on another core pauses
 // it, reads its registers (`svcGetThreadContext3`), walks the frame-pointer chain, and resumes it.
 //
-// Only while `sdmc:/switch/torchlight/profile` exists at start-up. Samples go to `profile.bin` as
-// image offsets; profiler_mark() labels what follows.
+// Only when asked at start-up: a line `profile=1` in the game folder's config.txt, or a file
+// `profile` (or `profile.txt`) in the game's folder (platform_data_root) or in
+// `sdmc:/switch/torchlight/`. Samples go to `profile.bin` in that folder as image offsets;
+// profiler_mark() labels what follows.
 //
 // Nothing that can take a lock (malloc, stdio, logging) runs while the game's thread is paused.
 #include "core/platform.h"
@@ -11,9 +13,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
+#include <dirent.h>
+#include <strings.h>
 #include <switch.h>
 
 extern "C" void _start(void);
@@ -21,14 +27,62 @@ extern "C" void _start(void);
 namespace tl::core {
 namespace {
 
-constexpr const char* kFlagPath = "sdmc:/switch/torchlight/profile";
 #ifndef TL_RUN_TAG
 #define TL_RUN_TAG ""
 #endif
 /// profile.bin, or profile-<tag>.bin for a tagged build (cmake/switch.cmake).
-const char* const kOutPath = sizeof(TL_RUN_TAG) > 1 ? "sdmc:/switch/torchlight/profile-" TL_RUN_TAG
-                                                      ".bin"
-                                                    : "sdmc:/switch/torchlight/profile.bin";
+const char* const kOutName = sizeof(TL_RUN_TAG) > 1 ? "profile-" TL_RUN_TAG ".bin" : "profile.bin";
+
+bool file_exists(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (f == nullptr) return false;
+    std::fclose(f);
+    return true;
+}
+
+/// The folder whose `profile` (or `profile.txt`, as Windows tends to save it) asks for sampling:
+/// the game's own first, then the fixed one older notes name. Empty when neither asks.
+/// Whether `config.txt` in `folder` has a line `profile=1` (spaces and case aside).
+bool config_asks(const std::string& folder) {
+    std::FILE* f = std::fopen((folder + "config.txt").c_str(), "rb");
+    if (f == nullptr) return false;
+    bool asked = false;
+    char line[256];
+    while (!asked && std::fgets(line, sizeof line, f) != nullptr) {
+        std::string text;
+        for (const char* c = line; *c != '\0' && *c != '#'; ++c) {
+            if (std::isspace(static_cast<unsigned char>(*c)) == 0)
+                text += static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+        }
+        asked = text == "profile=1";
+    }
+    std::fclose(f);
+    return asked;
+}
+
+std::string profile_folder() {
+    if (config_asks(platform_data_root())) return platform_data_root();
+    for (const std::string& folder :
+         {platform_data_root(), std::string("sdmc:/switch/torchlight/")}) {
+        if (file_exists(folder + "profile") || file_exists(folder + "profile.txt")) return folder;
+    }
+    return std::string();
+}
+
+/// The names in `folder` that start with "profile", for the log when nothing asked: a flag
+/// file saved under another name (`profile.txt.txt`) shows there.
+std::string profile_lookalikes(const std::string& folder) {
+    std::string names;
+    DIR* dir = opendir(folder.c_str());
+    if (dir == nullptr) return names;
+    while (const dirent* entry = readdir(dir)) {
+        if (strncasecmp(entry->d_name, "profile", 7) != 0) continue;
+        if (!names.empty()) names += ", ";
+        names += entry->d_name;
+    }
+    closedir(dir);
+    return names;
+}
 /// 500 samples a second: enough for a function at 1 % to collect a few
 /// hundred samples in a minute, and a pause the game does not feel.
 constexpr s64 kIntervalNs = 2000000;
@@ -64,7 +118,7 @@ struct State {
     Thread thread{};
     Target main;
     Target others[kMaxThreads];
-    bool all_threads = false;  ///< sdmc:/switch/torchlight/profile_threads exists
+    bool all_threads = false;  ///< profile_threads exists beside the profile flag
     std::atomic<bool> running{false};
     std::FILE* out = nullptr;
     uintptr_t base = 0;
@@ -184,7 +238,21 @@ extern "C" Result __real_threadCreate(Thread* t, ThreadFunc entry, void* arg, vo
                                       size_t stack_sz, int prio, int cpuid);
 extern "C" Result __wrap_threadCreate(Thread* t, ThreadFunc entry, void* arg, void* stack_mem,
                                       size_t stack_sz, int prio, int cpuid) {
+#if defined(__SWITCH2__)
+    // A thread asking for the default core (libounce's pthread_create: Mesa's threaded-context
+    // and flush workers, and ours before they place themselves) starts on core 1, not on the game
+    // thread's core 0, so the driver works beside the game instead of taking turns with it. The
+    // Switch 1's patched Mesa pins its glthread worker to core 1 itself.
+    constexpr int kDefaultCore = -2;
+    constexpr int kDriverCore = 1;
+    Result rc = cpuid == kDefaultCore
+                    ? __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, kDriverCore)
+                    : __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, cpuid);
+    if (R_FAILED(rc) && cpuid == kDefaultCore)
+        rc = __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, cpuid);
+#else
     const Result rc = __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, cpuid);
+#endif
     if (R_SUCCEEDED(rc)) {
         const int i = g_thread_count.load(std::memory_order_relaxed);
         if (i < kMaxThreads) {
@@ -197,21 +265,25 @@ extern "C" Result __wrap_threadCreate(Thread* t, ThreadFunc entry, void* arg, vo
 
 void start_profiler() {
     if (g_state != nullptr) return;
-    std::FILE* flag = std::fopen(kFlagPath, "rb");
-    if (flag == nullptr) return;
-    std::fclose(flag);
+    const std::string folder = profile_folder();
+    if (folder.empty()) {
+        const std::string seen = profile_lookalikes(platform_data_root());
+        TL_LOG_INFO(
+            "profiler: off (no profile=1 in %sconfig.txt, no 'profile' file there or in "
+            "sdmc:/switch/torchlight/; names there starting with 'profile': %s)",
+            platform_data_root().c_str(), seen.empty() ? "none" : seen.c_str());
+        return;
+    }
+    const std::string out_path = folder + kOutName;
 
     auto* s = new State();
     s->base = reinterpret_cast<uintptr_t>(&_start);
     // The game's thread is the one calling.
     s->main.handle = threadGetCurHandle();
-    if (std::FILE* all = std::fopen("sdmc:/switch/torchlight/profile_threads", "rb")) {
-        s->all_threads = true;
-        std::fclose(all);
-    }
-    s->out = std::fopen(kOutPath, "wb");
+    s->all_threads = file_exists(folder + "profile_threads");
+    s->out = std::fopen(out_path.c_str(), "wb");
     if (s->out == nullptr) {
-        TL_LOG_WARN("profiler: cannot write %s; not sampling", kOutPath);
+        TL_LOG_WARN("profiler: cannot write %s; not sampling", out_path.c_str());
         delete s;
         return;
     }
@@ -228,7 +300,7 @@ void start_profiler() {
     }
     g_state = s;
     TL_LOG_INFO("profiler: sampling the game's thread every %lld us into %s",
-                static_cast<long long>(kIntervalNs / 1000), kOutPath);
+                static_cast<long long>(kIntervalNs / 1000), out_path.c_str());
 }
 
 void stop_profiler() {
