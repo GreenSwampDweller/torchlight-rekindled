@@ -1712,6 +1712,17 @@ void QuestLog::completion_consequences(const QuestDefinition& quest, bool player
     // done is free to be offered again.
     if (quest.repeatable) {
         state_.set(quest.name, QuestStatus::Unknown);
+        // PORT: and its finished entry let go, as a save (which writes only the held quests)
+        // and load would. Kept, it answered `is_complete` and `find` for the quest offered
+        // again: its giver kept the complete icon and `[COMPLETE]` line, and every talk
+        // handed it in and paid once more.
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            if (!same_name(entries_[i].name(), quest.name)) continue;
+            if (entries_[i].status == QuestStatus::Complete) {
+                entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            break;
+        }
         return;
     }
     broadcast_quest_event(4, quest.name);
