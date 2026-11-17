@@ -41,9 +41,23 @@ constexpr float kUnderStrip = 0.012f;
 /// of its 48).
 constexpr const char* kFrameArt = "spells_window";
 constexpr float kFrameInset = 6.0f / 48.0f;
-/// The readout's and the count's sizes, in the interface's points.
-constexpr float kReadoutPoints = 15.0f;
-constexpr float kCountPoints = 14.0f;
+/// The readout's, the count's and a spell's cooling seconds' sizes, in the interface's points.
+/// This is a handheld's second display, held at arm's length: the words are read at a glance,
+/// so they are about twice what the main window's interface would use.
+constexpr float kReadoutPoints = 29.0f;
+constexpr float kCountPoints = 21.0f;
+constexpr float kCoolingPoints = 26.0f;
+/// What the readout's size is kept clear of the map's bezel for: an average glyph is about this
+/// much of the text's height wide, and these are the longest captions each corner is made to
+/// hold ("Ember Mine Floor 12", "12,345,678 gold", "Fame 100"), in characters. A longer one
+/// reaches in over the bezel rather than shrinking the text further.
+constexpr float kGlyphWidth = 0.5f;
+constexpr float kLongestPlace = 20.0f;
+constexpr float kLongestPurse = 16.0f;
+constexpr float kLongestLevel = 10.0f;
+/// How far the bezel reaches past the map's circle, as draw_bezel() draws it, in pixels at 1080
+/// on the shorter side.
+constexpr float kBezelReach = 30.0f;
 
 const Ogre::ColourValue kWordColour(0.92f, 0.86f, 0.70f, 1.0f);
 const Ogre::ColourValue kDimColour(0.55f, 0.52f, 0.45f, 1.0f);
@@ -403,10 +417,36 @@ void SecondScreen::layout_widgets() {
     const float edge = kEdge * down;
     // The interface's own rule for a text's size: its points at 768 lines, scaled to the screen.
     const float scale = down / kNativeHeight;
-    const float line = kReadoutPoints * ui_points_to_pixels() * scale;
+    float line = kReadoutPoints * ui_points_to_pixels() * scale;
     const float count_line = kCountPoints * ui_points_to_pixels() * scale;
+    const float cooling_line = kCoolingPoints * ui_points_to_pixels() * scale;
 
     const float first = shape_.strip_bottom + kUnderStrip * down;
+
+    // The readout is made as large as it can be without reaching the map's bezel. A caption of
+    // `chars` characters on the text height `h`, starting at `top` and hugging the left or the
+    // right edge, is clear when its inner end is outside the circle's widest part at those
+    // heights (which is where the circle is nearest the text's middle).
+    if (shape_.radius > 0.0f) {
+        const float reach = shape_.radius + kBezelReach * std::min(across, down) / 1080.0f;
+        const auto clear = [&](float h, float top, float chars, bool right) {
+            const float nearest = std::min(std::max(shape_.centre_y, top), top + h);
+            const float dy = shape_.centre_y - nearest;
+            if (std::fabs(dy) >= reach) return true;
+            const float half = std::sqrt(reach * reach - dy * dy);
+            const float width = chars * kGlyphWidth * h;
+            return right ? across - edge - width >= shape_.centre_x + half
+                         : edge + width <= shape_.centre_x - half;
+        };
+        const float floor_size = 1.0f;  // never smaller than this: a bound for the loop
+        while (line > floor_size &&
+               !(clear(line, first, kLongestPlace, true) &&
+                 clear(line, first + line * 1.15f, kLongestPurse, true) &&
+                 clear(line, first, kLongestLevel, false) &&
+                 clear(line, first + line * 1.15f, kLongestLevel, false))) {
+            line -= 0.5f;
+        }
+    }
     const auto place = [&](Ogre::TextAreaOverlayElement* text, float x, float y, float height) {
         if (text == nullptr) return;
         set_char_height(text, height / down);
@@ -454,7 +494,7 @@ void SecondScreen::layout_widgets() {
                                        (portal_size_ - inset * 2.0f) / down);
         }
         place(button.cooling, button.left + portal_size_ * 0.5f,
-              button.top + (portal_size_ - line * 1.4f) * 0.5f, line * 1.4f);
+              button.top + (portal_size_ - cooling_line) * 0.5f, cooling_line);
     }
 }
 
