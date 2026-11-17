@@ -2545,8 +2545,8 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         set_widget_visible("master/PetCommands", true);
         set_widget_visible("master/ToggleItemCompare", true);
         set_widget_text("master/itemcomparetext",
-                        item_compare_ ? "disable item compare (R3)"
-                                      : "enable item compare (R3)");
+                        item_compare_ ? "disable item compare"
+                                      : "enable item compare");
     } else if (menu_mode_ == MenuMode::Skills) {
         // The ring's neighbours either side, as the other three tabs name theirs.
         set_widget_text("master/MenuLeft", "Stats");

@@ -460,6 +460,8 @@ def pc_menu_sprites():
         "decor_arrow_right": art.arrowhead(22 * r, 30 * r, True),
         "start_button": art.pill_button(28 * r, 22 * r, "right"),
         "dpad_leftright": art.dpad(24 * r, "lr"),
+        # The right stick, pressed: item compare, since the D-pad steps the tabs.
+        "rstick_click": art.stick(24 * r, 24 * r, "R", ""),
         "dpad_updown": art.dpad(35 * r, "ud"),
         "submenu_tray_rollover": art.box(291, 104, radius=10, top=art.INSET, edge=art.IRON_DARK),
         "item_tray": row(False, art.IRON_DARK),
@@ -573,7 +575,7 @@ def master_layout():
                         text("words", "pet commands", font="SerifBig", **at(28, -1, 200, 26)),
                     ], widget="PetCommands", **at(40, 22, 230, 24)),
                     line_frame("compare", [
-                        image("glyph", "dpad_leftright", **at(-8, 0, 24, 24)),
+                        image("glyph", "rstick_click", **at(-8, 0, 24, 24)),
                         text("words", "item comparison: off", "itemcomparetext", "SerifBig",
                              **at(22, -1, 236, 26)),
                     ], widget="ToggleItemCompare", **at(330, 22, 256, 24)),
