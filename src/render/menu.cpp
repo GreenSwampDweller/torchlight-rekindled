@@ -59,6 +59,8 @@ constexpr float kConsoleColumnTop = 138.0f;
 /// as the layout's `Font` properties name them.
 constexpr float kConsoleCaptionPoints = 16.0f;
 constexpr float kConsoleSmallPoints = 14.0f;
+// PORT: the room between a console button and the pad glyph beside it, in authored units.
+constexpr float kHintGap = 8.0f;
 
 /// The bottom border strip, and where `CopyrightInfo` sits inside the screen:
 /// the strip is 93 units tall and the text is authored at y 653 of 768.
@@ -631,9 +633,11 @@ void MainMenu::clear_buttons() {
             if (text_root_ != nullptr) text_root_->removeChild(label->getName());
             overlays.destroyOverlayElement(label);
         }
-        if (button.piece.panel != nullptr && buttons_overlay_ != nullptr) {
-            buttons_overlay_->remove2D(button.piece.panel);
-            overlays.destroyOverlayElement(button.piece.panel);
+        for (Ogre::PanelOverlayElement* panel : {button.piece.panel, button.hint.panel}) {
+            if (panel != nullptr && buttons_overlay_ != nullptr) {
+                buttons_overlay_->remove2D(panel);
+                overlays.destroyOverlayElement(panel);
+            }
         }
     }
     buttons_.clear();
@@ -802,6 +806,35 @@ void MainMenu::add_console_column() {
     }
 }
 
+// DIVERGENCE: the console's bar offers START as Credits, which the port has no screen for (Start
+// quit the game instead). Start continues the last character, the button at the top of the
+// column, so a launch is Start all the way into the game; the START glyph beside Continue, and
+// the bar's prompt worded so, say as much. With nothing to continue, Start does nothing and its
+// prompt is left off.
+void MainMenu::offer_start_continue() {
+    BarItem* start = nullptr;
+    for (BarItem& item : bar_items_) {
+        if (item.window == "credits") start = &item;
+    }
+    if (start == nullptr) return;
+    start->hidden = !continue_available_;
+    for (Ogre::TextAreaOverlayElement* label : {start->shadow, start->label}) {
+        if (label != nullptr) label->setCaption("Continue");
+    }
+    if (!continue_available_ || start->glyph.set == nullptr || buttons_overlay_ == nullptr) return;
+    for (Button& button : buttons_) {
+        if (button.action != MenuAction::Continue || button.hint.panel != nullptr) continue;
+        button.hint.set = start->glyph.set;
+        button.hint.material = start->glyph.material;
+        button.hint.image = start->glyph.image;
+        button.hint_w = start->glyph_w;
+        button.hint_h = start->glyph_h;
+        button.hint.panel =
+            make_panel("tl/menu/hint/" + std::to_string(button_serial_++), buttons_overlay_);
+        button.hint.panel->setMaterial(button.hint.material);
+    }
+}
+
 void MainMenu::show_main_buttons() {
     if (buttons_overlay_ == nullptr) return;
     clear_buttons();
@@ -815,6 +848,7 @@ void MainMenu::show_main_buttons() {
         // shown whenever there is somewhere to save (`CMainMenu::update`).
         // `ExitGame` keeps its slot with the port's own wording.
         add_console_column();
+        offer_start_continue();
 
         selected_ = 0;
         apply_button_look();
@@ -1019,6 +1053,17 @@ void MainMenu::layout_console_buttons(float across, float down) {
                    button.piece.image);
             button.piece.panel->show();
         }
+        // The glyph beside it, past its right edge and centred on it.
+        if (button.hint.panel != nullptr && button.hint.set != nullptr) {
+            const float hint_w = button.hint_w * scale_;
+            const float hint_h = button.hint_h * scale_;
+            const float hint_left = left + w + kHintGap * scale_;
+            const float hint_top = top + (h - hint_h) * 0.5f;
+            button.hint.panel->setPosition(hint_left / across, hint_top / down);
+            button.hint.panel->setDimensions(hint_w / across, hint_h / down);
+            set_uv(button.hint.panel, *button.hint.set, button.hint.image);
+            button.hint.panel->show();
+        }
 
         // `SerifBig`, centred in the button - the caption's own window is
         // `{{0,4},{0,15},{0,259},{0,48}}` inside it, which is the middle band.
@@ -1051,6 +1096,11 @@ void MainMenu::layout_console_bar(float across, float down) {
     // own left edge.
     const float strip_left = (across - kConsoleWidth * scale_) * 0.5f;
     for (BarItem& item : bar_items_) {
+        if (item.hidden) {
+            if (item.glyph.panel != nullptr) item.glyph.panel->hide();
+            if (item.label != nullptr) item.label->hide();
+            continue;
+        }
         if (item.glyph.panel != nullptr) {
             const float left = strip_left + (item.x + item.glyph_x) * scale_;
             const float top = strip_top + (item.y + item.glyph_y) * scale_;
@@ -1423,8 +1473,18 @@ MenuAction MainMenu::update(const tl::core::InputState& input) {
     // START (Escape on a keyboard) leaves; the same thing the Quit button does.
     // On the Choose Level lists and the wardrobe editor it backs out instead - the list is a
     // menu of its own, not a second way to quit - and so does B there.
+    // On the console column it continues the last character instead, and does nothing with
+    // none (`offer_start_continue`); Quit is still the column's last button.
     MenuAction action = MenuAction::None;
-    if (input.quit && !quit_held_) action = list_mode_ ? MenuAction::Back : MenuAction::Quit;
+    if (input.quit && !quit_held_) {
+        if (list_mode_) {
+            action = MenuAction::Back;
+        } else if (!console_mode_) {
+            action = MenuAction::Quit;
+        } else if (continue_available_) {
+            action = MenuAction::Continue;
+        }
+    }
     quit_held_ = input.quit;
     if (input.skip && !skip_held_ && list_mode_) action = MenuAction::Back;
     skip_held_ = input.skip;

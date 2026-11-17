@@ -358,6 +358,7 @@ void MainMenu::hide_copyright() {
 void MainMenu::set_bar_caption(const std::string& window, const std::string& text) {
     for (BarItem& item : bar_items_) {
         if (item.window != window) continue;
+        item.hidden = false;
         for (Ogre::TextAreaOverlayElement* label : {item.shadow, item.label}) {
             if (label != nullptr) label->setCaption(text);
         }

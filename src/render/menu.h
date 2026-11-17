@@ -581,6 +581,11 @@ private:
         /// The difficulty screen's `Hardcore`: a `ceguiWidget/Checkbox`, drawn
         /// from `widgets2` and flipped by A rather than chosen.
         bool checkbox = false;
+
+        /// PORT: a pad glyph beside the button, for the button a press of it picks: the bar's
+        /// START glyph beside `ContinueLast`. Its authored size; no panel for none.
+        Piece hint;
+        float hint_w = 0.0f, hint_h = 0.0f;
     };
 
     bool load_imagesets(const std::string& group);
@@ -777,8 +782,14 @@ private:
         float x = 0.0f, y = 0.0f;
         float glyph_x = 0.0f, glyph_y = 0.0f, glyph_w = 0.0f, glyph_h = 0.0f;
         float text_x = 0.0f, text_y = 0.0f, text_h = 0.0f;
+        /// PORT: left off the bar, for a prompt whose button does nothing on this screen.
+        bool hidden = false;
     };
     std::vector<BarItem> bar_items_;
+
+    /// PORT: the console column's Start: the START prompt and glyph beside `ContinueLast` put
+    /// up, or the prompt left off when there is nothing to continue (`show_main_buttons`).
+    void offer_start_continue();
 
     /// The two images `GuiLook.looknfeel` names for a StandardButton.
     std::string button_normal_;
