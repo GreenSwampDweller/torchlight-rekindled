@@ -108,6 +108,10 @@ SWITCH_ONLY = [
     # installed (devkitPro's container has it): configure then fails with
     # "install DIRECTORY given no DESTINATION". No docs are installed anyway.
     "-DOGRE_INSTALL_DOCS=OFF",
+    # Likewise Bullet, if the switch-bullet portlib is installed (it is in the
+    # container): OGRE's Bullet component then fails to generate, on a
+    # relative include path. The engine has no use for it.
+    "-DOGRE_BUILD_COMPONENT_BULLET=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=ON",
     "-DOGRE_BUILD_RENDERSYSTEM_GL=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF",
