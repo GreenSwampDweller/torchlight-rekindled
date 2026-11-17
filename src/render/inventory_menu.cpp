@@ -1401,15 +1401,25 @@ void InventoryMenu::set_widget_image(const std::string& widget_name,
 bool InventoryMenu::hide_compare_dpad() {
     const int parent = find_node_index_by_widget("master/ToggleItemCompare");
     if (parent < 0) return false;
-    bool found = false;
-    for (Node& n : nodes_) {
-        if (n.parent != parent || n.panel == nullptr || n.image != "dpad_leftright") continue;
-        n.panel->setTransparent(true);
-        found = true;
+    std::vector<int> pictures;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].parent != parent || nodes_[i].image != "dpad_leftright") continue;
+        pictures.push_back(static_cast<int>(i));
     }
+    if (pictures.empty()) return false;
     // The caption is authored 20 to the right of the picture's place, which starts at -9.
-    if (found) set_widget_position("master/itemcomparetext", -6.0f, -1.0f);
-    return found;
+    // Moved once: placing a widget lays the whole menu out again.
+    if (const Node* caption = find_node_by_widget("master/itemcomparetext")) {
+        if (caption->off_x != -6.0f) set_widget_position("master/itemcomparetext", -6.0f, -1.0f);
+    }
+    bool changed = false;
+    for (int index : pictures) {
+        Node& n = nodes_[static_cast<size_t>(index)];
+        changed = changed || !n.runtime_hidden;
+        n.runtime_hidden = true;
+    }
+    if (changed) refresh_node_visibility(pictures);
+    return true;
 }
 
 void InventoryMenu::set_children_visible(const std::string& widget_name, bool visible) {
