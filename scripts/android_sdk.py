@@ -69,10 +69,19 @@ def adb() -> pathlib.Path:
     return sdk() / "platform-tools" / "adb.exe"
 
 
-def java_env() -> dict:
-    """The environment apksigner and keytool run in: Android Studio's JDK first on PATH."""
-    env = dict(os.environ)
+def jdk() -> pathlib.Path:
+    """Android Studio's own JDK (its `jbr`), or, where there is no Android Studio
+    (a GitHub Actions runner, .github/workflows/release.yml), the one JAVA_HOME names."""
     jbr = STUDIO / "jbr"
-    env["JAVA_HOME"] = str(jbr)
-    env["PATH"] = str(jbr / "bin") + os.pathsep + env.get("PATH", "")
+    if not jbr.is_dir() and os.environ.get("JAVA_HOME"):
+        return pathlib.Path(os.environ["JAVA_HOME"])
+    return jbr
+
+
+def java_env() -> dict:
+    """The environment apksigner and keytool run in: that JDK first on PATH."""
+    env = dict(os.environ)
+    home = jdk()
+    env["JAVA_HOME"] = str(home)
+    env["PATH"] = str(home / "bin") + os.pathsep + env.get("PATH", "")
     return env

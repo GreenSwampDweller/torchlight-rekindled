@@ -306,7 +306,9 @@ def main() -> int:
            prefix_map]
 
     def run(command) -> int:
-        if args.platform != "switch":
+        # On Linux (WSL, or the devkitpro/devkita64 container the release
+        # workflow builds in) devkitPro's CMake setup is the ordinary shell's.
+        if args.platform != "switch" or os.name != "nt":
             return subprocess.run(command).returncode
         line = " ".join(shlex.quote(a) for a in command)
         return subprocess.run(

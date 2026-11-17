@@ -9,7 +9,9 @@ signature, and four of the SDK's own tools make it:
   2. aapt2 links android/AndroidManifest.xml.in, filled in, against android.jar;
   3. the library is added under lib/arm64-v8a/, and zipalign aligns the lot;
   4. apksigner signs it with the debug key, ~/.android/debug.keystore - the key
-     Android Studio uses too, made here with keytool when it is missing.
+     Android Studio uses too, made here with keytool when it is missing - or,
+     when TL_ANDROID_KEYSTORE names a keystore, with the key in it (the release
+     workflow's, from the repository's secrets: docs/releasing.md).
 
 Usage:
     python scripts/build_apk.py game             # the engine: the whole tree -> build-android/
@@ -21,6 +23,7 @@ native build makes, cmake/ui_pack.cmake), and the launcher unpacks both into the
 app's files.
 """
 import argparse
+import os
 import pathlib
 import shutil
 import subprocess
@@ -97,10 +100,37 @@ def ensure_debug_key() -> None:
         return
     DEBUG_KEYSTORE.parent.mkdir(parents=True, exist_ok=True)
     print(f"making the debug key: {DEBUG_KEYSTORE}")
-    run([android_sdk.STUDIO / "jbr" / "bin" / "keytool.exe", "-genkeypair", "-keystore", DEBUG_KEYSTORE, "-storepass", DEBUG_PASS,
+    run([android_sdk.jdk() / "bin" / "keytool.exe", "-genkeypair", "-keystore", DEBUG_KEYSTORE, "-storepass", DEBUG_PASS,
          "-alias", DEBUG_ALIAS, "-keypass", DEBUG_PASS, "-keyalg", "RSA", "-keysize", "2048",
          "-validity", "10000", "-dname", "CN=Android Debug,O=Android,C=US"],
         env=android_sdk.java_env())
+
+
+def signing_args() -> list:
+    """apksigner's key options: the release key the environment names, else the debug key.
+
+    TL_ANDROID_KEYSTORE is a keystore file, TL_ANDROID_KEY_ALIAS the key in it, and
+    TL_ANDROID_KEYSTORE_PASSWORD / TL_ANDROID_KEY_PASSWORD their passwords. The
+    passwords go to apksigner as `env:` names, so the printed command never shows them.
+    An update installs over the app only if it is signed with the key that signed it.
+    """
+    keystore = os.environ.get("TL_ANDROID_KEYSTORE")
+    if not keystore:
+        ensure_debug_key()
+        return ["--ks", DEBUG_KEYSTORE, "--ks-pass", f"pass:{DEBUG_PASS}",
+                "--key-pass", f"pass:{DEBUG_PASS}", "--ks-key-alias", DEBUG_ALIAS]
+    missing = [name for name in ("TL_ANDROID_KEYSTORE_PASSWORD", "TL_ANDROID_KEY_ALIAS")
+               if not os.environ.get(name)]
+    if missing:
+        raise SystemExit(f"TL_ANDROID_KEYSTORE is set but {', '.join(missing)} is not")
+    if not pathlib.Path(keystore).is_file():
+        raise SystemExit(f"TL_ANDROID_KEYSTORE: no file at {keystore}")
+    # The key's password is the keystore's unless it has one of its own.
+    key_pass = ("TL_ANDROID_KEY_PASSWORD" if os.environ.get("TL_ANDROID_KEY_PASSWORD")
+                else "TL_ANDROID_KEYSTORE_PASSWORD")
+    print(f"signing with the key '{os.environ['TL_ANDROID_KEY_ALIAS']}' from {keystore}")
+    return ["--ks", keystore, "--ks-pass", "env:TL_ANDROID_KEYSTORE_PASSWORD",
+            "--key-pass", f"env:{key_pass}", "--ks-key-alias", os.environ["TL_ANDROID_KEY_ALIAS"]]
 
 
 # The launcher's icon: the .nro's own (src/logo_icon.jpg), at each density's
@@ -139,7 +169,7 @@ def compile_java(tools: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
         d.mkdir(parents=True)
     sources = sorted(JAVA_SOURCE.rglob("*.java"))
     env = android_sdk.java_env()
-    jdk = android_sdk.STUDIO / "jbr" / "bin"
+    jdk = android_sdk.jdk() / "bin"
     # The lambdas' java.lang.invoke is not in android.jar; d8 desugars them, and
     # javac only needs the build-tools' stubs to compile them.
     boot = f"{android_sdk.android_jar()};{tools / 'core-lambda-stubs.jar'}"
@@ -202,12 +232,9 @@ def package(target: dict, library: pathlib.Path) -> pathlib.Path:
     # later may use; harmless for the deflated one here.
     run([tools / "zipalign.exe", "-P", "16", "-f", "4", linked, aligned])
 
-    ensure_debug_key()
     final = target["build"] / f"{target['lib'].replace('_', '-')}.apk"
     env = android_sdk.java_env()
-    run([tools / "apksigner.bat", "sign", "--ks", DEBUG_KEYSTORE, "--ks-pass", f"pass:{DEBUG_PASS}",
-         "--key-pass", f"pass:{DEBUG_PASS}", "--ks-key-alias", DEBUG_ALIAS, "--out", final, aligned],
-        env=env)
+    run([tools / "apksigner.bat", "sign", *signing_args(), "--out", final, aligned], env=env)
     run([tools / "apksigner.bat", "verify", final], env=env)
     return final
 

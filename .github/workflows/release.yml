@@ -1,0 +1,416 @@
+# The release builds, made here from the tagged commit instead of on one PC.
+#
+# Pushing a version tag (1.2.0) builds the four assets the releases carry and
+# attaches them to a DRAFT release, which the maintainer reads over and
+# publishes by hand:
+#
+#   TorchlightRekindled-<version>-windows-x64.zip   MSYS2 MINGW64, scripts/package_windows.py
+#   TorchlightRekindled-<version>-linux-x64.zip     Steam Runtime SDK, scripts/build_linux_release.py
+#   TorchlightRekindled-<version>.apk               Android SDK/NDK, scripts/build_apk.py
+#   torchlight.nro                                  devkitPro (devkitpro/devkita64), cmake/switch.cmake
+#
+# Running it by hand (Actions > Release > Run workflow) builds any ref the
+# same way and keeps the four files as the run's artifacts; it makes no release.
+#
+# No game data is ever part of a build: no pak.zip, no music/. The publish job
+# checks every archive for them before it uploads anything.
+#
+# The APK is signed with the key in the repository's secrets; see
+# docs/releasing.md. It must be the key that signed the earlier releases, or
+# Android refuses to install the new APK over the installed app.
+
+name: Release
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag, branch or commit to build (artifacts only, no release)
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  setup:
+    name: Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ref: ${{ steps.version.outputs.ref }}
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - name: What to build
+        id: version
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            {
+              echo "ref=$GITHUB_REF"
+              echo "version=$GITHUB_REF_NAME"
+              echo "publish=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "ref=$INPUT_REF"
+              echo "version=${INPUT_REF//[^A-Za-z0-9._-]/-}"
+              echo "publish=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.ref }}
+          fetch-depth: 0
+
+      # The version is written into the sources by hand (the APK's and the
+      # .nro's). A tag whose sources still say the last version would ship
+      # builds that call themselves that, as 1.1.0 did.
+      - name: The sources carry the tag's version
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          fail=0
+          if ! grep -qF "\"version\": \"$VERSION\"" scripts/build_apk.py; then
+            echo "::error file=scripts/build_apk.py::the APK's version is not $VERSION"
+            fail=1
+          fi
+          if ! grep -qF "VERSION \"$VERSION\"" cmake/switch.cmake; then
+            echo "::error file=cmake/switch.cmake::the .nro's version (nx_generate_nacp) is not $VERSION"
+            fail=1
+          fi
+          code=$(grep -oE 'versionCode="[0-9]+"' android/AndroidManifest.xml.in | grep -oE '[0-9]+')
+          previous=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "$VERSION^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            before=$(git show "$previous:android/AndroidManifest.xml.in" | grep -oE 'versionCode="[0-9]+"' | grep -oE '[0-9]+')
+            if [ "$code" -lt "$before" ]; then
+              echo "::error file=android/AndroidManifest.xml.in::versionCode $code is below $previous's ($before): Android will not install it over that release"
+              fail=1
+            elif [ "$code" -eq "$before" ]; then
+              echo "::warning file=android/AndroidManifest.xml.in::versionCode $code is the same as $previous's: raise it so the APK counts as an update"
+            fi
+          fi
+          echo "version $VERSION, Android versionCode $code (previous release: ${previous:-none})"
+          exit "$fail"
+
+  windows:
+    name: Windows x64
+    needs: setup
+    runs-on: windows-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      ZIP: TorchlightRekindled-${{ needs.setup.outputs.version }}-windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          submodules: recursive
+
+      # docs/building.md's Windows toolchain. path-type inherit keeps the
+      # runner's git on PATH, for apply_patches.py and the README's revision.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-python-pillow
+
+      - name: Fetch stb_vorbis and patch the submodules
+        run: |
+          set -euo pipefail
+          python scripts/fetch_stb.py
+          python scripts/apply_patches.py
+
+      - name: Build OGRE
+        run: python scripts/build_ogre.py --platform desktop
+
+      # TL_OGRE_MEDIA_DIR=.: the player folder's RTShaderLib/ beside the
+      # program, not a folder of this machine (cmake/desktop.cmake).
+      - name: Build the engine
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-desktop -G Ninja -DCMAKE_BUILD_TYPE=Release -DTL_OGRE_MEDIA_DIR=.
+          cmake --build build-desktop
+
+      - name: Run the tests
+        run: ctest --test-dir build-desktop --output-on-failure
+
+      - name: Make the player folder
+        run: |
+          set -euo pipefail
+          rm -rf build-desktop/package/Torchlight
+          TL_MINGW_BIN="$(cygpath -m /mingw64/bin)" python scripts/package_windows.py | tee package.log
+          if grep -q "NOT READY TO PUBLISH" package.log; then exit 1; fi
+
+      - name: Zip it
+        run: |
+          set -euo pipefail
+          cd build-desktop/package
+          python -m zipfile -c "../../$ZIP" Torchlight
+          cd ../..
+          python -m zipfile -l "$ZIP" | tail -n 5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      ZIP: TorchlightRekindled-${{ needs.setup.outputs.version }}-linux-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          submodules: recursive
+
+      - name: Fetch stb_vorbis and patch the submodules
+        run: |
+          python3 scripts/fetch_stb.py
+          python3 scripts/apply_patches.py
+
+      # In Valve's Steam Runtime SDK container (glibc 2.31): OGRE, the engine,
+      # the tests, the player folder, the glibc check and the zip.
+      - name: Build in the Steam Runtime SDK
+        run: |
+          python3 scripts/build_linux_release.py --zip "$ZIP" 2>&1 | tee build.log
+          if grep -q "NOT READY TO PUBLISH" build.log; then exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+  android:
+    name: Android
+    needs: setup
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      APK: TorchlightRekindled-${{ needs.setup.outputs.version }}.apk
+      # Pinned, so a release does not change compiler with the runner image.
+      NDK_VERSION: 28.2.13676358
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      PUBLISH: ${{ needs.setup.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Android Studio's JDK is what signs on the maintainer's PC; here it is
+      # this one (scripts/android_sdk.py's jdk()).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install the Android SDK packages
+        shell: pwsh
+        run: |
+          python -m pip install pillow
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          & $sdkmanager --install "ndk;$env:NDK_VERSION" "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" | Select-Object -Last 5
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "ANDROID_NDK_HOME=$(Join-Path $env:ANDROID_HOME "ndk\$env:NDK_VERSION")" >> $env:GITHUB_ENV
+
+      - name: Fetch stb_vorbis and patch the submodules
+        run: |
+          python scripts/fetch_stb.py
+          python scripts/apply_patches.py
+
+      - name: Build OGRE
+        run: python scripts/build_ogre.py --platform android
+
+      - name: Decode the signing key
+        if: env.HAS_KEY == 'true'
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'release.keystore'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          "TL_ANDROID_KEYSTORE=$path" >> $env:GITHUB_ENV
+
+      # A release APK signed with any other key could not update the app
+      # players have installed, so a release stops here without the key. A
+      # build run by hand signs with a throwaway debug key instead.
+      - name: No signing key
+        if: env.HAS_KEY != 'true'
+        run: |
+          if [ "$PUBLISH" = true ]; then
+            echo "::error::the ANDROID_KEYSTORE_BASE64 secret is not set: see docs/releasing.md"
+            exit 1
+          fi
+          echo "::warning::no ANDROID_KEYSTORE_BASE64 secret: this APK is signed with a throwaway debug key and will not install over a released one"
+
+      - name: Build the APK
+        env:
+          TL_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TL_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TL_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          python scripts/build_apk.py game
+          cp build-android/torchlight.apk "$APK"
+
+      # The signer's certificate, for comparing with the last release's. With
+      # the ANDROID_CERT_SHA256 repository variable set, a different one fails.
+      - name: Check the signing certificate
+        shell: pwsh
+        env:
+          EXPECTED: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          $tools = python -c "import sys; sys.path.insert(0, 'scripts'); import android_sdk; print(android_sdk.build_tools())"
+          $out = & (Join-Path $tools 'apksigner.bat') verify --print-certs $env:APK
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out | Where-Object { $_ -match 'certificate (DN|SHA-256 digest)' }
+          $digest = ($out | Select-String 'certificate SHA-256 digest: ([0-9a-f]+)').Matches[0].Groups[1].Value
+          if ($env:EXPECTED) {
+            $want = $env:EXPECTED.ToLower() -replace '[^0-9a-f]', ''
+            if ($digest -ne $want) {
+              "::error::the APK is signed by $digest, not the release key $want"
+              exit 1
+            }
+            "the release key, as ANDROID_CERT_SHA256 expects"
+          } elseif ($env:PUBLISH -eq 'true') {
+            "::warning::ANDROID_CERT_SHA256 is not set: compare the digest above with the last release's by hand"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: ${{ env.APK }}
+          if-no-files-found: error
+
+  switch:
+    name: Nintendo Switch
+    needs: setup
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    timeout-minutes: 150
+    steps:
+      # Before the checkout: without git in the container it downloads the
+      # tree without its submodules.
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates cmake ninja-build \
+            pkg-config bison flex patch python3 python3-venv
+          # Pillow 10.1 or newer for the interface pack, Meson and Mako for Mesa.
+          python3 -m venv /opt/venv
+          /opt/venv/bin/pip install --quiet pillow meson mako setuptools
+          echo /opt/venv/bin >> "$GITHUB_PATH"
+          pacman=$(command -v dkp-pacman || command -v pacman || echo /opt/devkitpro/pacman/bin/pacman)
+          "$pacman" -Syu --needed --noconfirm switch-dev switch-mesa switch-libdrm_nouveau \
+            switch-freetype switch-harfbuzz switch-libpng switch-bzip2 switch-zlib \
+            switch-pkg-config dkp-meson-scripts dkp-toolchain-vars
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          submodules: recursive
+
+      - name: Fetch stb_vorbis and patch the submodules
+        run: |
+          git config --global --add safe.directory '*'
+          python3 scripts/fetch_stb.py
+          python3 scripts/apply_patches.py
+
+      # The patched Mesa (glthread, about 5 ms a frame on the console) that
+      # the release .nro links; cmake/switch.cmake falls back to devkitPro's
+      # stock one only with a warning, which the configure step below refuses.
+      - name: Build the patched Mesa
+        run: python3 scripts/build_mesa.py
+
+      - name: Build OGRE
+        run: python3 scripts/build_ogre.py --platform switch
+
+      - name: Build the .nro
+        run: |
+          cmake -S . -B build-switch -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DTL_PYTHON=/opt/venv/bin/python3 2>&1 | tee configure.log
+          if ! grep -q "patched switch-mesa from" configure.log; then
+            echo "::error::the .nro would link devkitPro's stock Mesa, not the patched one"
+            exit 1
+          fi
+          cmake --build build-switch
+          ls -l build-switch/torchlight.nro
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: switch
+          path: build-switch/torchlight.nro
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    needs: [setup, windows, linux, android, switch]
+    if: needs.setup.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: No game data in any asset
+        run: |
+          ls -l dist
+          for archive in dist/*.zip dist/*.apk; do
+            if zipinfo -1 "$archive" | grep -iE '(^|/)pak\.zip$|(^|/)music/'; then
+              echo "::error::$archive carries game data"
+              exit 1
+            fi
+          done
+
+      # A draft, never published from here. Re-running replaces the assets of
+      # the draft; a release already published is left alone.
+      - name: Attach the builds to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.version }}
+        run: |
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::release $TAG is already published; its assets are left as they are"
+              exit 1
+            fi
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --draft --verify-tag --title "$TAG" --generate-notes
+          fi
