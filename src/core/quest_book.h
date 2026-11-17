@@ -854,6 +854,9 @@ public:
 
     /// `CQuest +0x1e8`: the unit the quest was last initialised with.
     std::string giver_of(const QuestDefinition& quest) const;
+    /// The same, read back from a save (`CQuest::load`, the record's first guid); empty for
+    /// none.
+    void set_giver(const QuestDefinition& quest, const std::string& unit);
 
     /// Take the quest (`CQuestManager::giveQuest`); the dialog asks
     /// `log_full_for` first. `level` and `seed` are what `initializeQuestWithNPC`

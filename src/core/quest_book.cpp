@@ -864,6 +864,15 @@ void QuestLog::initialize_with_npc(const QuestDefinition& quest, const std::stri
     }
 }
 
+void QuestLog::set_giver(const QuestDefinition& quest, const std::string& unit) {
+    const std::string key = upper(quest.name);
+    if (unit.empty()) {
+        givers_.erase(key);
+    } else {
+        givers_[key] = upper(unit);
+    }
+}
+
 // PORT: the log's state set from outside.
 void QuestLog::restore_offer(const QuestDefinition& quest, const Offered& rolled,
                              const std::string& giver) {
@@ -1017,6 +1026,22 @@ const QuestDefinition* QuestLog::quest_for_npc(const std::string& unit,
         const QuestEntry& entry = *held;
         if (entry.definition == nullptr || entry.status != QuestStatus::Active) continue;
         if (same_name(giver_of(*entry.definition), unit)) return entry.definition;
+        // PORT: a save from before the giver was written holds none. A held quest with no
+        // giver, none of whose lines names a unit, is taken back by the unit whose `QUESTS`
+        // group lists it - or nobody could ever be handed it.
+        if (!giver_of(*entry.definition).empty()) continue;
+        const QuestDefinition& quest = *entry.definition;
+        bool names_a_unit = false;
+        for (const std::vector<DialogLine>* lines :
+             {&quest.intro, &quest.ret, &quest.complete, &quest.passive}) {
+            for (const DialogLine& line : *lines) names_a_unit = names_a_unit || !line.unit.empty();
+        }
+        if (names_a_unit) continue;
+        for (const std::string& name : unit_quests) {
+            if (!same_name(name, quest.name)) continue;
+            givers_[upper(quest.name)] = upper(unit);
+            return entry.definition;
+        }
     }
 
     // With more than one, the random people's quest is taken out as a
