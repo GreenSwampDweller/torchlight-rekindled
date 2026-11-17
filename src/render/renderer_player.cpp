@@ -764,8 +764,19 @@ void Renderer::Impl::drive_player(float delta) {
     // Automap controls: toggle with 'M' / Right Stick click (a turned free camera's reset), zoom
     const bool map_toggle_edge = in.map_toggle && !map_toggle_held && !game_camera.touch.took_r3;
     map_toggle_held = in.map_toggle;
-    if (map_toggle_edge) {
-        automap.cycle_mode();
+    // PORT: on the inventory's own screen the button is item compare instead (below): the
+    // D-pad's left and right, which the console gives that, step the tabs here. And with the
+    // small map on a second display it turns that map between its two views, there: the full
+    // screen map would take the main screen and leave the second one empty.
+    const bool compare_button =
+        inventory_menu.visible() && inventory_menu.menu_mode() == MenuMode::Inventory;
+    const bool compare_button_edge = map_toggle_edge && compare_button;
+    if (map_toggle_edge && !compare_button) {
+        if (automap.on_second_screen()) {
+            if (automap.toggle_second_screen_level_map()) apply_second_screen(true);
+        } else {
+            automap.cycle_mode();
+        }
     }
     if (in.map_zoom_in) {
         automap.zoom_in();
@@ -907,11 +918,15 @@ void Renderer::Impl::drive_player(float delta) {
         if (inventory_menu.menu_mode() == MenuMode::Inventory) {
             const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
             const bool vendor_tray = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
+            // PORT: the D-pad's left and right step the tabs as the left stick does. Its
+            // share of `move_x` is what the stick alone does not account for.
+            const float dpad_step = in.move_x - in.stick_x;
+            const float tab_x = std::abs(in.stick_x) > 0.5f ? in.stick_x : dpad_step;
             if (vendor_screen) {
                 tray_bumpers(true, tab_next_edge, tab_prev_edge);
-                if (std::abs(in.stick_x) > 0.5f) {
+                if (std::abs(tab_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
-                        inventory_menu.step_tray_tab(in.stick_x > 0.0f ? 1 : -1);
+                        inventory_menu.step_tray_tab(tab_x > 0.0f ? 1 : -1);
                         play_ui(tl::core::InterfaceSound::Navigate);
                         update_menu();
                     }
@@ -921,9 +936,9 @@ void Renderer::Impl::drive_player(float delta) {
                 }
             } else {
                 tray_bumpers(false, tab_next_edge, tab_prev_edge);
-                if (std::abs(in.stick_x) > 0.5f) {
+                if (std::abs(tab_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
-                        inventory_menu.step_bag_tab(in.stick_x > 0.0f ? 1 : -1);
+                        inventory_menu.step_bag_tab(tab_x > 0.0f ? 1 : -1);
                         play_ui(tl::core::InterfaceSound::Navigate);
                         update_menu();
                     }
@@ -932,10 +947,12 @@ void Renderer::Impl::drive_player(float delta) {
                     inventory_stick_x_held = false;
                 }
             }
-            // The D-pad's left and right (codes 3 and 4) on the focused tray:
-            // item compare.
-            const bool compare_edge = in.dpad_x != 0.0f && !item_compare_held;
-            item_compare_held = in.dpad_x != 0.0f;
+            // Item compare: the console's codes 3 and 4 on the focused tray, the D-pad's
+            // left and right. PORT: the right stick's click here (above), the D-pad stepping
+            // the tabs; a keyboard's C still, which is those codes with no D-pad behind them.
+            const bool key_compare = in.dpad_x != 0.0f && std::abs(dpad_step) < 0.5f;
+            const bool compare_edge = compare_button_edge || (key_compare && !item_compare_held);
+            item_compare_held = key_compare;
             if (compare_edge) toggle_item_compare();
             step_item_tooltips(delta);
 
