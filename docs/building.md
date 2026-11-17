@@ -7,6 +7,7 @@ your own copy of the game too; see [Game data](../README.md#game-data) in the RE
 - [Windows](#windows)
 - [Linux](#linux)
 - [Nintendo Switch](#nintendo-switch)
+- [Nintendo Switch 2](#nintendo-switch-2)
 - [Android](#android)
 - [iOS](#ios)
 
@@ -126,6 +127,34 @@ ninja -C build-switch
 This produces `build-switch/torchlight.nro`. Copy it to
 `sdmc:/switch/torchlight/` beside `pak.zip` and `music/`, by SD card or over
 FTP (see the README's [Switch](../README.md#switch) section).
+
+## Nintendo Switch 2
+
+Requirements: devkitPro as for the Switch (above), plus
+[ounce-devkit](https://github.com/ouncebrew/ounce-devkit): libounce, OunceVK
+and libkaihen for devkitPro's pacman, installed by its `install.sh`. The
+patched Mesa is not used: OunceVK provides EGL and OpenGL ES. OGRE gets a
+build of its own:
+
+```bash
+python scripts/build_ogre.py --platform switch2
+```
+
+Then, in devkitPro's MSYS2 shell, with libounce's toolchain file:
+
+```bash
+cd /c/path/to/torchlight-rekindled
+cmake -S . -B build-switch2 -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/libounce/cmake/Switch2.cmake \
+      -DCMAKE_BUILD_TYPE=Release
+ninja -C build-switch2
+```
+
+This produces `build-switch2/torchlight.nro`, which goes to
+`sdmc:/switch/torchlight/` as on the Switch (see the README's
+[Switch 2](../README.md#switch-2) section). The link fails if the safety guard
+(`src/platform/switch/platform_guard.cpp`, `cmake/switch2_guard.cmake`) is
+missing from the program.
 
 ## Android
 

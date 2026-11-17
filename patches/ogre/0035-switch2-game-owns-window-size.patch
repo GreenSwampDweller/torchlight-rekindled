@@ -1,6 +1,6 @@
-diff --git a/RenderSystems/GLSupport/src/EGL/switch/OgreSwitchEGLWindow.cpp b/RenderSystems/GLSupport/src/EGL/switch/OgreSwitchEGLWindow.cpp
---- a/RenderSystems/GLSupport/src/EGL/switch/OgreSwitchEGLWindow.cpp
-+++ b/RenderSystems/GLSupport/src/EGL/switch/OgreSwitchEGLWindow.cpp
+diff --git a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
+--- a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
++++ b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
 @@ -92,8 +92,16 @@
          }
  

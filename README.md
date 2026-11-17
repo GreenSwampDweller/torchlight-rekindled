@@ -5,7 +5,7 @@
 # Torchlight Rekindled
 
 An engine that runs Torchlight (Runic Games, 2009) on a homebrew-enabled
-Nintendo Switch, Android and desktop. Its game logic follows Runic's own
+Nintendo Switch or Switch 2, Android and desktop. Its game logic follows Runic's own
 Xbox 360 port of the game (Xbox Live Arcade, 2011). It draws with OGRE 14 and
 ParticleUniverse.
 
@@ -21,6 +21,7 @@ the owners of the Torchlight trademark.
 | platform | notes |
 | --- | --- |
 | Nintendo Switch | homebrew (hbmenu) |
+| Nintendo Switch 2 | homebrew through kaiHEN (hbmenu); experimental, see [Switch 2](#switch-2) |
 | Android | arm64, Android 12 or newer |
 | iOS | iPhone and iPad (unsigned build; sign before installing) |
 | Windows | desktop build |
@@ -136,13 +137,14 @@ settings, which are kept with the saves (`save/settings.txt`). Each line is
 | `logs` | `0` | the log file on its own (`debug=1` turns it on too) |
 | `mods_menu` | `1` | the Mods page before the game; `0` skips it and starts without any mods |
 | `second_screen` | `1` | a second display (a two-screen Android handheld) shows the minimap; `0` keeps it off that screen. No effect on a device with one screen. `--no-second-screen` turns it off for one run |
-| `fps_limit` | `0` (Android `60`) | the most frames a second the game draws; `0` for no limit. On Android the display is asked for that rate too, so a 120 Hz screen can run at 60 |
+| `fps_limit` | `0` (Android `60`) | the most frames a second the game draws; `0` for no limit. On Android the display is asked for that rate too, so a 120 Hz screen can run at 60. On the Switch 2 it is set on the Mods page (30, 60 or 120) |
+| `docked_resolution` | `1080` | **Switch 2 only:** the picture's height when docked: `1080`, `1440` or `2160` (4K, at 60 frames a second at most). Handheld is always 1920x1080. Set on the Mods page |
 | `width`, `height` | `1280`, `720` | **desktop builds only:** the window size, or the screen resolution in fullscreen |
 | `fullscreen` | `0` | **desktop builds only:** `1` fills the screen at `width` x `height` |
 | `vsync` | `1` | **desktop builds only:** `1` waits for the screen's refresh; `0` draws frames as fast as the machine can |
 
 **Resolution is a desktop setting.** The Switch renders at its screen's
-own size, Android at the share of it chosen in the launcher (below); both
+own size, the Switch 2 at 1920x1080 handheld and at `docked_resolution` docked, Android at the share of it chosen in the launcher (below); both
 ignore `width`, `height`, `fullscreen` and `vsync`. They do not write those lines into a new file.
 If the screen cannot show `width` x `height` (the window is clamped to the
 desktop, or the window manager makes a fullscreen window the monitor's size),
@@ -180,7 +182,30 @@ sdmc:/switch/torchlight/
 └── config.txt          made on first start
 ```
 
-Start it from the Homebrew Menu (hbmenu).
+Start it from the Homebrew Menu (hbmenu). The release's Switch zip holds
+`switch/torchlight/torchlight.nro`: unpack it to the root of the SD card.
+
+### Switch 2
+
+The Switch 2 has its own build: use the release's Switch 2 zip, not the
+Switch one. It unpacks the same way, to `sdmc:/switch/torchlight/`, with the
+same files beside it as on the Switch (above), and is started from hbmenu
+under [kaiHEN](https://github.com/ouncebrew/kaihen).
+
+- **Display:** 1920x1080 in handheld mode. Docked, it draws at 1080p, 1440p
+  or 4K, and at 30, 60 or 120 frames a second (4K at 60 at most). Both are
+  chosen at the top of the Mods page, which on the Switch 2 opens even with
+  no mods installed, and are applied when you press Start, without a restart.
+- **Safety:** kaiHEN gives a homebrew full access to the console, its system
+  storage included. This build refuses, in its own code, every system service
+  it has no use for and every write outside `sdmc:/switch/torchlight*/`; it
+  opens nothing but the SD card. The console itself still records play time,
+  and files a report if a program crashes: play with **airplane mode on**.
+- **Experimental:** it has been tested on one console so far. Reports are
+  welcome.
+
+The Xbox 360 `pak.zip` is the better choice here too (see
+[PC or Xbox 360 game data](#pc-or-xbox-360-game-data)).
 
 ### Android
 
@@ -289,7 +314,7 @@ back. iOS has no page and takes `mods/mods.dat` as it is.
 ## Building
 
 How to build the engine for each platform (Windows, Linux, Nintendo Switch,
-Android and iOS) is in [docs/building.md](docs/building.md).
+Nintendo Switch 2, Android and iOS) is in [docs/building.md](docs/building.md).
 
 ## Legal
 
