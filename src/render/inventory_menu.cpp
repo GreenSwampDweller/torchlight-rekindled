@@ -1395,27 +1395,21 @@ void InventoryMenu::set_widget_image(const std::string& widget_name,
 }
 
 // PORT: item compare is the right stick's click, and the console's layout draws the D-pad
-// beside its caption. The console's art has no stick being pressed: this is its right stick
-// with the arrows over and under it left off (the middle 32 x 32 of the 36 x 48). The pack's
-// own layout names a picture of its own and is left alone.
-void InventoryMenu::show_compare_glyph() {
+// beside its caption. The console's art has no picture of a stick being pressed, so there the
+// picture goes and the caption, moved into its place, says "R3". The pack's own layout names
+// a picture of its own and is left alone.
+bool InventoryMenu::hide_compare_dpad() {
     const int parent = find_node_index_by_widget("master/ToggleItemCompare");
-    if (parent < 0) return;
-    const Sprite* stick = sprite("analog_button_right_ud");
-    if (stick == nullptr || !stick->texture) return;
+    if (parent < 0) return false;
+    bool found = false;
     for (Node& n : nodes_) {
         if (n.parent != parent || n.panel == nullptr || n.image != "dpad_leftright") continue;
-        const float tw = static_cast<float>(stick->texture->getWidth());
-        const float th = static_cast<float>(stick->texture->getHeight());
-        const float w = static_cast<float>(stick->rect.width);
-        const float h = static_cast<float>(stick->rect.height);
-        const float x = static_cast<float>(stick->rect.x) + w * (2.0f / 36.0f);
-        const float y = static_cast<float>(stick->rect.y) + h * (8.0f / 48.0f);
-        n.panel->setTransparent(false);
-        n.panel->setMaterialName(material_for(*stick, n.alpha));
-        n.panel->setUV(x / tw, y / th, (x + w * (32.0f / 36.0f)) / tw,
-                       (y + h * (32.0f / 48.0f)) / th);
+        n.panel->setTransparent(true);
+        found = true;
     }
+    // The caption is authored 20 to the right of the picture's place, which starts at -9.
+    if (found) set_widget_position("master/itemcomparetext", -6.0f, -1.0f);
+    return found;
 }
 
 void InventoryMenu::set_children_visible(const std::string& widget_name, bool visible) {
@@ -2568,10 +2562,10 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
 
         set_widget_visible("master/PetCommands", true);
         set_widget_visible("master/ToggleItemCompare", true);
+        const std::string button = hide_compare_dpad() ? "R3   " : "";
         set_widget_text("master/itemcomparetext",
-                        item_compare_ ? "disable item compare"
-                                      : "enable item compare");
-        show_compare_glyph();
+                        button + (item_compare_ ? "disable item compare"
+                                                : "enable item compare"));
     } else if (menu_mode_ == MenuMode::Skills) {
         // The ring's neighbours either side, as the other three tabs name theirs.
         set_widget_text("master/MenuLeft", "Stats");
