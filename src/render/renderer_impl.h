@@ -963,7 +963,7 @@ struct Renderer::Impl : tl::core::World {
     /// its length plus 0.3 s (`+0x1e0`), then queues the state's own animation.
     struct PendingTriggerLoop {
         Ogre::AnimationState* transition = nullptr;
-        int64_t node = 0;
+        const Ogre::Entity* entity = nullptr;  ///< the copy: a layout's instances share node ids
         std::string unit;
         std::string next;
         bool loops = false;
