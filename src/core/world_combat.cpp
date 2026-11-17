@@ -1,6 +1,7 @@
 // The gameplay half of render/renderer_combat.cpp (core/world.h).
 #include "core/character_particles.h"
 #include "core/item_data.h"
+#include "core/mods.h"
 #include "core/unit_resource.h"
 #include "core/world.h"
 #include "formats/unit_data.h"
@@ -1634,6 +1635,8 @@ void World::load_player_stats() {
             tl::core::enchant_item(item, true, item_roll_context());
         };
         player_inventory.clear();
+        // DIVERGENCE: the Big Backpack mod's size when it is on (core/mods.h).
+        player_inventory.set_backpack_capacity(tl::core::player_backpack_capacity());
         // `CCharacter::unitInit` makes the class's own `[EQUIPMENT]` (`createDefaultEquipment`),
         // then `CPlayer::firstTimeSetup` the gifts.
         player_inventory.create_default_equipment(tl::core::read_default_equipment(unit.root),

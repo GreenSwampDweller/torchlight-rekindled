@@ -124,6 +124,16 @@ void Inventory::add_pane(InventoryPane pane, size_t size) {
     slots_.resize(slots_.size() + size);
 }
 
+// DIVERGENCE: the console's backpack is fixed at construction; the port's Big Backpack mod
+// sizes the player's and the pet's afresh. Slots only grow, so a save made with the mod on
+// loads whole with it off.
+void Inventory::set_backpack_capacity(size_t capacity, size_t min_slots) {
+    if (panes_.size() != 1) return;
+    capacity_ = capacity;
+    const size_t want = std::max(kFixedSlotCount + capacity, min_slots);
+    if (slots_.size() < want) slots_.resize(want);
+}
+
 // PORT: the occupied-slot count, for the HUD's `N/capacity`.
 size_t Inventory::size() const {
     size_t n = 0;

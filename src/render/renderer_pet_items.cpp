@@ -130,7 +130,7 @@ bool Renderer::Impl::focused_tray_item(const tl::core::Inventory*& held_in, int&
 }
 
 // PORT: the second display's item windows: the item under the inventory's cursor and the
-// worn items it stands against, whatever the item compare switch says and with no wait,
+// worn items it stands against while the item compare switch is on, with no wait,
 // while the inventory's own screen is up and nothing is open over it.
 void Renderer::Impl::step_second_item_tips() {
     const bool up = second_window != nullptr && second_window->isActive() &&
@@ -150,11 +150,11 @@ void Renderer::Impl::step_second_item_tips() {
     // The windows are made again when the cursor moves, and a few times a second besides:
     // an item put on or sold changes what they say with the cursor where it was.
     const int key = static_cast<int>(inventory_menu.focused_tray()) * 100000 +
-                    (held_in == &player_inventory ? 0 : 50000) + slot;
+                    (held_in == &player_inventory ? 0 : 50000) + (item_compare ? 25000 : 0) + slot;
     if (key == second_item_key && ++second_item_age < 20) return;
     second_item_key = key;
     second_item_age = 0;
-    second_screen.set_item_tips(item_tooltips(*held_in, slot, context, /*compare=*/true));
+    second_screen.set_item_tips(item_tooltips(*held_in, slot, context, item_compare));
     if (automap_initialized) automap.set_second_screen_covered(second_screen.item_tips_shown());
 }
 

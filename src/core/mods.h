@@ -27,6 +27,9 @@ struct ModInfo {
     bool has_files = true;     ///< `+0x70` as `reloadModFiles` leaves it: false for an empty folder
     bool free_camera = false;  ///< the port's own `mod.dat` key, `FREE_CAMERA`
     bool fps_overlay = false;  ///< the port's own `mod.dat` key, `FPS_OVERLAY`
+    /// The port's own `mod.dat` key, `BACKPACK_SIZE`: how many items the player and the pet
+    /// carry, worn ones too; 0 when the mod does not say.
+    uint32_t backpack_size = 0;
     /// `CModFileFilter::getFilePath`'s test: what it looks in.
     bool active() const { return priority >= 0 && has_files; }
 };
@@ -75,6 +78,13 @@ ModList load_mods(const std::string& mods_dir);
 /// `FPS_OVERLAY` starts the game with the frame-rate overlay.
 inline constexpr const char* kFreeCameraMod = "FreeCamera";
 inline constexpr const char* kFpsOverlayMod = "FpsOverlay";
+/// And `mods/BigBackpack/`, whose `BACKPACK_SIZE` lets the player and the pet carry 200 items
+/// rather than 50. Made switched off.
+inline constexpr const char* kBigBackpackMod = "BigBackpack";
+inline constexpr uint32_t kBigBackpackSize = 200;
+/// The most a `BACKPACK_SIZE` is taken at: a save keeps the stash's items at slot 1000 up
+/// (`kStashSaveSlotBase`), so the bag's 19 worn slots and its backpack stay under it.
+inline constexpr uint32_t kMaxBackpackSize = 900;
 
 /// `CFileSystem::reload`: the mods of `mods_dir`, or of the game data's `mods/` when that is
 /// empty; `mods.dat` written when a folder it did not name turned up. The port's own mods are
@@ -96,6 +106,11 @@ bool free_camera_mod_on();
 
 /// Whether an active mod starts the game with the frame-rate overlay (load_game_mods).
 bool fps_overlay_mod_on();
+
+/// How many items the player's bag and the pet's hold: the largest `BACKPACK_SIZE` of the
+/// active mods (at most `kMaxBackpackSize`), else the console's 50
+/// (`Inventory::kDefaultBackpackCapacity`).
+size_t player_backpack_capacity();
 
 /// The mods files are looked for in, in that order: each one's folder, without the separator,
 /// or its `.zip`. Not the port's own: they have nothing to look in.

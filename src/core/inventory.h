@@ -155,6 +155,12 @@ public:
     /// last slot and grows total capacity by `size`.
     void add_pane(InventoryPane pane, size_t size);
 
+    /// PORT: a one-pane inventory's backpack made `capacity` items big (the Big Backpack mod's
+    /// size, `player_backpack_capacity`), with room for at least `min_slots` slots in all. No
+    /// slot is ever taken away: a bag holding more than a smaller capacity keeps every item and
+    /// takes no more until it is under it. An inventory with more panes is left as it is.
+    void set_backpack_capacity(size_t capacity, size_t min_slots = 0);
+
     // PORT: an accessor of the port's inventory (`CInventory`'s slots and fields it keeps).
     const std::vector<InventorySlot>& slots() const { return slots_; }
     /// Occupied-slot count, for the HUD's "N/capacity" label.
