@@ -114,6 +114,10 @@ struct GroundLabel {
     float at_y = 0.0f;
     Ogre::ColourValue colour = Ogre::ColourValue::White;
     bool enabled = false;  ///< highlighted: the A button is drawn
+    /// PORT: the order the labels were found in, before the highlighted one is
+    /// moved to the front: the Stacked Labels mod stacks them in this order, so
+    /// a change of target does not reshuffle the pile.
+    int order = 0;
 };
 
 /// The game screen's interface, from `hud_xenon.layout` and `pethud_xenon.layout`.

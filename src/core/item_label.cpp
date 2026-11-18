@@ -2,6 +2,7 @@
 
 #include "formats/cegui.h"
 
+#include <cmath>
 #include <cstdio>
 
 namespace tl::core {
@@ -131,6 +132,57 @@ ItemLabelRect place_item_label(const ItemLabelRect& size, float at_x, float at_y
     out.x = x;
     out.y = y;
     return out;
+}
+
+void stack_item_labels(std::vector<ItemLabelRect>& rects, const ItemLabelFrame& frame, float gap,
+                       float screen_height) {
+    // Each label's frame as drawn: [left, right) x [top, bottom).
+    struct Box {
+        float left, right, top, bottom;
+    };
+    const auto box_of = [&](const ItemLabelRect& r, float y) {
+        const float top = y + frame.top;
+        return Box{r.x + frame.left, r.x + frame.left + r.width + frame.wide, top,
+                   top + r.height + frame.tall};
+    };
+    const auto overlaps = [](const Box& a, const Box& b) {
+        return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    };
+    std::vector<Box> placed;
+    placed.reserve(rects.size());
+    for (ItemLabelRect& rect : rects) {
+        const auto free_at = [&](float y) {
+            if (y < 0.0f || screen_height < y + rect.height + kItemLabelEdge) return false;
+            const Box box = box_of(rect, y);
+            for (const Box& other : placed) {
+                if (overlaps(box, other)) return false;
+            }
+            return true;
+        };
+        float best = rect.y;
+        if (!free_at(rect.y)) {
+            // The spots worth trying: just above or just below a frame already placed. The
+            // nearest free one wins; on a tie, the one above (labels climb, as items pile up).
+            const float tall = rect.height + frame.tall;
+            bool found = false;
+            float best_distance = 0.0f;
+            for (const Box& other : placed) {
+                for (const float frame_top : {other.top - gap - tall, other.bottom + gap}) {
+                    const float y = frame_top - frame.top;
+                    if (!free_at(y)) continue;
+                    const float distance = std::fabs(y - rect.y);
+                    if (!found || distance < best_distance ||
+                        (distance == best_distance && y < best)) {
+                        best = y;
+                        best_distance = distance;
+                        found = true;
+                    }
+                }
+            }
+        }
+        rect.y = best;
+        placed.push_back(box_of(rect, rect.y));
+    }
 }
 
 std::string drop_particle_name(const std::string& authored, bool quest, bool unique, bool magical) {

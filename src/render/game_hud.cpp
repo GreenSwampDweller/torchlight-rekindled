@@ -4,6 +4,7 @@
 
 #include "core/item_label.h"
 #include "core/log.h"
+#include "core/mods.h"
 #include "render/menu_chrome.h"
 #include "render/overlay_set.h"
 #include "render/text_layout.h"
@@ -853,6 +854,8 @@ constexpr const char* kLabelButton = "a_button";
 constexpr float kLabelButtonLeft = -20.0f;
 constexpr float kLabelButtonTop = -1.0f;
 constexpr float kLabelButtonSize = 21.0f;
+/// PORT: the space the Stacked Labels mod leaves between two stacked frames.
+constexpr float kStackedLabelGap = 2.0f;
 /// A look's `AbsoluteDim`, and every pixel figure, is a
 /// pixel of the console's 720-line output.
 constexpr float kConsoleLines = 720.0f;
@@ -1005,6 +1008,32 @@ void GameHud::layout_labels() {
     };
 
     const size_t shown = std::min(ground_labels_.size(), labels_.size());
+    // Each shown label's rectangle, measured and placed before any is drawn.
+    std::vector<tl::core::ItemLabelRect> rects(shown);
+    for (size_t i = 0; i < shown; ++i) {
+        const GroundLabel& label = ground_labels_[i];
+        // `Font::getTextExtent(text, 1.0)`, in the console's pixels.
+        const float extent =
+            measure_text(font, label.text, char_height, across, down) * across / pixel;
+        const tl::core::ItemLabelRect size = tl::core::item_label_size(extent, line, ratio);
+        rects[i] = tl::core::place_item_label(size, label.at_x / pixel, label.at_y / pixel,
+                                              screen_wide, kConsoleLines);
+    }
+    // DIVERGENCE (the Stacked Labels mod): no two frames overlap. Stacked in the
+    // order the labels were found, not the drawing order.
+    if (tl::core::stacked_labels_mod_on() && shown > 1) {
+        std::vector<size_t> by_order(shown);
+        for (size_t i = 0; i < shown; ++i) by_order[i] = i;
+        std::stable_sort(by_order.begin(), by_order.end(), [&](size_t a, size_t b) {
+            return ground_labels_[a].order < ground_labels_[b].order;
+        });
+        std::vector<tl::core::ItemLabelRect> ordered(shown);
+        for (size_t i = 0; i < shown; ++i) ordered[i] = rects[by_order[i]];
+        const tl::core::ItemLabelFrame frame{kLabelFrameLeft, kLabelFrameTop, kLabelFrameGrowWide,
+                                             kLabelFrameGrowTall};
+        tl::core::stack_item_labels(ordered, frame, kStackedLabelGap, kConsoleLines);
+        for (size_t i = 0; i < shown; ++i) rects[by_order[i]] = ordered[i];
+    }
     for (size_t i = 0; i < labels_.size(); ++i) {
         LabelSlot& slot = labels_[i];
         if (i >= shown) {
@@ -1014,12 +1043,7 @@ void GameHud::layout_labels() {
             continue;
         }
         const GroundLabel& label = ground_labels_[i];
-        // `Font::getTextExtent(text, 1.0)`, in the console's pixels.
-        const float extent =
-            measure_text(font, label.text, char_height, across, down) * across / pixel;
-        const tl::core::ItemLabelRect size = tl::core::item_label_size(extent, line, ratio);
-        const tl::core::ItemLabelRect at = tl::core::place_item_label(
-            size, label.at_x / pixel, label.at_y / pixel, screen_wide, kConsoleLines);
+        const tl::core::ItemLabelRect& at = rects[i];
 
         // The frame: corners at their own size, edges stretched between them,
         // the middle filling what is left.

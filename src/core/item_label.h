@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tl::core {
 
@@ -123,6 +124,22 @@ ItemLabelRect item_label_size(float text_width, float line_height, float ratio);
 /// or past 0 at the left and top.
 ItemLabelRect place_item_label(const ItemLabelRect& size, float at_x, float at_y,
                                float screen_width, float screen_height);
+
+/// How far a label's drawn frame reaches past its rectangle: left and top are
+/// where the frame starts (negative: before the rectangle), wide and tall what
+/// it adds to the size.
+struct ItemLabelFrame {
+    float left = 0.0f, top = 0.0f, wide = 0.0f, tall = 0.0f;
+};
+
+/// DIVERGENCE (the Stacked Labels mod): labels placed by place_item_label moved
+/// up or down so no two frames overlap, as an ARPG's loot labels stack. In the
+/// given order, each keeps its own spot when that is free; otherwise it takes the
+/// free spot nearest to it, just above or below a frame in the way, `gap` apart.
+/// A spot past the top or the bottom edge (`kItemLabelEdge`) is not taken; with
+/// none left, the label stays where it was. Only `y` changes.
+void stack_item_labels(std::vector<ItemLabelRect>& rects, const ItemLabelFrame& frame, float gap,
+                       float screen_height);
 
 /// `CEquipment::createParticles`: the
 /// particle a piece of equipment carries while it lies in the level. Its own

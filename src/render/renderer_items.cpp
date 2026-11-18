@@ -1880,6 +1880,7 @@ void Renderer::Impl::step_ground_labels() {
             tl::core::item_label_tint(facts), highlighted, item_label_colours);
         label.colour = Ogre::ColourValue(colour.r, colour.g, colour.b, colour.a);
         label.enabled = highlighted;
+        label.order = static_cast<int>(labels.size());
         if (highlighted) highlighted_index = static_cast<int>(labels.size());
         labels.push_back(label);
     };

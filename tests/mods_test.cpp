@@ -200,13 +200,18 @@ TL_TEST(port_mods_made_once) {
     tl::core::ModList list = tl::core::load_game_mods("", mods, false, true);
     TL_CHECK(std::filesystem::exists(dir / "mods" / "FreeCamera" / "mod.dat"));
     TL_CHECK(std::filesystem::exists(dir / "mods" / "FpsOverlay" / "mod.dat"));
-    TL_CHECK(list.mods.size() == 2);
+    TL_CHECK(std::filesystem::exists(dir / "mods" / "StackedLabels" / "mod.dat"));
+    TL_CHECK(list.mods.size() == 3);
     const tl::core::ModInfo* camera = find_mod(list, tl::core::kFreeCameraMod);
     const tl::core::ModInfo* overlay = find_mod(list, tl::core::kFpsOverlayMod);
+    const tl::core::ModInfo* labels = find_mod(list, tl::core::kStackedLabelsMod);
     TL_CHECK(camera != nullptr && camera->free_camera && camera->priority == -1);
     TL_CHECK(overlay != nullptr && overlay->fps_overlay && overlay->priority >= 0);
+    // Stacked labels are made switched off: the floor's names as the console drew them.
+    TL_CHECK(labels != nullptr && labels->stack_labels && labels->priority == -1);
     TL_CHECK(!tl::core::free_camera_mod_on());
     TL_CHECK(tl::core::fps_overlay_mod_on());
+    TL_CHECK(!tl::core::stacked_labels_mod_on());
     TL_CHECK(tl::core::enabled_mod_names(list).empty());
     // Deleted by the player: mods.dat still names it, so it is not made again.
     std::filesystem::remove_all(dir / "mods" / "FreeCamera");
@@ -226,15 +231,18 @@ TL_TEST(port_mods_switched) {
     tl::core::ModList list = tl::core::load_game_mods("", mods, false, true);
     tl::core::ModInfo* camera = find_mod(list, tl::core::kFreeCameraMod);
     tl::core::ModInfo* overlay = find_mod(list, tl::core::kFpsOverlayMod);
-    TL_CHECK(camera != nullptr && overlay != nullptr);
-    if (camera == nullptr || overlay == nullptr) return;
+    tl::core::ModInfo* labels = find_mod(list, tl::core::kStackedLabelsMod);
+    TL_CHECK(camera != nullptr && overlay != nullptr && labels != nullptr);
+    if (camera == nullptr || overlay == nullptr || labels == nullptr) return;
     camera->priority = 0;
     overlay->priority = -1;
+    labels->priority = 1;
     TL_CHECK(tl::core::save_mods(list));
     // Made no second time: the old lines no longer decide.
     list = tl::core::load_game_mods("", mods, false, true);
     TL_CHECK(tl::core::free_camera_mod_on());
     TL_CHECK(!tl::core::fps_overlay_mod_on());
+    TL_CHECK(tl::core::stacked_labels_mod_on());
     TL_CHECK(tl::core::enabled_mod_names(list).empty());
     TL_CHECK(tl::core::active_mod_roots(list).empty());
     std::filesystem::remove_all(dir);
