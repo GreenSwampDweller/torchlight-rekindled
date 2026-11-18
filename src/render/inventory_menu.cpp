@@ -2577,8 +2577,7 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
         set_widget_visible("master/ToggleItemCompare", true);
         const std::string button = hide_compare_dpad() ? "R3   " : "";
         set_widget_text("master/itemcomparetext",
-                        button + (item_compare_ ? "disable item compare"
-                                                : "enable item compare"));
+                        button + (item_compare_ ? "disable item compare" : "enable item compare"));
     } else if (menu_mode_ == MenuMode::Skills) {
         // The ring's neighbours either side, as the other three tabs name theirs.
         set_widget_text("master/MenuLeft", "Stats");

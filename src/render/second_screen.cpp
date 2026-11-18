@@ -255,12 +255,12 @@ void SecondScreen::postViewportUpdate(const Ogre::RenderTargetViewportEvent&) {
 }
 
 void SecondScreen::set_readout(const Readout& readout) {
-    const bool same = readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
-                      readout.gold == readout_.gold && readout.floor == readout_.floor &&
-                      readout.portal_scrolls == readout_.portal_scrolls &&
-                      readout.skill_set == readout_.skill_set &&
-                      readout.portal_icon == readout_.portal_icon &&
-                      readout.spells == readout_.spells;
+    const bool same =
+        readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
+        readout.gold == readout_.gold && readout.floor == readout_.floor &&
+        readout.portal_scrolls == readout_.portal_scrolls &&
+        readout.skill_set == readout_.skill_set && readout.portal_icon == readout_.portal_icon &&
+        readout.spells == readout_.spells;
     if (same) return;
     // The scroll's picture is kept once seen: the button shows it, dimmed, with none carried.
     const std::string icon =
@@ -378,17 +378,16 @@ void SecondScreen::destroy_widgets() {
                 overlays->destroyOverlayElement(element);
             }
         }
-        for (Ogre::OverlayElement* element :
-             {static_cast<Ogre::OverlayElement*>(portal_frame_),
-              static_cast<Ogre::OverlayElement*>(set_frame_),
-              static_cast<Ogre::OverlayElement*>(set_text_),
-              static_cast<Ogre::OverlayElement*>(portal_icon_),
-              static_cast<Ogre::OverlayElement*>(portal_count_),
-              static_cast<Ogre::OverlayElement*>(portal_label_),
-              static_cast<Ogre::OverlayElement*>(level_text_),
-              static_cast<Ogre::OverlayElement*>(fame_text_),
-              static_cast<Ogre::OverlayElement*>(floor_text_),
-              static_cast<Ogre::OverlayElement*>(gold_text_)}) {
+        for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(portal_frame_),
+                                              static_cast<Ogre::OverlayElement*>(set_frame_),
+                                              static_cast<Ogre::OverlayElement*>(set_text_),
+                                              static_cast<Ogre::OverlayElement*>(portal_icon_),
+                                              static_cast<Ogre::OverlayElement*>(portal_count_),
+                                              static_cast<Ogre::OverlayElement*>(portal_label_),
+                                              static_cast<Ogre::OverlayElement*>(level_text_),
+                                              static_cast<Ogre::OverlayElement*>(fame_text_),
+                                              static_cast<Ogre::OverlayElement*>(floor_text_),
+                                              static_cast<Ogre::OverlayElement*>(gold_text_)}) {
             if (element == nullptr) continue;
             if (Ogre::OverlayContainer* parent = element->getParent()) {
                 parent->removeChild(element->getName());
@@ -455,11 +454,10 @@ void SecondScreen::layout_widgets() {
                          : edge + width <= shape_.centre_x - half;
         };
         const float floor_size = 1.0f;  // never smaller than this: a bound for the loop
-        while (line > floor_size &&
-               !(clear(line, first, kLongestPlace, true) &&
-                 clear(line, first + line * 1.15f, kLongestPurse, true) &&
-                 clear(line, first, kLongestLevel, false) &&
-                 clear(line, first + line * 1.15f, kLongestLevel, false))) {
+        while (line > floor_size && !(clear(line, first, kLongestPlace, true) &&
+                                      clear(line, first + line * 1.15f, kLongestPurse, true) &&
+                                      clear(line, first, kLongestLevel, false) &&
+                                      clear(line, first + line * 1.15f, kLongestLevel, false))) {
             line -= 0.5f;
         }
     }
@@ -554,7 +552,8 @@ void SecondScreen::apply_readout() {
         panel->setTransparent(false);
         return true;
     };
-    if (portal_frame_ != nullptr && portal_frame_->isTransparent()) picture(portal_frame_, kFrameArt);
+    if (portal_frame_ != nullptr && portal_frame_->isTransparent())
+        picture(portal_frame_, kFrameArt);
     if (set_frame_ != nullptr && set_frame_->isTransparent()) picture(set_frame_, kFrameArt);
     if (set_text_ != nullptr) {
         set_caption(set_text_, readout_.skill_set == 0 ? "Set 1" : "Set 2");
@@ -712,8 +711,9 @@ void SecondScreen::destroy_item_overlays() {
             if (overlay != nullptr) overlay->hide();
         }
         for (ItemWindow& window : item_windows_) {
-            for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(window.edge),
-                                                  static_cast<Ogre::OverlayElement*>(window.plate)}) {
+            for (Ogre::OverlayElement* element :
+                 {static_cast<Ogre::OverlayElement*>(window.edge),
+                  static_cast<Ogre::OverlayElement*>(window.plate)}) {
                 if (element == nullptr) continue;
                 if (Ogre::OverlayContainer* parent = element->getParent()) {
                     parent->removeChild(element->getName());
@@ -806,8 +806,7 @@ void SecondScreen::layout_item_tips() {
     if (wide <= 0.0f || tall <= 0.0f) return;
     // A window's width and height follow its scale closely but not exactly (its lines wrap):
     // aim for the fit, then come down a little at a time while it is still over.
-    scale = std::min(native * kItemMostScale,
-                     scale * std::min(room_wide / wide, room_tall / tall));
+    scale = std::min(native * kItemMostScale, scale * std::min(room_wide / wide, room_tall / tall));
     build(scale, wide, tall);
     for (int tries = 0; tries < 12 && (wide > room_wide || tall > room_tall); ++tries) {
         scale *= 0.95f;

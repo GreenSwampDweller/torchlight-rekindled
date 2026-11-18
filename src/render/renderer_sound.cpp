@@ -349,8 +349,8 @@ void Renderer::Impl::refresh_game_hud() {
             const std::string& icon =
                 drunk >= 0 ? player_inventory.slots()[static_cast<size_t>(drunk)].item.icon
                            : item->icon;
-            state.slots[i] = tl::core::item_slot_view(
-                icon, tl::core::potion_count_for(player_inventory, *item));
+            state.slots[i] =
+                tl::core::item_slot_view(icon, tl::core::potion_count_for(player_inventory, *item));
             continue;
         }
         state.slots[i] =

@@ -122,8 +122,7 @@ int potion_slot_for(const Inventory& inventory, const ItemStats& bound) {
     }
     // The smallest stack of that unit, as the original takes one.
     return best < 0 ? -1
-                    : equipment_of_guid(inventory,
-                                        slots[static_cast<size_t>(best)].item.unit_guid);
+                    : equipment_of_guid(inventory, slots[static_cast<size_t>(best)].item.unit_guid);
 }
 
 int potion_count_for(const Inventory& inventory, const ItemStats& bound) {

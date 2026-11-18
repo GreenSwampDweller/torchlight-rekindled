@@ -134,8 +134,7 @@ bool Renderer::Impl::focused_tray_item(const tl::core::Inventory*& held_in, int&
 // while the inventory's own screen is up and nothing is open over it.
 void Renderer::Impl::step_second_item_tips() {
     const bool up = second_window != nullptr && second_window->isActive() &&
-                    inventory_menu.visible() &&
-                    inventory_menu.menu_mode() == MenuMode::Inventory &&
+                    inventory_menu.visible() && inventory_menu.menu_mode() == MenuMode::Inventory &&
                     !inventory_menu.item_select_open() && !inventory_menu.pet_commands_open() &&
                     !inventory_menu.spell_remove_open();
     const tl::core::Inventory* held_in = nullptr;
