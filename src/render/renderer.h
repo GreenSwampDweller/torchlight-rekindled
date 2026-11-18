@@ -403,6 +403,10 @@ public:
     /// there is no player, a dead one and no `force`, or the file cannot be
     /// written.
     bool save_character(const std::string& path, bool force = false);
+    /// PORT: the same as the program goes to the background on a phone, where the system may
+    /// end it unasked: saved as leaving the game saves it, but not in the middle of a scripted
+    /// scene, which a level cannot be picked up from. True when the file was written.
+    bool save_for_background(const std::string& path);
 
     /// `CSharedStash::loadSharedStash` from
     /// `directory`, into `RendererConfig::shared_stash`: nothing while it holds

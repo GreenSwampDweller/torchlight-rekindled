@@ -36,6 +36,12 @@ struct SurfaceHooks {
 };
 void set_surface_hooks(SurfaceHooks hooks);
 
+/// What the game does as it goes to the background (its window taken away: Home, Back, the
+/// screen off), after the renderer has let its surface go: save the character, since the
+/// system may end a program in the background without another word. On the engine's thread,
+/// inside pump_events(). Empty for nothing.
+void set_background_hook(std::function<void()> hook);
+
 /// A second display (a two-screen handheld's other screen, second_screen.cpp). The activity puts
 /// a window of its own on it when asked (GameActivity.setSecondScreen) and hands its surface
 /// over; the renderer draws on it through these, as it does the main window through

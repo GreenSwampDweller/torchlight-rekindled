@@ -43,6 +43,7 @@ android_app* g_app = nullptr;
 bool g_started = false;
 bool g_in_background = false;
 SurfaceHooks g_hooks;
+std::function<void()> g_background_hook;
 
 float g_frame_rate = 0.0f;
 int g_screen_width = 0;
@@ -84,6 +85,7 @@ void on_command(android_app* glue, int32_t command) {
                 if (g_hooks.lost) g_hooks.lost();
                 set_audio_paused(true);
                 release_pad();
+                if (g_background_hook) g_background_hook();
                 __android_log_print(ANDROID_LOG_INFO, "torchlight",
                                     "window taken away: waiting for it to come back");
             }
@@ -262,6 +264,8 @@ void wait_for_window() {
 }
 
 void set_surface_hooks(SurfaceHooks hooks) { g_hooks = std::move(hooks); }
+
+void set_background_hook(std::function<void()> hook) { g_background_hook = std::move(hook); }
 
 float render_scale() { return g_render_scale; }
 

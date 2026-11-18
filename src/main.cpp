@@ -37,6 +37,9 @@
 #if defined(TL_HAVE_OGRE)
 #include "render/gpu_skinning.h"
 #include "render/renderer.h"
+#if defined(TL_PLATFORM_ANDROID)
+#include "platform/android/android_glue.h"
+#endif
 #endif
 
 using tl::core::empty_save_path;
@@ -1476,6 +1479,12 @@ int main(int argc, char** argv) {
     rc.starting_fish = !opts.no_starting_fish;
 
     tl::render::Renderer renderer;
+#if defined(TL_PLATFORM_ANDROID)
+    // The character saved as the game goes to the background: Android may end it there.
+    tl::core::android::set_background_hook([&renderer, &save_path] {
+        if (!save_path.empty()) renderer.save_for_background(save_path);
+    });
+#endif
     // Up, and past the mods page, before anything is built on the mods.
     const std::optional<int> ended = tl::render::start_renderer(
         renderer, rc, {opts.logic_trace, opts.passability_dump, opts.start_in_menu, argc, argv});
