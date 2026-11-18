@@ -44,7 +44,7 @@ struct NestedScript {
     bool level_particle = false;
     /// Linked through a `Layout Link Particle`: the file is the particle's own layout
     /// (`CParticlePreloader::LoadParticle`), not the scene's, so the console stores none of
-    /// its logic states.
+    /// its logic states. A skill event's `FILE` likewise: the event's own `CLayout`.
     bool particle = false;
     std::vector<uint64_t> link_path;  ///< `room_link_path` when placed: its place in the walk
 };

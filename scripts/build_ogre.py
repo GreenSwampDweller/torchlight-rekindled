@@ -8,6 +8,7 @@ list without finding out what it is.
 Usage:
     python scripts/build_ogre.py --platform desktop
     python scripts/build_ogre.py --platform switch
+    python scripts/build_ogre.py --platform switch2  # Switch 2 (ounce-devkit)
     python scripts/build_ogre.py --platform switch --gl3plus   # the GL3Plus experiment
     python scripts/build_ogre.py --platform switch --variant lto      # link-time optimisation
     python scripts/build_ogre.py --platform switch --variant pgogen   # instrumented, for a profile
@@ -125,6 +126,24 @@ SWITCH_ONLY = [
     f'-DCMAKE_C_FLAGS={SWITCH_TOOLCHAIN_FLAGS} {SWITCH_EXTRA_FLAGS}',
 ]
 
+# Switch 2 (ounce-devkit: libounce for libnx, OunceVK for EGL and GLES through
+# Zink). The same OGRE configuration as the Switch's, with its toolchain file,
+# the A78C's flags (libounce's switch2_cpu.mk) and its portlibs' GL headers
+# ahead of switch-mesa's.
+SWITCH2_TOOLCHAIN_FLAGS = (
+    "-mcpu=cortex-a78c+crypto -mtp=soft "
+    "-ftls-model=local-exec -ffunction-sections -fdata-sections -D__SWITCH__ -D__SWITCH2__"
+)
+SWITCH2_EXTRA_FLAGS = ("-D_GNU_SOURCE -I/opt/devkitpro/portlibs/switch2/include "
+                       "-I/opt/devkitpro/portlibs/switch/include")
+SWITCH2_ONLY = [
+    "-DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/libounce/cmake/Switch2.cmake",
+    *[a for a in SWITCH_ONLY if not a.startswith(("-DCMAKE_TOOLCHAIN_FILE=", "-DCMAKE_CXX_FLAGS=",
+                                                  "-DCMAKE_C_FLAGS="))],
+    f'-DCMAKE_CXX_FLAGS={SWITCH2_TOOLCHAIN_FLAGS} {SWITCH2_EXTRA_FLAGS}',
+    f'-DCMAKE_C_FLAGS={SWITCH2_TOOLCHAIN_FLAGS} {SWITCH2_EXTRA_FLAGS}',
+]
+
 DESKTOP_ONLY = [
     "-DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF",
     "-DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF",
@@ -220,7 +239,7 @@ def android_toolchain() -> tuple:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--platform", choices=("desktop", "switch", "android", "ios", "linux", "macos"), required=True)
+    ap.add_argument("--platform", choices=("desktop", "switch", "switch2", "android", "ios", "linux", "macos"), required=True)
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--ios-simulator", action="store_true", help="build the iOS simulator arm64 variant")
     # Experiment: OGRE's GL3Plus render system on the console, on switch-mesa's
@@ -255,7 +274,7 @@ def main() -> int:
         return 1
     elif args.platform == "macos":
         build = ROOT / "build-ogre-macos-xcode"
-    extra = {"switch": SWITCH_ONLY, "desktop": DESKTOP_ONLY, "android": ANDROID_ONLY, "ios": IOS_ONLY,
+    extra = {"switch": SWITCH_ONLY, "switch2": SWITCH2_ONLY, "desktop": DESKTOP_ONLY, "android": ANDROID_ONLY, "ios": IOS_ONLY,
              "linux": DESKTOP_ONLY, "macos": MACOS_ONLY}[args.platform]
     cmake = "cmake"
     if args.platform == "android":
@@ -295,7 +314,7 @@ def main() -> int:
 
     # Desktop uses mingw-w64's native CMake and wants native paths; Switch uses
     # devkitPro's MSYS2 CMake and wants POSIX ones. See msys_path().
-    as_path = msys_path if args.platform == "switch" else str
+    as_path = msys_path if args.platform in ("switch", "switch2") else str
     source_dir, build_dir = as_path(OGRE), as_path(build)
 
     # Ninja is mandatory: GNU Make reads the "C:" in Windows paths as a rule
@@ -306,7 +325,7 @@ def main() -> int:
            prefix_map]
 
     def run(command) -> int:
-        if args.platform != "switch":
+        if args.platform not in ("switch", "switch2"):
             return subprocess.run(command).returncode
         line = " ".join(shlex.quote(a) for a in command)
         return subprocess.run(

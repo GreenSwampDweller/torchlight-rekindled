@@ -854,6 +854,9 @@ public:
 
     /// `CQuest +0x1e8`: the unit the quest was last initialised with.
     std::string giver_of(const QuestDefinition& quest) const;
+    /// The same, read back from a save (`CQuest::load`, the record's first guid); empty for
+    /// none.
+    void set_giver(const QuestDefinition& quest, const std::string& unit);
 
     /// Take the quest (`CQuestManager::giveQuest`); the dialog asks
     /// `log_full_for` first. `level` and `seed` are what `initializeQuestWithNPC`
@@ -863,6 +866,10 @@ public:
     /// manager's reset left them (its lookup had no level template); `populate` resolves them.
     bool accept(const QuestDefinition& quest, int level, uint32_t seed, const StatBook& graphs,
                 int depth = -1, bool resolve_units = true);
+    /// PORT: the objectives `accept` would give a quest not yet held, put on a stand-in entry
+    /// that already has its definition, level, seed and floor: what the offer's text names
+    /// (`[ACQUIRE1]`, `[DEFEAT1COUNT]`, ..). Nothing of the log or of `g_Rand` changes.
+    void roll_offered_objectives(QuestEntry& entry) const;
     /// The quest dialog's refusal, before it accepts: a quest that takes a
     /// journal row while the six are taken (`CQuestDialogMenu::onClick`).
     bool log_full_for(const QuestDefinition& quest) const;

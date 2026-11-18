@@ -404,6 +404,9 @@ struct Options {
 
     /// Whether the minimap is disabled.
     bool no_minimap = false;
+
+    /// Whether the second screen's minimap is off for this run, whatever `config.txt` says.
+    bool no_second_screen = false;
     int fps_overlay = -1;  ///< `--fps` 1, `--no-fps` 0, -1 the default
     int fps_limit = -1;    ///< `--fps-limit N` (0 none), -1 config.txt's
     int tips = -1;         ///< `--tips` 1, `--no-tips` 0, -1 the default
@@ -607,6 +610,7 @@ bool set_flag_option(Options& o, const std::string& arg) {
         {"--send-pet-to-town", &Options::send_pet_to_town},
         {"--no-hud", &Options::no_hud},
         {"--no-minimap", &Options::no_minimap},
+        {"--no-second-screen", &Options::no_second_screen},
         {"--fullscreen-map", &Options::fullscreen_map},
     };
     for (const auto& [name, field] : kOptions) {
@@ -636,6 +640,10 @@ bool set_count_option(Options& o, const std::string& arg, const char* value) {
     return false;
 }
 
+#if defined(__SWITCH2__)
+extern "C" void tl_switch2_screen_size(unsigned* width, unsigned* height);  // platform_frame.cpp
+#endif
+
 #if defined(TL_DEVICE_BUILD)
 // A device build's defaults: it has no command line, so they are its whole
 // interface.
@@ -644,6 +652,10 @@ void apply_device_defaults(Options& o) {
     // The Xbox 360's own arrangement: the archive, `music/` and the shader folder
     // beside the program, at the root itself.
     o.game_data = root;
+#if defined(__SWITCH2__)
+    // 1080p in the hand, the TV's output docked (4K on a 4K TV), as the game starts.
+    tl_switch2_screen_size(&o.width, &o.height);
+#endif
 
     // A PC archive's console interface (none beside the Xbox pak); else the built-in pack.
     o.console_ui = root + "console_ui";
@@ -1180,6 +1192,7 @@ Options with_run_config(Options o) {
         o.hud_dump.clear();
     }
     if (o.fps_limit == -1) o.fps_limit = static_cast<int>(config.fps_limit);
+    if (o.workers == -1) o.workers = config.workers;
 #else
     const bool player = player_folder();
     std::FILE* present = std::fopen("config.txt", "rb");
@@ -1198,6 +1211,7 @@ Options with_run_config(Options o) {
         o.fullscreen = config.fullscreen;
         o.vsync = config.vsync;
         if (o.fps_limit == -1) o.fps_limit = static_cast<int>(config.fps_limit);
+        if (o.workers == -1) o.workers = config.workers;
     }
 #endif
     tl::core::set_mouse_controls(o.mouse || tl::core::run_config().mouse);
@@ -1441,6 +1455,7 @@ int main(int argc, char** argv) {
     tl::core::mods_from_command_line(argc, argv, opts.game_data, rc.mod_data, rc.mod_names);
     rc.game_hud = !opts.no_hud;
     rc.minimap = !opts.no_minimap;
+    rc.second_screen = !opts.no_second_screen && tl::core::run_config().second_screen;
     // `--fps` and `--no-fps` before the FPS Overlay mod.
     rc.stats_overlay_from_mods = opts.fps_overlay == -1 && !rc.headless;
     rc.stats_overlay =

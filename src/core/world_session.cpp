@@ -175,7 +175,8 @@ void World::set_level_identity(const std::string& dungeon, int32_t depth, bool i
 void World::store_dropped_items(
     std::vector<std::pair<uint64_t, tl::formats::ItemSaveState>>& made) {
     for (const DroppedWorldItem& dropped : dropped_items) {
-        if (dropped.flying || dropped.node == nullptr) continue;
+        // An item still in its toss is walked like the rest.
+        if (dropped.node == nullptr) continue;
         if (dropped.is_gold) {
             // CItemGold::fillSaveState: GUID -1, the
             // position, the orientation, the name (vtable +0x144) and the amount; the rest is
@@ -205,12 +206,12 @@ void World::store_dropped_items(
         item.centre = item.position;
         save_orientation(dropped.rest, item.orientation);
         item.room = tl::core::room_index_that_position_is_in(level_rooms, {at.x, at.y, at.z});
-        // A spawner's item: `CItem::fillSaveState` writes its spawner (`+0x148`), and its
-        // hierarchy is 0 as a breakable's.
+        // `CItem::fillSaveState` writes its hierarchy, 0 for an item no layout made, and
+        // a spawner's item its spawner (`+0x148`).
+        item.hierarchy = 0;
         if (const auto spawner = spawner_units.find(dropped.unit_id);
             dropped.unit_id != 0 && spawner != spawner_units.end()) {
             item.spawner_id = spawner->second.spawner;
-            item.hierarchy = 0;
         }
         made.emplace_back(dropped.made, std::move(item));
     }
@@ -272,7 +273,12 @@ std::vector<std::pair<size_t, tl::core::LevelScript::NodeRecord>> World::made_tr
             const auto t = triggers.find(id);
             if (t != triggers.end()) made_nodes.emplace_back(v, t->second);
             for (size_t k = 0; k < views.size(); ++k) {
-                if (!walked[k] && views[k].scene == view.scene && views[k].owner == id) walk(k);
+                // Two copies of one linked file in a room share their node ids: the chain of
+                // links tells them apart.
+                if (!walked[k] && views[k].scene == view.scene && views[k].owner == id &&
+                    views[k].hierarchy == (view.hierarchy | id)) {
+                    walk(k);
+                }
             }
         }
     };
@@ -302,6 +308,12 @@ void World::store_layout_item(
     item.unit_guid = unit_guid_of(n.unit);
     // A trigger whose unit names nothing (the vault's "Temp Lever", no MODEL) made no item.
     if (item.unit_guid == -1) return;
+    // `getIsQuestUnit` as the store asks it: a `QuestItem` by type.
+    load_unit_types();
+    if (prop.found &&
+        unit_types.isa(unit_types.id_of(prop.unittype), tl::core::unit_type::kQuestItem)) {
+        state.holds_quest_item = 1;
+    }
     item.object_id = n.node;
     item.parent_id = view.owner != 0 ? view.owner : (n.parent != 0 ? n.parent : -1);
     item.spawner_id = -1;
@@ -693,11 +705,15 @@ void World::store_level_state() {
     // breakables in one pass over the state, in the state's order.
     const size_t first_dropped = populated_items.size();
     store_dropped_items(populated_items);
-    // `getIsQuestUnit` on each item walked marks the state (+0xb1): a quest's
-    // item (`+0x170` set). INVENTED: its `ISA 0x67` half is not tested.
-    for (size_t i = first_dropped; i < populated_items.size(); ++i) {
-        const tl::formats::ItemSaveState& item = populated_items[i].second;
-        if (item.unit_guid != -1 && item.i170 != -1) state.holds_quest_item = 1;
+    // `getIsQuestUnit` on each item walked marks the state (+0xb1): a
+    // `QuestItem` by type, or a quest's item (`+0x170` set).
+    load_unit_types();
+    for (const DroppedWorldItem& dropped : dropped_items) {
+        if (dropped.node == nullptr || dropped.is_gold) continue;
+        if (dropped.item.quest_guid != -1 || unit_types.isa(unit_types.id_of(dropped.item.unittype),
+                                                            tl::core::unit_type::kQuestItem)) {
+            state.holds_quest_item = 1;
+        }
     }
     const uint64_t dropped_from =
         first_dropped < populated_items.size()

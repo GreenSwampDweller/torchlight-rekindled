@@ -40,7 +40,7 @@ TARGETS = {
         "lib": "torchlight",
         "cmake_target": "torchlight",
         "label": "Torchlight Rekindled",
-        "version": "1.1.1",
+        "version": "1.2.0",
     },
 }
 
@@ -97,7 +97,7 @@ def ensure_debug_key() -> None:
         return
     DEBUG_KEYSTORE.parent.mkdir(parents=True, exist_ok=True)
     print(f"making the debug key: {DEBUG_KEYSTORE}")
-    run([android_sdk.STUDIO / "jbr" / "bin" / "keytool.exe", "-genkeypair", "-keystore", DEBUG_KEYSTORE, "-storepass", DEBUG_PASS,
+    run([android_sdk.jdk() / "bin" / "keytool.exe", "-genkeypair", "-keystore", DEBUG_KEYSTORE, "-storepass", DEBUG_PASS,
          "-alias", DEBUG_ALIAS, "-keypass", DEBUG_PASS, "-keyalg", "RSA", "-keysize", "2048",
          "-validity", "10000", "-dname", "CN=Android Debug,O=Android,C=US"],
         env=android_sdk.java_env())
@@ -139,7 +139,7 @@ def compile_java(tools: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
         d.mkdir(parents=True)
     sources = sorted(JAVA_SOURCE.rglob("*.java"))
     env = android_sdk.java_env()
-    jdk = android_sdk.STUDIO / "jbr" / "bin"
+    jdk = android_sdk.jdk() / "bin"
     # The lambdas' java.lang.invoke is not in android.jar; d8 desugars them, and
     # javac only needs the build-tools' stubs to compile them.
     boot = f"{android_sdk.android_jar()};{tools / 'core-lambda-stubs.jar'}"

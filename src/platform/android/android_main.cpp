@@ -138,6 +138,9 @@ void wait_for(android_app* glue, bool (*done)(android_app*)) {
             source != nullptr) {
             source->process(glue, source);
         }
+        // The second display's surface may be taken away meanwhile (its thread wakes the
+        // looper); a new one waits for the main window.
+        service_second_screen(false);
     }
 }
 
@@ -301,6 +304,7 @@ void android_main(android_app* glue) {
     if (glue->destroyRequested != 0) return;
 
     read_render_scale();
+    register_second_screen();
     std::vector<std::string> args = read_arguments();
     std::vector<char*> argv;
     for (std::string& arg : args) argv.push_back(arg.data());
@@ -319,6 +323,7 @@ void android_main(android_app* glue) {
     __android_log_print(ANDROID_LOG_INFO, "torchlight", "the engine returned %d", result);
 
     g_hooks = SurfaceHooks{};
+    set_second_screen_hooks({});
     ANativeActivity_finish(glue->activity);
     wait_for(glue, [](android_app* g) { return g->destroyRequested != 0; });
     _exit(result);

@@ -845,39 +845,6 @@ void World::collect_path_blockers(const tl::formats::CmpScene& layout,
     }
 }
 
-// The ruleset's LEVELPARTICLE layout (a Sound and a Layout Link Particle), placed once:
-// `CGameClient::loadLevel` loads it after `CLevel::populate`
-// (`CLayout::loadLayoutFile`), keeps it (+0x1080), and `updateIngame`
-// puts it at the player every frame.
-void World::place_level_particle(
-    const std::string& level_particle_ref,
-    std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
-    if (level_particle_ref.empty()) return;
-    std::string level_particle_path = resolve_archive_path(level_particle_ref);
-    if (level_particle_path.empty()) {
-        level_particle_path = resolve_archive_path(level_particle_ref + ".cmp");
-    }
-    const size_t systems_before = view_particle_mark();
-    const size_t machines_before = nested_scripts.size(), stored_before = stored_layouts.size();
-    const bool placed =
-        !level_particle_path.empty() &&
-        place_layout(level_particle_path, ogre::Vector3::ZERO, ogre::Quaternion::IDENTITY,
-                     /*depth=*/1);
-    for (size_t i = machines_before; i < nested_scripts.size(); ++i)
-        nested_scripts[i].level_particle = true;
-    for (size_t i = stored_before; i < stored_layouts.size(); ++i)
-        stored_layouts[i].level_particle = true;
-    if (placed) {
-        placed_pieces.emplace_back(level_particle_path, ogre::Vector3::ZERO);
-        const size_t riding = view_level_particle_node(systems_before);
-        TL_LOG_INFO("  LEVELPARTICLE '%s': %zu system node(s) follow the player",
-                    level_particle_ref.c_str(), riding);
-    } else {
-        TL_LOG_WARN("  LEVELPARTICLE '%s' named but could not be placed",
-                    level_particle_ref.c_str());
-    }
-}
-
 // The rooms' activation `CLevel::populate` ends with (`setActivated`, room order). Their
 // triggers' collision is not on the map grid yet: the console's load marks none of them
 // (no `incrementMapPassabilityCollision` for a room's door; xbox-oracle.md
@@ -1129,7 +1096,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         stored.scene = placing_scene;
         stored.hierarchy = placing_hierarchy;
         stored.owner = nested_link;
-        stored.particle = nested_particle;
+        stored.particle = nested_particle || placing_skill_event_layout;
         stored.link_path = room_link_path;
     }
     if (owns_a_script) {
@@ -1138,7 +1105,7 @@ bool World::place_layout(const std::string& reference, const ogre::Vector3& orig
         machine.owner = nested_link;
         machine.turn_link = turn_link;
         machine.owner_name = nested_link_name;
-        machine.particle = nested_particle;
+        machine.particle = nested_particle || placing_skill_event_layout;
         machine.owner_nodes = outer_sink != nullptr ? outer_sink : &scripted_nodes;
         machine.script.set_frame(layout_frame(origin, basis));
         machine.scene = placing_scene;
@@ -2437,6 +2404,46 @@ void World::drop_player_at_start() {
     view_stand_subject(player_start, facing);
 }
 
+// `CLevel::loadRoomLayout`, its switch's case 1: a `Player Start` node is the
+// start for entry type 3 alone; its layout's Warper serves an arrival through the twin as an
+// Entrance's does. False when the chunk has no such node.
+bool World::stand_at_player_start(const std::string& chunk_path, const ogre::Vector3& chunk_origin,
+                                  ogre::Vector3& facing, ogre::Vector3& spawn_at, bool& grounded) {
+    ogre::Vector3 marker_pos;
+    float marker_radius = 3.0f;
+    ChunkMarkerExtra extra;
+    if (!find_chunk_marker(chunk_path, chunk_origin, "player start", marker_pos, marker_radius,
+                           &extra)) {
+        return false;
+    }
+    dungeon_entrance_warp_at = extra.has_warper ? extra.warper_position : marker_pos;
+    dungeon_entrance_warp_forward = extra.has_warper ? extra.warper_forward : extra.forward;
+    if (level_entry_type != 3) return true;
+    facing = extra.forward;
+    spawn_at = marker_pos;
+    grounded = true;
+    float surface = 0.0f;
+    if (collision.ground_under(spawn_at.x, spawn_at.z, spawn_at.y + 8.0f, surface)) {
+        spawn_at.y = surface;
+    }
+    TL_LOG_INFO("  player start at (%.2f, %.2f, %.2f)", spawn_at.x, spawn_at.y, spawn_at.z);
+    return true;
+}
+
+// The end of `CGameClient::loadLevel` in its own order.
+void World::close_floor_load(const std::string& level_particle,
+                             std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
+    restore_level_state();
+    drop_player_at_start();
+    level_npc_icons();
+    place_level_particle(level_particle, placed_pieces);
+    activate_level_particle();
+    settle_loaded_level();
+    if (const size_t armed = script.arm_hostiles()) {
+        TL_LOG_INFO("  %zu hostile unit(s) will come after the player", armed);
+    }
+}
+
 bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_number) {
     const FloorLoad floor_load(*this);
     loaded_path_blockers.clear();
@@ -2764,7 +2771,8 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
                 }
                 TL_LOG_INFO("  entrance marker at (%.2f, %.2f, %.2f)", spawn_at.x, spawn_at.y,
                             spawn_at.z);
-            } else {
+            } else if (!stand_at_player_start(entrance_chunk_path, entrance_chunk_origin, facing,
+                                              spawn_at, grounded)) {
                 TL_LOG_WARN(
                     "  no authored entrance node in '%s'; standing at the nearest walkable "
                     "ground to its chunk's centre",
@@ -2895,14 +2903,7 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
     view_update_loading();
     // `findParticles` (the level's particle layouts listed), then populate's last update.
     view_update_loading();
-    place_level_particle(level_template.level_particle, placed_pieces);
     mark_room_triggers(*this);
-    level_npc_icons();  // `CGameClient::loadLevel`'s `CLevel::updateNPCIcons`
-    settle_loaded_level();
-
-    if (const size_t armed = script.arm_hostiles()) {
-        TL_LOG_INFO("  %zu hostile unit(s) will come after the player", armed);
-    }
 
     // The music and the HUD, as load_layout() does once its layout is placed.
     start_level_audio(strata.ruleset);
@@ -2930,8 +2931,11 @@ bool World::place_dungeon_floor(const std::string& dungeon_name, int floor_numbe
                 static_cast<double>(dungeon_exit_radius), floor_number,
                 dungeon_active_floors_total);
 
-    restore_level_state();
-    drop_player_at_start();
+    // `CGameClient::loadLevel` from here in its own order: the saved state
+    // put back, the player stood in the level, `updateNPCIcons`,
+    // the LEVELPARTICLE layout loaded and activated, the
+    // closing update.
+    close_floor_load(level_template.level_particle, placed_pieces);
     bake_static_scenery();
 
     log_memory("after the dungeon floor");

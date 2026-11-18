@@ -968,6 +968,8 @@ public:
     /// camera's focal point; true when the unit is visible and in active range, which is what
     /// its entrance (AI state 12, the animation, `SPAWN_SOUND`) is gated on.
     bool spawn_in_active_range(int64_t id, std::vector<ScriptEvent>& out);
+    /// The entrance's animation, `findRandomAnimation(SPAWN_ANIM)`: its draws, and the name.
+    std::string pick_spawn_animation(int64_t id);
 
     /// `CCharacter::makeChampion(name, theme)`, as
     /// `CLevel::populateSectionOfLevel` runs it: the figures
@@ -1228,6 +1230,8 @@ public:
     /// `CCharacter::applyInstantEffect`'s hit sample: the slot of the damage
     /// type (fire, ice, electric, poison; physical for the rest), dead or not.
     void play_hit_sample(int64_t id, int damage_type, std::vector<ScriptEvent>& out);
+    /// `CCharacter::applyInstantEffect`'s `playSample(7)` on a block.
+    void play_block_sample(int64_t id, std::vector<ScriptEvent>& out);
     /// While set, a death leaves its sample to `play_death_sample` (the caller runs the
     /// death's procs first).
     void set_defer_death_sample(bool defer) {
@@ -1403,7 +1407,7 @@ public:
         Vec3 forward{0.0f, 0.0f, 1.0f};
     };
     std::vector<NodeRecord> nodes_of_type(uint32_t type) const;
-    /// Every node's id, in the file's order.
+    /// Every node's id, in the order made.
     std::vector<int64_t> node_order() const;
 
     /// The player has just been stood at `player`. DIVERGENCE, with
@@ -2600,6 +2604,10 @@ private:
     std::function<Vec3()> listener_;
 
     std::vector<Object> objects_;
+    /// How many of `objects_` are `Unit Trigger`s (a node's type is fixed once placed), so a
+    /// machine with none answers the per-frame lists without a walk.
+    size_t unit_trigger_objects_ = 0;
+    void add_built(Object&& o, const tl::formats::CmpNode& node);
     /// Object id to its place in `objects_`; looked up, never walked.
     std::unordered_map<int64_t, size_t> index_;
 

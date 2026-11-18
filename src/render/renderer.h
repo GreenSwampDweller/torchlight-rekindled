@@ -93,6 +93,13 @@ enum class MenuAction {
     LoadCharacter,
 };
 
+/// The Switch 2's display settings on the mods page: the values it opens with, and as the player
+/// left them.
+struct ModsPageDisplay {
+    unsigned fps_limit = 0;        ///< 30, 60, or 0 for no limit (120 on a 120 Hz screen)
+    unsigned docked_lines = 1080;  ///< 1080, 1440 or 2160
+};
+
 /// What the Load Character screen needs of the save directory.
 struct LoadCharacterHost {
     /// `CContinueGameMenu::reloadFiles`: every save, newest first.
@@ -613,7 +620,10 @@ public:
     /// the player switched it, `dont_show_again` as the checkbox was left. Headless, or with
     /// `dump_png`: dumps it and returns `Back`.
     MenuAction run_mods_menu(tl::core::ModList& list, bool& dont_show_again,
-                             const std::string& dump_png = {});
+                             const std::string& dump_png = {}, ModsPageDisplay* display = nullptr);
+
+    /// `fps_limit` (0 none) from now on: the frame pacing's.
+    void set_fps_limit(unsigned fps);
 
     /// The frame-rate overlay on or off, as the mods page left its mod.
     void set_stats_overlay(bool on);

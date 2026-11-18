@@ -12,6 +12,13 @@
 #include <OgrePanelOverlayElement.h>
 #include <OgreTextAreaOverlayElement.h>
 
+#include <array>
+
+#if defined(__SWITCH2__)
+extern "C" unsigned tl_switch2_docked_lines();  // platform_frame.cpp
+extern "C" void tl_switch2_set_display(unsigned docked_lines, unsigned fps_limit);  // the same
+#endif
+
 namespace tl::render {
 
 namespace {
@@ -214,14 +221,48 @@ void ModsCheckbox::destroy() {
     label_ = label_shadow_ = nullptr;
 }
 
+// DIVERGENCE (platform): the Switch 2's display settings head the column there, the frame rate
+// and the docked picture's size; none anywhere else. 120 fps is not offered with 4K docked: the
+// console sends 4K to a TV at 60 Hz at most. The column has no "All mods" row there.
+#if defined(__SWITCH2__)
+constexpr size_t kDisplayRows = 2;
+#else
+constexpr size_t kDisplayRows = 0;
+#endif
+
+/// The frame rates the page steps through: 30, 60, and 0 (no limit, so 120 on a 120 Hz screen).
+constexpr std::array<unsigned, 3> kFrameRates = {30, 60, 0};
+constexpr std::array<unsigned, 3> kDockedLines = {1080, 1440, 2160};
+
+std::string frame_rate_caption(unsigned fps) {
+    return "Frame rate: " + (fps == 0 ? std::string("120") : std::to_string(fps));
+}
+
+std::string docked_caption(unsigned lines) {
+    return std::string("Docked: ") + (lines >= 2160 ? "4K" : std::to_string(lines) + "p");
+}
+
+/// The value of `values` after `now`, round; `now` not among them gives the first.
+template <size_t N>
+unsigned next_of(const std::array<unsigned, N>& values, unsigned now) {
+    for (size_t i = 0; i < N; ++i) {
+        if (values[i] == now) return values[(i + 1) % N];
+    }
+    return values[0];
+}
+
 /// The page while it is up: the column (the main menu's, a window of `kModsPageRows` rows of
 /// it), the checkbox and the text beside the column, and what the pad does to them.
 class ModsPage {
 public:
-    ModsPage(MainMenu& menu, tl::core::ModList& list)
+    ModsPage(MainMenu& menu, tl::core::ModList& list, ModsPageDisplay* display)
         : menu_(menu),
           list_(list),
-          rows_(tl::core::mods_menu_row_count(list)),
+          display_(display),
+          display_rows_(display != nullptr ? kDisplayRows : 0),
+          first_mod_row_(display_rows_ > 0 ? 1 : 0),
+          mod_rows_(list.mods.empty() ? 0 : tl::core::mods_menu_row_count(list) - first_mod_row_),
+          rows_(display_rows_ + mod_rows_),
           shown_(std::min(tl::core::kModsPageRows, rows_)) {}
 
     void open(const std::string& group, unsigned width, unsigned height) {
@@ -251,9 +292,20 @@ private:
     MenuAction step_checkbox(const tl::core::InputState& input);
     /// A on a row.
     void switch_row();
+    /// A on one of the display rows (`row` below `display_rows_`).
+    void switch_display_row(size_t row);
+    /// Every row's caption: the display rows', then the mods'.
+    std::vector<std::string> captions() const;
+    /// The text beside the column for `row`.
+    std::string row_info(size_t row) const;
 
     MainMenu& menu_;
     tl::core::ModList& list_;
+    ModsPageDisplay* display_;
+    const size_t display_rows_;
+    /// The first of `mods_menu_rows` the column shows: 1 past "All mods" with the display rows.
+    const size_t first_mod_row_;
+    const size_t mod_rows_;
     const size_t rows_;
     const size_t shown_;
     ModsCheckbox checkbox_;
@@ -264,9 +316,42 @@ private:
     bool side_held_ = true;
 };
 
+std::vector<std::string> ModsPage::captions() const {
+    std::vector<std::string> out;
+    if (display_rows_ > 0) {
+        out.push_back(frame_rate_caption(display_->fps_limit));
+        out.push_back(docked_caption(display_->docked_lines));
+    }
+    if (mod_rows_ > 0) {
+        const std::vector<std::string> mods = tl::core::mods_menu_rows(list_);
+        out.insert(out.end(), mods.begin() + static_cast<std::ptrdiff_t>(first_mod_row_),
+                   mods.end());
+    }
+    return out;
+}
+
+std::string ModsPage::row_info(size_t row) const {
+    if (row == 0 && display_rows_ > 0) {
+        return tl::core::mods_menu_text(
+            "Frame rate\n\nThe most frames a second the game draws. 120 needs a 120 Hz screen: "
+            "the console's own, or a TV at 1440p or 1080p. Not with 4K docked: the console "
+            "sends 4K at 60 Hz at most.\n\nApplied when you press Start.",
+            kModsInfoWidth);
+    }
+    if (row == 1 && display_rows_ > 1) {
+        return tl::core::mods_menu_text(
+            "Docked resolution\n\nThe size of the picture on the TV. In the hand the game "
+            "always draws at 1080p. 1440p and 4K only where the TV takes them. It changes as "
+            "the console is docked or taken out.\n\nApplied when you press Start.",
+            kModsInfoWidth);
+    }
+    return tl::core::mods_menu_info(list_, static_cast<int>(row - display_rows_ + first_mod_row_),
+                                    kModsInfoWidth);
+}
+
 void ModsPage::show_column() {
-    const std::vector<std::string> captions = tl::core::mods_menu_rows(list_);
-    const auto first = captions.begin() + static_cast<std::ptrdiff_t>(focus_.top);
+    const std::vector<std::string> all = captions();
+    const auto first = all.begin() + static_cast<std::ptrdiff_t>(focus_.top);
     menu_.show_editor({first, first + static_cast<std::ptrdiff_t>(shown_)}, std::string());
     menu_.hide_copyright();
     show_focus();
@@ -277,8 +362,7 @@ void ModsPage::show_focus() {
     menu_.set_focus(on_row ? static_cast<int>(focus_.row - focus_.top) : -1);
     checkbox_.set(dont_show_again_, !on_row);
     std::string info =
-        on_row ? tl::core::mods_menu_info(list_, static_cast<int>(focus_.row), kModsInfoWidth)
-               : tl::core::mods_menu_checkbox_info(kModsInfoWidth);
+        on_row ? row_info(focus_.row) : tl::core::mods_menu_checkbox_info(kModsInfoWidth);
     const std::string note = tl::core::mods_menu_scroll_note(rows_, focus_.top);
     if (!note.empty()) info += "\n\n" + note;
     menu_.set_editor_info(info);
@@ -318,10 +402,27 @@ MenuAction ModsPage::step_checkbox(const tl::core::InputState& input) {
     return leave ? MenuAction::Back : MenuAction::None;
 }
 
+void ModsPage::switch_display_row(size_t row) {
+    const bool four_k = display_->docked_lines >= 2160;
+    if (row == 0) {
+        display_->fps_limit = next_of(kFrameRates, display_->fps_limit);
+        if (four_k && display_->fps_limit == 0) display_->fps_limit = kFrameRates[0];
+    } else {
+        display_->docked_lines = next_of(kDockedLines, display_->docked_lines);
+        if (display_->docked_lines >= 2160 && display_->fps_limit == 0) display_->fps_limit = 60;
+    }
+}
+
 void ModsPage::switch_row() {
-    tl::core::switch_mods_menu_row(list_, focus_.top + static_cast<size_t>(menu_.editor_row()));
-    const std::vector<std::string> captions = tl::core::mods_menu_rows(list_);
-    for (size_t i = 0; i < shown_; ++i) menu_.set_row_caption(i, captions[focus_.top + i]);
+    const size_t row = focus_.top + static_cast<size_t>(menu_.editor_row());
+    if (row < display_rows_) {
+        switch_display_row(row);
+    } else {
+        tl::core::switch_mods_menu_row(list_, row - display_rows_ + first_mod_row_);
+    }
+    const std::vector<std::string> all = captions();
+    for (size_t i = 0; i < shown_; ++i) menu_.set_row_caption(i, all[focus_.top + i]);
+    if (row < display_rows_) show_focus();
 }
 
 MenuAction ModsPage::step(tl::core::InputState input) {
@@ -356,12 +457,18 @@ void MainMenu::hide_copyright() {
 
 // The mods page's own: its Start prompt says what Start does there.
 void MainMenu::set_bar_caption(const std::string& window, const std::string& text) {
+    bool shown_again = false;
     for (BarItem& item : bar_items_) {
         if (item.window != window) continue;
+        // A prompt the main screen left off (`offer_start_continue`, nothing to continue) is
+        // put back, and placed: the layout that hid it skipped it.
+        shown_again = shown_again || item.hidden;
+        item.hidden = false;
         for (Ogre::TextAreaOverlayElement* label : {item.shadow, item.label}) {
             if (label != nullptr) label->setCaption(text);
         }
     }
+    if (shown_again) layout();
 }
 
 // PORT: the FPS overlay as the mods page leaves its mod.
@@ -370,8 +477,10 @@ void Renderer::set_stats_overlay(bool on) {
     impl_->set_stats_overlay(on);
 }
 
+void Renderer::set_fps_limit(unsigned fps) { impl_->config.fps_limit = fps; }
+
 MenuAction Renderer::run_mods_menu(tl::core::ModList& list, bool& dont_show_again,
-                                   const std::string& dump_png) {
+                                   const std::string& dump_png, ModsPageDisplay* display) {
     Impl& m = *impl_;
     if (!m.window) return MenuAction::Quit;
 
@@ -383,7 +492,7 @@ MenuAction Renderer::run_mods_menu(tl::core::ModList& list, bool& dont_show_agai
         m.loading.hide();
         return MenuAction::Back;
     }
-    ModsPage page(m.menu, list);
+    ModsPage page(m.menu, list, display);
     page.open(kGameGroup, m.config.width, m.config.height);
 
     MenuAction action = MenuAction::None;
@@ -420,6 +529,23 @@ MenuAction Renderer::run_mods_menu(tl::core::ModList& list, bool& dont_show_agai
 
 namespace {
 
+#if defined(__SWITCH2__)
+// The display rows as the page was left: kept in config.txt, and in use from the next frame (the
+// window resized as on a dock change, no restart).
+void apply_display(Renderer& renderer, RendererConfig& rc, const ModsPageDisplay& display) {
+    if (display.fps_limit == rc.fps_limit && display.docked_lines == tl_switch2_docked_lines()) {
+        return;
+    }
+    rc.fps_limit = display.fps_limit;
+    renderer.set_fps_limit(display.fps_limit);
+    tl_switch2_set_display(display.docked_lines, display.fps_limit);
+    const bool kept = tl::core::save_run_config_number("fps_limit", display.fps_limit) &&
+                      tl::core::save_run_config_number("docked_resolution", display.docked_lines);
+    TL_LOG_INFO("mods page: frame rate %u (0 none), docked %u lines%s", display.fps_limit,
+                display.docked_lines, kept ? "" : "; config.txt could not be written");
+}
+#endif
+
 // The mods page as `start_renderer` shows it; false when the run is to end.
 bool run_start_mods_menu(Renderer& renderer, RendererConfig& rc, int argc, char** argv) {
     if (!tl::core::kModsPage) return true;
@@ -433,11 +559,29 @@ bool run_start_mods_menu(Renderer& renderer, RendererConfig& rc, int argc, char*
     tl::core::ModList list;
     // Empty under `--safemode` and `mods_menu=0`: no page then.
     tl::core::mods_from_command_line(argc, argv, rc.game_data, roots, names, &list);
+#if defined(__SWITCH2__)
+    // The display rows are there with no mods too, unless the page is switched off.
+    if (list.mods.empty() && !tl::core::run_config().mods_menu) return true;
+    ModsPageDisplay display;
+    display.fps_limit = rc.fps_limit >= 120 ? 0 : rc.fps_limit;
+    display.docked_lines = tl_switch2_docked_lines();
+    // Opened as it will be applied: no 120 with 4K docked.
+    if (display.docked_lines >= 2160 && display.fps_limit == 0) display.fps_limit = 60;
+    ModsPageDisplay* shown_display = &display;
+#else
     if (list.mods.empty()) return true;
+    ModsPageDisplay* shown_display = nullptr;
+#endif
 
     const std::vector<uint8_t> before = tl::core::mods_dat_bytes(list);
     bool dont_show_again = false;
-    if (renderer.run_mods_menu(list, dont_show_again, dump_png) != MenuAction::Back) return false;
+    if (renderer.run_mods_menu(list, dont_show_again, dump_png, shown_display) !=
+        MenuAction::Back) {
+        return false;
+    }
+#if defined(__SWITCH2__)
+    apply_display(renderer, rc, display);
+#endif
     const bool switched = tl::core::mods_dat_bytes(list) != before;
     if (switched && !tl::core::save_mods(list)) {
         TL_LOG_WARN("mods page: could not write %smods.dat; the mods stay as they were",

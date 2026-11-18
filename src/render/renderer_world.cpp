@@ -353,7 +353,7 @@ void Renderer::Impl::step_script(float delta) {
         pending_trigger_loops.erase(pending_trigger_loops.begin() + static_cast<long>(i));
         const auto units = scene_units.equal_range(pending.unit);
         for (auto it = units.first; it != units.second; ++it) {
-            if (it->second.node != pending.node) continue;
+            if (it->second.entity != pending.entity) continue;
             Ogre::AnimationState* next = nullptr;
             if (!play_scene_animation(it->second.entity, it->second.mesh, pending.next,
                                       pending.loops, it->second.rate, /*optional=*/true, &next,
@@ -368,7 +368,7 @@ void Renderer::Impl::step_script(float delta) {
             // A later step waits on *this* animation, not on the one that has
             // just finished: the chain is transition -> state -> loop.
             for (PendingTriggerLoop& later : pending_trigger_loops) {
-                if (later.node == pending.node && later.transition == pending.transition) {
+                if (later.entity == pending.entity && later.transition == pending.transition) {
                     later.transition = next;
                 }
             }
@@ -2126,12 +2126,17 @@ namespace {
 // (New Game's restart) cannot make its own. Nothing to do on the other targets.
 // With the context preserved (platform_window_params) only the surface goes
 // here; the context goes with the window, as Root is released.
-void release_window_surface(Ogre::RenderWindow* window) {
+// The second display's window the same, first; the activity's window there stays up for the
+// next Root, which finds its surface in second_screen_window().
+void release_window_surface(Ogre::RenderWindow* window, Ogre::RenderWindow* second) {
 #if defined(TL_PLATFORM_ANDROID)
     tl::core::android::set_surface_hooks({});
+    tl::core::android::set_second_screen_hooks({});
+    if (second != nullptr) static_cast<Ogre::AndroidEGLWindow*>(second)->_notifySurfaceDestroyed();
     if (window != nullptr) static_cast<Ogre::AndroidEGLWindow*>(window)->_notifySurfaceDestroyed();
 #else
     (void)window;
+    (void)second;
 #endif
 }
 
@@ -2178,6 +2183,7 @@ void Renderer::shutdown() {
     m.inventory_menu.destroy();
     m.menu.destroy();
     m.mouse.reset();
+    m.second_screen.detach();
     m.game_hud.destroy();
     m.hud.destroy();
     m.automap.shutdown();
@@ -2217,7 +2223,12 @@ void Renderer::shutdown() {
     Ogre::STBIImageCodec::shutdown();
     m.root->removeFrameListener(&m.frame_clock);
     m.frame_clock.timer = nullptr;
-    release_window_surface(m.window);
+    // The main window's context current for the teardown, not the second display's.
+#if defined(TL_PLATFORM_ANDROID)
+    m.sync_gl_context();
+#endif
+    release_window_surface(m.window, m.second_window);
+    m.second_window = nullptr;
     m.root.reset();
     // Nothing is loading once the renderer is gone.
     tl::core::set_loading_boost(false);

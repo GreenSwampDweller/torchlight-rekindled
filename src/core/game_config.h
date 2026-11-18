@@ -112,6 +112,10 @@ struct GameConfig {
     /// Whether the automap/minimap is enabled during gameplay.
     bool minimap = true;
 
+    /// Whether a second display (a two-screen Android handheld) shows the minimap instead of
+    /// the main screen. Nothing changes on a device with one screen.
+    bool second_screen = true;
+
     /// Whether the frame-rate and resolution line starts on: the FPS Overlay mod's
     /// (core/mods.h). Headless runs leave it off unless `--fps` asks.
     bool stats_overlay = true;

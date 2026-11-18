@@ -189,21 +189,18 @@ void World::kill_unit(int64_t node, const std::string& unit, bool fall, int64_t 
     }
     // `CCharacter::die`: the `DEATH_FLIGHT` branch, after the burst
     // and before the treasure.
+    bool flew = false;
     if (!burst && owner != nullptr) {
         std::vector<tl::core::ScriptEvent> flown;
-        owner->fly_killed_unit(node, flown);
+        flew = owner->fly_killed_unit(node, flown);
         if (NodeMap* nodes = nodes_of(owner); nodes != nullptr && !flown.empty()) {
             apply_script_events(flown, *nodes);
         }
     }
-    // a death with no blow to fly from and no burst:
-    // `findRandomAnimation("DIE")` blended in.
+    // a death that neither flies nor bursts:
+    // `findRandomAnimation("DIE")` blended in, before the treasure.
     std::string animation;
-    if (fall && !burst) {
-        if (tl::core::LevelScript* owner = script_owning(node)) {
-            animation = owner->death_animation(node);
-        }
-    }
+    if (!burst && !flew && owner != nullptr) animation = owner->death_animation(node);
     const bool fell = burst || !fall || view_unit_falls(node, animation);
     TL_LOG_INFO("combat: %s dies%s%s%s", unit.c_str(),
                 fell ? "" : " (no death animation beside its mesh)",

@@ -1991,6 +1991,10 @@ tl::formats::QuestManagerSave quests_to_save(
         if (entry.definition == nullptr || entry.status != tl::core::QuestStatus::Active) continue;
         tl::formats::QuestSave q;
         q.name = entry.definition->name;
+        // +0x1e8, the unit that gave the quest, as its UNIT_GUID (-1 for none): a quest whose
+        // dialogs name no unit is handed in to whoever this says.
+        const std::string giver = log.giver_of(*entry.definition);
+        q.giver_guid = giver.empty() ? -1 : unit_guid_of(giver);
         q.seed = static_cast<int32_t>(entry.seed);  // +0x1c
         q.depth = entry.depth;                      // +0x20
         q.level = entry.level;                      // +0x20c
@@ -2466,6 +2470,12 @@ CarriedPlayer Renderer::carried_from_file(const tl::formats::CharacterFile& file
         }
         tl::core::QuestEntry* entry = log.find(q.name);
         if (entry == nullptr) continue;
+        // The unit that gave the quest (a save from before this was written holds -1, and
+        // keeps whatever giver the log has).
+        if (q.giver_guid != -1) {
+            const std::string giver = m.unit_of_guid(q.giver_guid);
+            if (!giver.empty()) log.set_giver(*definition, giver);
+        }
         for (const auto& dialog : q.dialogs[0]) {
             if (dialog[0] != 0) entry->dialog_interacted = true;
         }

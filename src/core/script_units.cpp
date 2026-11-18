@@ -1463,19 +1463,34 @@ void LevelScript::add_hunt_affix(int64_t id) {
     EffectManager::Context context = unit_effect_tables_;
     context.owner = rolls.owner;
     EffectManager* effects = ensure_unit_effects(id, context);
-    if (effects != nullptr)
-        effects->add_affix_by_name("MONSTER_HUNT", 1, affix_book_, -1.0f, rolls);
+    if (effects == nullptr) return;
+    // The unit owns its own hunt affix (r6 = the unit).
+    const EffectSourceScope owned(effects, EffectSource{true, this, id});
+    effects->add_affix_by_name("MONSTER_HUNT", 1, affix_book_, -1.0f, rolls);
 }
 
 // `CCharacter::spawn`: `calculateActiveRange` against the
-// camera's `m_LastFocalPoint` (+0x2c) first, then the entrance only when the unit
+// camera's `m_LastFocalPoint` (+0x2c) first, then the entrance only when the model
+// has an animation named for the unit's `SPAWN_ANIM` (`animationExistsSubstring`) and the unit
 // is visible (+0x6d) and in active range (+0x161); the rest of the function returns without it.
 bool LevelScript::spawn_in_active_range(int64_t id, std::vector<ScriptEvent>& out) {
     Object* o = find(id);
     Character* c = character(id);
     if (o == nullptr || c == nullptr) return false;
     calculate_active_range(*o, *c, level_camera_look_at(), out);
+    if (!unit_animation_prefix_exists(o->unit, upper(stats_for(o->unit).spawn_anim))) return false;
     return o->visible && c->active;
+}
+
+// `CCharacter::spawn`'s animation: `findRandomAnimation(SPAWN_ANIM)`, a draw for
+// each match past the first, before the entrance's sample.
+std::string LevelScript::pick_spawn_animation(int64_t id) {
+    const Object* o = find(id);
+    if (o == nullptr) return {};
+    std::string name;
+    float length = 0.0f;
+    find_random_animation(o->unit, stats_for(o->unit).spawn_anim, name, length);
+    return name;
 }
 
 // `CEffectManager::deleteAffix(L"MONSTER_HUNT")` on the unit's manager, if any.

@@ -1780,6 +1780,8 @@ public:
     bool has_waypoint_entry_spot = false;
     bool has_town_portal_spot = false;
     std::vector<std::pair<size_t, std::string>> deferred_room_machines;
+    /// The LEVELPARTICLE layout's machines, activated once the player stands in the level.
+    std::vector<std::pair<size_t, std::string>> level_particle_machines;
     /// Set by whatever places a file as a `CParticle`, taken by place_layout(): loaded as
     /// `CParticlePreloader::LoadParticle` does, only its
     /// `Particle`, `Sound` and `Camera Shake` objects; no script runs.

@@ -147,6 +147,30 @@ public:
     /// Re-lay-out for a new viewport size.
     void resize(unsigned width, unsigned height);
 
+    /// PORT: a second display (a two-screen handheld) of `width` x `height` pixels takes the
+    /// skill slots, the bag and the experience bar, which leave this screen for a strip along
+    /// the top of that one; `on` false puts them back. They are then drawn
+    /// through second_overlays(), which this class never shows: whoever draws the second
+    /// display shows them for its viewport alone, while second_shown().
+    void set_second_screen(bool on, unsigned width, unsigned height);
+    std::array<Ogre::Overlay*, 2> second_overlays() const {
+        return {second_overlay_, second_text_overlay_};
+    }
+    bool second_shown() const { return built_ && visible_ && !layout_hidden_ && second_on_; }
+    /// PORT: one of the HUD's named pictures (a frame, an item's icon), for something else that
+    /// draws beside it: its sheet's material and its rectangle there. False for a name the
+    /// sheets have not got.
+    bool icon_art(const std::string& name, Ogre::MaterialPtr& material, float& u0, float& v0,
+                  float& u1, float& v1) const;
+    /// PORT: what of the strip a touch at (`x`, `y`) on the second display is on, both as
+    /// fractions of that display: a hotbar slot of the bank that is up (0..9, `SkillSlot1`
+    /// being 0), `kSecondBag` for the bag, or -1 for neither. -1 while the strip is not there.
+    static constexpr int kSecondBag = 100;
+    int second_tap_at(float x, float y) const;
+    /// How far down the second display the strip reaches, as a fraction of its height: 0 while
+    /// nothing is drawn there.
+    float second_band() const { return built_ && second_on_ ? second_band_ : 0.0f; }
+
     /// This frame's floor labels, drawn over the scene and under the HUD. The
     /// last one given is drawn on top (the highlighted label's `moveToFront`);
     /// past `kMaxGroundLabels` the rest are not drawn.
@@ -201,6 +225,11 @@ private:
 
         /// Where it landed last layout, in viewport fractions.
         float left = 0.0f, top = 0.0f, width = 0.0f, height = 0.0f;
+        /// PORT: drawn on a second display's strip rather than here (set_second_screen), and
+        /// where it is drawn, as fractions of the screen that draws it: `left`..`height` again,
+        /// except while it is on that strip.
+        bool second = false;
+        float draw_left = 0.0f, draw_top = 0.0f, draw_width = 0.0f, draw_height = 0.0f;
     };
 
     /// Which edge a bar empties from. The orbs drain downwards like a liquid
@@ -265,6 +294,18 @@ private:
     /// order is the layout tree's draw order.
     Ogre::OverlayContainer* panel_root_ = nullptr;
     Ogre::OverlayContainer* text_root_ = nullptr;
+
+    /// set_second_screen(): the second display's size, and the overlays and roots the skill
+    /// slots hang from while it has them.
+    void place_skill_nodes();
+    bool second_on_ = false;
+    unsigned second_width_ = 0;
+    unsigned second_height_ = 0;
+    float second_band_ = 0.0f;
+    Ogre::Overlay* second_overlay_ = nullptr;
+    Ogre::Overlay* second_text_overlay_ = nullptr;
+    Ogre::OverlayContainer* second_panel_root_ = nullptr;
+    Ogre::OverlayContainer* second_text_root_ = nullptr;
 
     /// One pooled label: the frame's nine pieces, the A button and the text.
     struct LabelSlot {

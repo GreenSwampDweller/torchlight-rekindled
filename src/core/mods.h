@@ -154,6 +154,9 @@ ModsPageFocus step_mods_page_side(ModsPageFocus focus, int side);
 /// `width` characters; for row 0 or none, where mods go.
 std::string mods_menu_info(const ModList& list, int row, size_t width);
 
+/// Any other text beside the column, wrapped to `width` characters as the rest is.
+std::string mods_menu_text(const std::string& text, size_t width);
+
 /// The same for the checkbox: what it does and how it is undone.
 std::string mods_menu_checkbox_info(size_t width);
 

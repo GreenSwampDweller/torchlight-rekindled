@@ -6,6 +6,9 @@
 #include "render/renderer_impl.h"
 #include "render/skinned_entities.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace tl::render {
 
 namespace renderer_detail {
@@ -2033,6 +2036,7 @@ void Renderer::Impl::setup_scene() {
     frame_phases.timer = root->getTimer();
     frame_phases.window = window;
     frame_phases.scene = scene;
+    install_pose_join();
     scene->addListener(&frame_phases);
     scene->addRenderQueueListener(&frame_phases);
     // The view's queue rules (ViewRenderables); no merged scenery yet.
@@ -2108,12 +2112,22 @@ struct ResponsiveLoading final : Ogre::ResourceLoadingListener {
         tl::core::keep_responsive();
         return {};
     }
+    /// `TL_TRACE_OPENS=<file>`: every stream opened, as asked for and as found, one per line.
+    std::FILE* trace = nullptr;
+    void resourceStreamOpened(const Ogre::String& name, const Ogre::String&, Ogre::Resource*,
+                              Ogre::DataStreamPtr& stream) override {
+        if (trace == nullptr) return;
+        std::fprintf(trace, "%s\t%s\n", name.c_str(), stream ? stream->getName().c_str() : "");
+        std::fflush(trace);
+    }
 };
 
 /// This thread pumps the events; OGRE's resource opens keep them moving through a load.
 void keep_responsive_while_loading() {
     tl::core::mark_event_thread();
     static ResponsiveLoading listener;
+    const char* trace = std::getenv("TL_TRACE_OPENS");  // NOLINT(concurrency-mt-unsafe): start-up
+    if (trace != nullptr && listener.trace == nullptr) listener.trace = std::fopen(trace, "w");
     Ogre::ResourceGroupManager::getSingleton().setLoadingListener(&listener);
 }
 }  // namespace
@@ -2269,6 +2283,8 @@ bool Renderer::init(const RendererConfig& requested) {
     m.automap.set_zoom(config.map_zoom);
     m.automap.hide();  // Never render outside active gameplay
     m.automap_initialized = true;
+    // A second display's window made before the map was (watch_window_surface()).
+    m.apply_second_screen(m.second_window != nullptr);
 
     // The first thing on the display, before the character or the level is
     // read. Startup and `restart()` both come through here, so the New Game

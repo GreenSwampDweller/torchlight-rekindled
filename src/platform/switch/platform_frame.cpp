@@ -7,7 +7,10 @@
 
 #include <malloc.h>
 #include <switch.h>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <thread>
 
 namespace tl::core {
@@ -16,14 +19,31 @@ namespace tl::core {
 // once it is about to go. The .nro's RomFS holds OGRE's shader library
 // (cmake/switch.cmake), read as `romfs:/RTShaderLib`.
 // A failed mount is reported by the renderer, which then finds no RTShaderLib.
-extern "C" void userAppInit(void) { (void)romfsInit(); }
+extern "C" void userAppInit(void) {
+    (void)romfsInit();
+#if defined(__SWITCH2__)
+    // The GL driver's shader cache in the game's folder (`ouncevk/`), not its default
+    // `sdmc:/config/ouncevk`, where the guard refuses writes. The arguments are read by now.
+    setenv("MESA_SHADER_CACHE_DIR", (platform_data_root() + "ouncevk").c_str(), 0);
+#endif
+}
 
-extern "C" void userAppExit(void) { romfsExit(); }
+// The loader stays in this process after the game (hbmenu comes back in it): a load cut short
+// must not leave the boost on for what runs next.
+extern "C" void userAppExit(void) {
+#if defined(__SWITCH2__)
+    (void)appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
+#endif
+    romfsExit();
+}
 
 // libnx's copy of the arguments the loader started the .nro with.
 extern "C" {
 extern int __system_argc;
 extern char** __system_argv;
+#if defined(__SWITCH2__)
+bool tl_switch2_write_allowed(const char* path);  // platform_guard.cpp
+#endif
 }
 
 // The homebrew's own directory on the SD card: the folder the .nro was started from
@@ -40,10 +60,141 @@ const std::string& platform_data_root() {
         if (path.rfind("sdmc:/", 0) != 0 || slash == std::string::npos) {
             return std::string("sdmc:/switch/torchlight/");
         }
+#if defined(__SWITCH2__)
+        // The Switch 2 writes only inside /switch/torchlight*/ (platform_guard.cpp): a copy
+        // started from anywhere else keeps its saves and logs in the default folder.
+        if (!tl_switch2_write_allowed(path.substr(0, slash + 1).c_str())) {
+            return std::string("sdmc:/switch/torchlight/");
+        }
+#endif
         return path.substr(0, slash + 1);
     }();
     return root;
 }
+
+#if defined(__SWITCH2__)
+namespace {
+
+/// config.txt's `docked_resolution` (1080, 1440 or 2160): the lines of the picture drawn docked.
+/// 1080 when the file does not say.
+unsigned docked_lines() {
+    std::FILE* f = std::fopen((platform_data_root() + "config.txt").c_str(), "rb");
+    if (f == nullptr) return 1080;
+    unsigned lines = 1080;
+    char line[256];
+    const char key[] = "docked_resolution=";
+    while (std::fgets(line, sizeof line, f) != nullptr) {
+        std::string text;
+        for (const char* c = line; *c != '\0' && *c != '#'; ++c) {
+            if (std::isspace(static_cast<unsigned char>(*c)) == 0)
+                text += static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+        }
+        if (text.rfind(key, 0) == 0)
+            lines = static_cast<unsigned>(std::atoi(text.c_str() + sizeof key - 1));
+    }
+    std::fclose(f);
+    return lines;
+}
+
+unsigned g_docked_lines = 1080;
+unsigned g_fps_limit = 0;  ///< fps_limit: 0 for none
+int g_mode = -1;           ///< the console's mode the window was last sized for
+bool g_reapply = false;    ///< a setting changed: size and frame rate again
+u32 g_window_width = 0;
+u32 g_window_height = 0;
+
+bool docked() { return appletGetOperationMode() == AppletOperationMode_Console; }
+
+/// The picture's size for the console's mode now: 1920x1080 in the hand; docked, what
+/// `docked_resolution` asks (1080, 1440 or 2160), no larger than the TV's output.
+void wanted_size(u32& width, u32& height) {
+    width = 1920;
+    height = 1080;
+    if (!docked()) return;
+    s32 tv_width = 0;
+    s32 tv_height = 0;
+    if (R_FAILED(appletGetDefaultDisplayResolution(&tv_width, &tv_height)) || tv_height <= 0)
+        return;
+    if (g_docked_lines >= 2160) {
+        width = static_cast<u32>(tv_width);
+        height = static_cast<u32>(tv_height);
+    } else if (g_docked_lines >= 1440 && tv_height >= 1440) {
+        width = 2560;
+        height = 1440;
+    }
+}
+
+/// The window to `width` x `height`, a fixed size: the system shows a picture larger than the
+/// screen as a crop, not scaled, so the game draws at the screen's own size.
+void size_window(u32 width, u32 height) {
+    (void)nwindowSetDimensions(nwindowGetDefault(), width, height);
+    g_window_width = width;
+    g_window_height = height;
+    g_mode = static_cast<int>(appletGetOperationMode());
+}
+
+// DIVERGENCE (platform): the Switch 2's screen runs at up to 120 Hz, and its window stays at 60
+// unless asked. Up to 120 frames a second at 120 Hz and 60 at 60 Hz, or fps_limit where lower;
+// variable refresh rate on, so rates between them pace evenly where the screen has it. A picture
+// taller than 1440 lines asks for no 120 Hz: a TV takes 120 Hz only at 1080p or 1440p, and a 4K
+// picture under that request was shown as a zoomed-in crop.
+void request_frame_rates() {
+    u32 at_120hz = g_fps_limit == 0 || g_fps_limit > 120 ? 120 : g_fps_limit;
+    const u32 at_60hz = g_fps_limit == 0 || g_fps_limit > 60 ? 60 : g_fps_limit;
+    if (g_window_height > 1440 && at_120hz > 60) at_120hz = 60;
+    const Result rc = nwindowSetFrameRates(nwindowGetDefault(), at_120hz, at_60hz, true);
+    TL_LOG_INFO(
+        "display: %s, window %ux%u, docked_resolution=%u; up to %u fps at 120 Hz, %u at "
+        "60 Hz (0x%x)",
+        docked() ? "docked" : "handheld", g_window_width, g_window_height, g_docked_lines, at_120hz,
+        at_60hz, static_cast<unsigned>(rc));
+}
+
+}  // namespace
+
+// The screen's size as the game starts (wanted_size), the window set to it. The game owns the
+// window's size from here on: OGRE leaves it alone, and tl_switch2_follow_mode changes it.
+extern "C" void tl_switch2_screen_size(unsigned* width, unsigned* height) {
+    g_docked_lines = docked_lines();
+    u32 w = 0;
+    u32 h = 0;
+    wanted_size(w, h);
+    size_window(w, h);
+    *width = w;
+    *height = h;
+}
+
+// Once a frame: when the console docks or undocks, or a setting changed (tl_switch2_set_display),
+// the window to the new mode's size and the frame rate asked again. True, with the new size, when
+// the window's size changed: the renderer then follows the surface to it.
+extern "C" bool tl_switch2_follow_mode(unsigned* width, unsigned* height) {
+    if (static_cast<int>(appletGetOperationMode()) == g_mode && !g_reapply) return false;
+    g_reapply = false;
+    u32 w = 0;
+    u32 h = 0;
+    wanted_size(w, h);
+    const bool resized = w != g_window_width || h != g_window_height;
+    size_window(w, h);
+    request_frame_rates();
+    if (!resized) return false;
+    *width = w;
+    *height = h;
+    return true;
+}
+
+// config.txt's docked_resolution, or as the mods page last set it.
+extern "C" unsigned tl_switch2_docked_lines() {
+    return g_docked_lines >= 2160 ? 2160 : g_docked_lines >= 1440 ? 1440 : 1080;
+}
+
+// The docked resolution (1080, 1440, 2160) and the frame-rate limit (0 none), changed while the
+// game runs; applied at the next frame, as a dock change is.
+extern "C" void tl_switch2_set_display(unsigned docked_lines, unsigned fps_limit) {
+    g_docked_lines = docked_lines;
+    g_fps_limit = fps_limit;
+    g_reapply = true;
+}
+#endif
 
 // OGRE makes the window itself.
 void platform_window_params(std::map<std::string, std::string>& params) { (void)params; }
@@ -52,10 +203,26 @@ void platform_window_params(std::map<std::string, std::string>& params) { (void)
 // dialog, `detail` behind its Details button. It returns when it is closed.
 void platform_error_message(const std::string& summary, const std::string& detail) {
     TL_LOG_ERROR("%s", summary.c_str());
+#if defined(__SWITCH2__)
+    // DIVERGENCE (platform): no system applet under kaiHEN, whose error dialog may file the
+    // error with the system; the message on the text console until + or B.
+    consoleInit(nullptr);
+    std::printf("%s\n\n%s\n\nPress + or B to close.\n", summary.c_str(), detail.c_str());
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & (HidNpadButton_Plus | HidNpadButton_B)) break;
+        consoleUpdate(nullptr);
+    }
+    consoleExit(nullptr);
+#else
     ErrorApplicationConfig config;
     if (R_SUCCEEDED(errorApplicationCreate(&config, summary.c_str(), detail.c_str()))) {
         (void)errorApplicationShow(&config);
     }
+#endif
 }
 
 void pump_events() {
@@ -71,8 +238,16 @@ bool should_keep_running() {
     return running;
 }
 
-// The console's display is its own: 60 Hz, which the swap already waits for.
+#if defined(__SWITCH2__)
+// fps_limit, for the window's frame rate (request_frame_rates).
+void platform_set_frame_rate(float fps) {
+    g_fps_limit = fps >= 1.0f ? static_cast<unsigned>(fps) : 0;
+    request_frame_rates();
+}
+#else
+// The Switch's display is its own: 60 Hz, which the swap already waits for.
 void platform_set_frame_rate(float fps) { (void)fps; }
+#endif
 
 void platform_sleep_until(std::chrono::steady_clock::time_point deadline) {
     std::this_thread::sleep_until(deadline);

@@ -53,6 +53,11 @@ float float_at(const tl::formats::CmpNode& node, size_t index, float fallback) {
 
 /// A boolean field, defaulting to `fallback` when the node does not carry it.
 // PORT: asset parsing, a layout node's field read with its fallback.
+// The output a particle link raises as its scene is activated.
+auto particle_link_output(bool starts_on_load) {
+    return starts_on_load ? kParticleStarted : kParticleStopped;
+}
+
 bool bool_at(const tl::formats::CmpNode& node, size_t index, bool fallback) {
     const tl::formats::CmpField* f = node.field(index);
     return f != nullptr && f->count() == 1 ? f->as_bool() : fallback;
@@ -166,8 +171,21 @@ bool can_see_turned(const OgreQuaternion& turn, const Vec3& from, const Vec3& at
 // Build
 // ---------------------------------------------------------------------------
 
+// PORT: a built object into the machine's list.
+void LevelScript::add_built(Object&& o, const tl::formats::CmpNode& node) {
+    // `CLayout::setStartOnLoad`: kept in the timeline's flag.
+    if (o.type == type::kParticleLink) {
+        o.tl_start_on_load =
+            bool_at(node, tl::formats::cmp_field::particle_link::kStartOnLoad, true);
+    }
+    index_.emplace(o.id, objects_.size());
+    if (o.type == type::kUnitTrigger) ++unit_trigger_objects_;
+    objects_.push_back(std::move(o));
+}
+
 void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64_t>& gated) {
     objects_.clear();
+    unit_trigger_objects_ = 0;
     index_.clear();
     update_order_.clear();
     frame_order_.clear();
@@ -742,8 +760,7 @@ void LevelScript::build(const tl::formats::CmpScene& scene, const std::set<int64
             o.spawner->set_frame(placed);
         }
 
-        index_.emplace(o.id, objects_.size());
-        objects_.push_back(std::move(o));
+        add_built(std::move(o), node);
     }
 
     // Every placed monster is a character, created in node order
@@ -956,6 +973,7 @@ size_t LevelScript::wire_count() const {
 // PORT: the level's `Unit Trigger` nodes, for the renderer.
 std::vector<LevelScript::UnitTriggerView> LevelScript::every_unit_trigger() const {
     std::vector<UnitTriggerView> out;
+    if (unit_trigger_objects_ == 0) return out;
     for (const Object& o : objects_) {
         if (o.type != type::kUnitTrigger) continue;
         UnitTriggerView view;
@@ -985,6 +1003,7 @@ bool LevelScript::unit_trigger(int64_t id, UnitTriggerView& out) const {
 // PORT: this machine's `Unit Trigger` nodes, for the renderer.
 std::vector<LevelScript::UnitTriggerView> LevelScript::unit_triggers() const {
     std::vector<UnitTriggerView> out;
+    if (unit_trigger_objects_ == 0) return out;
     for (const Object& o : objects_) {
         if (o.type != type::kUnitTrigger || !o.enabled) continue;
         UnitTriggerView view;
@@ -2259,11 +2278,19 @@ void LevelScript::trigger_update(Object& o, const Vec3& player, QuestState& ques
     if (!o.enabled) return;
     bool inside = false;
     const Vec3 d = player - o.position;
+    // The console measures a player trigger from the character's position, the collision
+    // sphere's centre: the feet and the radius.
+    const Vec3 centre{player.x, player.y + player_radius_, player.z};
     if (o.type == type::kPlayerSphereTrigger) {
-        inside = !(o.radius < std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
+        const Vec3 c = o.position - centre;
+        // The squares are summed z, x, y, each fused onto the last.
+        inside = !(o.radius < std::sqrt(std::fma(c.y, c.y, std::fma(c.x, c.x, c.z * c.z))));
     } else if (o.type == type::kPlayerBoxTrigger) {
-        inside = std::fabs(d.x) <= o.half_extent.x && std::fabs(d.y) <= o.half_extent.y &&
-                 std::fabs(d.z) <= o.half_extent.z;
+        // `CTriggerBox::updateTrigger`: strictly between the faces.
+        const Vec3& t = o.position;
+        const Vec3& h = o.half_extent;
+        inside = centre.x > t.x - h.x && centre.x < t.x + h.x && centre.y > t.y - h.y &&
+                 centre.y < t.y + h.y && centre.z > t.z - h.z && centre.z < t.z + h.z;
     } else {
         // DIVERGENCE: a `Unit Trigger` has no reach of its own; see
         // enable_proximity_unit_triggers().
@@ -3881,15 +3908,33 @@ void LevelScript::skill_update(Object& o, QuestState& quests, std::vector<Script
 // Animation Controller (`CAnimationPlayer`)
 // ---------------------------------------------------------------------------
 
+namespace {
+// PORT: two unit names the same but for the case of their ASCII letters.
+bool same_unit_name(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        const auto lower = [](char c) {
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c + 32) : c;
+        };
+        if (lower(a[i]) != lower(b[i])) return false;
+    }
+    return true;
+}
+}  // namespace
+
 // `CLevel::getBaseUnitsByDataGroup`: every unit of the
 // level's lists with the data group, over all the level's machines (a room's node can
 // reach a unit another machine runs).
 std::vector<LevelScript::UnitRef> LevelScript::units_named(const std::string& unit) const {
     std::vector<UnitRef> found;
     if (unit.empty()) return found;
+    // PORT: by the name whatever its case. A layout writes `MercPet`; the same unit brought to
+    // the level as the player's companion carries its data's `MERCPET`, and a scene that moves
+    // it must still find it.
     for (LevelScript* machine : level_machines()) {
         for (const Object& o : machine->objects_) {
-            if (o.type == type::kMonster && o.unit == unit && machine->dead_.count(o.id) == 0) {
+            if (o.type == type::kMonster && same_unit_name(o.unit, unit) &&
+                machine->dead_.count(o.id) == 0) {
                 found.push_back({machine, o.id});
             }
         }
@@ -3908,7 +3953,7 @@ bool LevelScript::base_unit_named(const std::string& unit, UnitRef& found) const
     }
     for (LevelScript* machine : level_machines()) {
         for (const Object& o : machine->objects_) {
-            if (o.type == type::kUnitTrigger && o.unit == unit) {
+            if (o.type == type::kUnitTrigger && same_unit_name(o.unit, unit)) {
                 found = {machine, o.id};
                 return true;
             }
@@ -4190,6 +4235,12 @@ void LevelScript::level_activated(QuestState& quests, std::vector<ScriptEvent>& 
                 // `CLayoutDescriptor::descriptorSceneActivated`: the linked
                 // layout's `setActivated(true)` (vtable +0x108) before the later descriptors.
                 if (link_activation_) link_activation_(id, out);
+                break;
+            case type::kParticleLink:
+                // The same descriptor on a particle link: its particle started
+                // again when it starts on load, else stopped, each raising its output once.
+                // The second start's sounds are not carried.
+                broadcast(id, particle_link_output(o->tl_start_on_load), quests, out);
                 break;
             case type::kSound:
                 // The `Sound` descriptor's: a node that
@@ -5223,6 +5274,7 @@ void LevelScript::remove_spawned_unit(int64_t id) {
     forget_character(id);
     const auto it = index_.find(id);
     if (it == index_.end()) return;
+    if (objects_[it->second].type == type::kUnitTrigger) --unit_trigger_objects_;
     objects_.erase(objects_.begin() + static_cast<std::ptrdiff_t>(it->second));
     index_.clear();
     for (size_t i = 0; i < objects_.size(); ++i) index_.emplace(objects_[i].id, i);

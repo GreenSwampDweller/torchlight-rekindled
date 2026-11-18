@@ -10,9 +10,15 @@
 //   fps_limit=0   the most frames a second the game draws, 0 for no limit (Android: 60).
 //   free_camera=0 read, not written: the free camera is a mod now (core/mods.h), and this line
 //                 of a file from before says whether that mod starts on (iOS: 1).
+//   workers=1     read, not written: threads beside the game's for its fork-join work
+//                 (core/job_pool.h), 0 to 3; `--workers` does the same for one run.
 //   mods_menu=1   the mods page before the game (not on iOS, `kModsPage`); 0 skips it and
 //                 starts without any mods. The page's "Don't show this menu again" sets it, and
 //                 the Android launcher's "Mod menu" switch.
+//   second_screen=1   a second display (a two-screen Android handheld) shows the minimap;
+//                     0 keeps it off that screen. The launcher's "Map on second screen" switch
+//                     (shown on a device with two screens); `--no-second-screen` does the same
+//                     for one run.
 //
 // The desktop builds read four more (a device's screen is its own):
 //
@@ -48,6 +54,8 @@ struct RunConfig {
     bool fullscreen = false;
     bool vsync = true;
     unsigned fps_limit = 0;
+    /// Worker threads beside the game's; -1 leaves the build's own count.
+    int workers = -1;
 #if defined(TL_PLATFORM_IOS)
     bool free_camera = true;
 #else
@@ -55,6 +63,8 @@ struct RunConfig {
 #endif
     /// Where `kModsPage`: false skips the page and starts with no mods at all.
     bool mods_menu = true;
+    /// A second display shows the minimap (nothing changes with one screen).
+    bool second_screen = true;
     /// The PC's mouse and keyboard controls in place of the pad's.
     bool mouse = false;
 };
@@ -72,6 +82,8 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults);
 /// `text` with `key` set to `value`: its line rewritten in place, or a line
 /// added when it has none. Every other line - comments included - is kept.
 std::string set_run_config_value(const std::string& text, const std::string& key, bool value);
+std::string set_run_config_text(const std::string& text, const std::string& key,
+                                const std::string& value);
 
 /// Read `path` over `defaults`; when it is absent and `create` is set, write
 /// the defaults there first. The result becomes the run's (run_config()).
@@ -80,6 +92,8 @@ RunConfig load_run_config(const std::string& path, const RunConfig& defaults, bo
 /// Keep one value in the run's file and in run_config(). False when the file
 /// cannot be written.
 bool save_run_config_value(const std::string& key, bool value);
+/// The same for a number (`fps_limit`, `docked_resolution`).
+bool save_run_config_number(const std::string& key, unsigned value);
 
 /// The run's values, as load_run_config() left them (the defaults before it).
 const RunConfig& run_config();
