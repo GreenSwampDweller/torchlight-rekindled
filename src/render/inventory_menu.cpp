@@ -1496,6 +1496,9 @@ void InventoryMenu::set_widget_position(const std::string& widget_name, float of
 void InventoryMenu::show() {
     if (!built_) return;
     visible_ = true;
+    // The quest tab's rows are built when the tab opens; a menu shut on that tab and opened
+    // again is the tab opening, with whatever was taken or handed in meanwhile.
+    quest_rows_stale_ = true;
     overlay_->show();
     text_overlay_->show();
     if (top_overlay_ != nullptr) top_overlay_->show();

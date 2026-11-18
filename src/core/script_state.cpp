@@ -319,7 +319,9 @@ void LevelScript::restore_logic_states(uint32_t scene, int64_t hierarchy,
 
 std::vector<LevelScript::CharacterRecord> LevelScript::living_characters() const {
     std::vector<CharacterRecord> out;
-    for (const Object& o : objects_) {
+    // In the order made: the level's list holds them so (`CLevel::addCharacter`).
+    for (const int64_t made : node_order()) {
+        const Object& o = *find(made);
         if (o.type != type::kMonster) continue;
         const Character* c = character(o.id);
         if (c == nullptr) continue;
@@ -437,11 +439,17 @@ std::vector<LevelScript::WarperRecord> LevelScript::warpers() const {
     return out;
 }
 
-// PORT: the machine's nodes in the file's order.
+// PORT: the machine's nodes in the order made (`set_made_order`'s, then the rest as added).
 std::vector<int64_t> LevelScript::node_order() const {
     std::vector<int64_t> out;
     out.reserve(objects_.size());
-    for (const Object& o : objects_) out.push_back(o.id);
+    std::set<int64_t> placed;
+    for (int64_t id : made_order_) {
+        if (find(id) != nullptr && placed.insert(id).second) out.push_back(id);
+    }
+    for (const Object& o : objects_) {
+        if (placed.insert(o.id).second) out.push_back(o.id);
+    }
     return out;
 }
 

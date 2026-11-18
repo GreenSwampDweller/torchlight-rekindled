@@ -7,6 +7,8 @@
 
 #include <OgreEntity.h>
 
+#include <map>
+#include <string>
 #include <vector>
 
 namespace tl::render {
@@ -101,7 +103,7 @@ void Renderer::Impl::log_sections(unsigned frames, bool print) {
     if (print) print_sections(frames);
     tl::core::section_totals() = tl::core::SectionTotals{};
     frame_phases.reset();
-    posed_entities = 0;
+    pose_pass.reset();
 }
 
 // PORT: diagnostics, a headless run's own timing windows, every 300 frames (it never reaches
@@ -119,6 +121,37 @@ void Renderer::Impl::step_headless_sections() {
     log_sections(headless_profile_frames - 1, true);
     headless_profile_frames = 1;
     mark();
+}
+
+// PORT: diagnostics, the live skill events by skill.
+template <class Events>
+void log_skill_events(const Events& live) {
+    // The live skill events by skill: how many, how many of a looping skill, and how many
+    // whose caster is dead or gone.
+    struct Tally {
+        size_t count = 0;
+        size_t loop = 0;
+        size_t orphan = 0;
+    };
+    std::map<std::string, Tally> by_skill;
+    for (const auto& event : live) {
+        Tally& tally = by_skill[event.skill];
+        ++tally.count;
+        if (event.loop) ++tally.loop;
+        if (event.caster_machine != nullptr &&
+            (event.caster_machine->unit_is_dead(event.caster_node) ||
+             event.caster_machine->unit_casting(event.caster_node) == nullptr)) {
+            ++tally.orphan;
+        }
+    }
+    std::string events;
+    for (const auto& entry : by_skill) {
+        if (entry.second.count < 2) continue;
+        events += " " + entry.first + " " + std::to_string(entry.second.count) + " (loop " +
+                  std::to_string(entry.second.loop) + ", caster dead " +
+                  std::to_string(entry.second.orphan) + ");";
+    }
+    if (!events.empty()) TL_LOG_INFO("  skill events by skill:%s", events.c_str());
 }
 
 // PORT: diagnostics, the update's sections (core/section_profile.h) and OGRE's phases a frame
@@ -150,15 +183,18 @@ void Renderer::Impl::print_sections(unsigned frames) {
         "  per character: ai %.1f a frame at %.1f us, pathing %.1f at %.1f us, "
         "motion %.1f at %.1f us, route searches %.1f at %.1f us; render: poses %.2f (%.1f a "
         "frame), "
-        "particles+controllers %.2f, scene graph %.2f, cull+animate %.2f, draw calls %.2f ms",
+        "particles+controllers %.2f, scene graph %.2f, cull+animate %.2f, draw calls %.2f ms; "
+        "poses handed out in %.2f, joined in %.2f ms",
         calls(Section::Ai), per(Section::Ai), calls(Section::Pathing), per(Section::Pathing),
         calls(Section::Motion), per(Section::Motion), calls(Section::Route), per(Section::Route),
-        static_cast<double>(frame_phases.poses) / n / 1000.0,
-        static_cast<double>(posed_entities) / n,
+        static_cast<double>(pose_pass.prep_us + pose_pass.join_us) / n / 1000.0,
+        static_cast<double>(pose_pass.posed) / n,
         static_cast<double>(frame_phases.controllers) / n / 1000.0,
         static_cast<double>(frame_phases.scene_graph) / n / 1000.0,
         static_cast<double>(frame_phases.cull) / n / 1000.0,
-        static_cast<double>(frame_phases.draw) / n / 1000.0);
+        static_cast<double>(frame_phases.draw) / n / 1000.0,
+        static_cast<double>(pose_pass.prep_us) / n / 1000.0,
+        static_cast<double>(pose_pass.join_us) / n / 1000.0);
     const auto ms = [n](unsigned long long us) { return static_cast<double>(us) / n / 1000.0; };
     TL_LOG_INFO(
         "  cull+animate / draw calls: view %.2f / %.2f, render textures %.2f / %.2f, "
@@ -195,6 +231,7 @@ void Renderer::Impl::print_sections(unsigned frames) {
         nested_scripts.size(), running, level_machines.size(), particle_systems.size(),
         transient_particles.size(), live_skill_events.size(), missiles.size(), entities,
         skinned.size());
+    log_skill_events(live_skill_events);
 }
 
 }  // namespace tl::render

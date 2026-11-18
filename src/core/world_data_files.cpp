@@ -108,4 +108,54 @@ void World::place_merge_layouts(const std::string& path, const ogre::Vector3& or
     }
 }
 
+// The ruleset's LEVELPARTICLE layout (a Sound and a Layout Link Particle), placed once:
+// `CGameClient::loadLevel` loads it after `CLevel::populate`
+// (`CLayout::loadLayoutFile`), keeps it (+0x1080), and `updateIngame`
+// puts it at the player every frame.
+void World::place_level_particle(
+    const std::string& level_particle_ref,
+    std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces) {
+    if (level_particle_ref.empty()) return;
+    std::string level_particle_path = resolve_archive_path(level_particle_ref);
+    if (level_particle_path.empty()) {
+        level_particle_path = resolve_archive_path(level_particle_ref + ".cmp");
+    }
+    const size_t systems_before = view_particle_mark();
+    const size_t machines_before = nested_scripts.size(), stored_before = stored_layouts.size();
+    // Its machines are activated by `activate_level_particle`, after the load.
+    const bool outer_defer = defer_room_activation;
+    const size_t deferred_before = deferred_room_machines.size();
+    defer_room_activation = true;
+    const bool placed =
+        !level_particle_path.empty() &&
+        place_layout(level_particle_path, ogre::Vector3::ZERO, ogre::Quaternion::IDENTITY,
+                     /*depth=*/1);
+    defer_room_activation = outer_defer;
+    level_particle_machines.assign(
+        deferred_room_machines.begin() + static_cast<std::ptrdiff_t>(deferred_before),
+        deferred_room_machines.end());
+    deferred_room_machines.resize(deferred_before);
+    for (size_t i = machines_before; i < nested_scripts.size(); ++i)
+        nested_scripts[i].level_particle = true;
+    for (size_t i = stored_before; i < stored_layouts.size(); ++i)
+        stored_layouts[i].level_particle = true;
+    if (placed) {
+        placed_pieces.emplace_back(level_particle_path, ogre::Vector3::ZERO);
+        const size_t riding = view_level_particle_node(systems_before);
+        TL_LOG_INFO("  LEVELPARTICLE '%s': %zu system node(s) follow the player",
+                    level_particle_ref.c_str(), riding);
+    } else {
+        TL_LOG_WARN("  LEVELPARTICLE '%s' named but could not be placed",
+                    level_particle_ref.c_str());
+    }
+}
+
+// The LEVELPARTICLE layout's machines, held by `place_level_particle`: `CGameClient::loadLevel`
+// activates the layout (`+0xfbc`) right after loading it.
+void World::activate_level_particle() {
+    const std::vector<std::pair<size_t, std::string>> held = std::move(level_particle_machines);
+    level_particle_machines.clear();
+    for (const auto& [index, path] : held) activate_room_machine(index, path);
+}
+
 }  // namespace tl::core

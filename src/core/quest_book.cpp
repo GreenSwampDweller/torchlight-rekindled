@@ -864,6 +864,15 @@ void QuestLog::initialize_with_npc(const QuestDefinition& quest, const std::stri
     }
 }
 
+void QuestLog::set_giver(const QuestDefinition& quest, const std::string& unit) {
+    const std::string key = upper(quest.name);
+    if (unit.empty()) {
+        givers_.erase(key);
+    } else {
+        givers_[key] = upper(unit);
+    }
+}
+
 // PORT: the log's state set from outside.
 void QuestLog::restore_offer(const QuestDefinition& quest, const Offered& rolled,
                              const std::string& giver) {
@@ -1017,6 +1026,22 @@ const QuestDefinition* QuestLog::quest_for_npc(const std::string& unit,
         const QuestEntry& entry = *held;
         if (entry.definition == nullptr || entry.status != QuestStatus::Active) continue;
         if (same_name(giver_of(*entry.definition), unit)) return entry.definition;
+        // PORT: a save from before the giver was written holds none. A held quest with no
+        // giver, none of whose lines names a unit, is taken back by the unit whose `QUESTS`
+        // group lists it - or nobody could ever be handed it.
+        if (!giver_of(*entry.definition).empty()) continue;
+        const QuestDefinition& quest = *entry.definition;
+        bool names_a_unit = false;
+        for (const std::vector<DialogLine>* lines :
+             {&quest.intro, &quest.ret, &quest.complete, &quest.passive}) {
+            for (const DialogLine& line : *lines) names_a_unit = names_a_unit || !line.unit.empty();
+        }
+        if (names_a_unit) continue;
+        for (const std::string& name : unit_quests) {
+            if (!same_name(name, quest.name)) continue;
+            givers_[upper(quest.name)] = upper(unit);
+            return entry.definition;
+        }
     }
 
     // With more than one, the random people's quest is taken out as a
@@ -1362,6 +1387,38 @@ bool QuestLog::accept(const QuestDefinition& quest, int level, uint32_t seed,
     return true;
 }
 
+// PORT: `accept`'s objectives, on an entry of the caller's.
+void QuestLog::roll_offered_objectives(QuestEntry& entry) const {
+    if (entry.definition == nullptr) return;
+    const QuestDefinition& quest = *entry.definition;
+    const uint64_t g_rand_kept = game_random().state();
+    uint32_t groups = 0;
+    if (const Offered* rolled = offered(quest); rolled != nullptr && 0 <= rolled->defeat_groups) {
+        groups = static_cast<uint32_t>(rolled->defeat_groups);
+    } else {
+        groups = take_defeat_groups(quest, game_random());
+    }
+    entry.defeat.assign(quest.defeat.begin(),
+                        quest.defeat.begin() + std::min<size_t>(groups, quest.defeat.size()));
+    entry.defeat_repeats = quest.defeat.empty() || groups <= quest.defeat.size()
+                               ? 0u
+                               : groups - static_cast<uint32_t>(quest.defeat.size());
+    entry.acquire = quest.acquire;
+    entry.populate = quest.populate;
+    number_objectives(entry.defeat);
+    number_objectives(entry.acquire);
+    number_objectives(entry.populate);
+    reinitialize_objectives(entry.defeat, entry, unit_world_, random_names_);
+    reinitialize_objectives(entry.acquire, entry, unit_world_, random_names_);
+    reinitialize_objectives(entry.populate, entry, unit_world_, random_names_);
+    if (unit_namer_) {
+        name_objectives(entry.defeat, unit_namer_);
+        name_objectives(entry.acquire, unit_namer_);
+        name_objectives(entry.populate, unit_namer_);
+    }
+    game_random().set_state(g_rand_kept);
+}
+
 // `CQuest::reinitializeQuest(quest, units, false)`: the giver
 // cleared (`+0x1d4`), the floor and the `[DEFEAT]` groups rolled again on the quest's seed; with
 // `units`, `CQuestUnitData::reinitialize(true)` on the populate units, the
@@ -1655,6 +1712,17 @@ void QuestLog::completion_consequences(const QuestDefinition& quest, bool player
     // done is free to be offered again.
     if (quest.repeatable) {
         state_.set(quest.name, QuestStatus::Unknown);
+        // PORT: and its finished entry let go, as a save (which writes only the held quests)
+        // and load would. Kept, it answered `is_complete` and `find` for the quest offered
+        // again: its giver kept the complete icon and `[COMPLETE]` line, and every talk
+        // handed it in and paid once more.
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            if (!same_name(entries_[i].name(), quest.name)) continue;
+            if (entries_[i].status == QuestStatus::Complete) {
+                entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            break;
+        }
         return;
     }
     broadcast_quest_event(4, quest.name);

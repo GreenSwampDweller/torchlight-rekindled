@@ -22,8 +22,10 @@ constexpr uint16_t kVertexElement = 0x5110;
 constexpr uint16_t kVertexBuffer = 0x5200;
 constexpr uint16_t kVertexBufferData = 0x5210;
 constexpr uint16_t kSkeletonLink = 0x6000;
+constexpr uint16_t kMeshBoneAssignment = 0x7000;
 constexpr size_t kChunkHeader = 6;  // uint16 id, uint32 length
 constexpr uint16_t kSemanticPosition = 1;
+constexpr uint16_t kSemanticNormal = 4;
 constexpr uint16_t kTypeFloat3 = 2;
 constexpr uint16_t kSemanticTexcoord = 7;
 constexpr uint16_t kTypeFloat2 = 1;
@@ -60,6 +62,12 @@ public:
         uint8_t b[4];
         raw(b, 4);
         return word(b);
+    }
+    float f32() {
+        const uint32_t u = u32();
+        float f;
+        std::memcpy(&f, &u, 4);
+        return f;
     }
     float f32_at(size_t at) const {
         const uint32_t u = word(data_ + at);
@@ -148,6 +156,22 @@ void copy_positions(const Reader& r, OgreMeshVertices& out, const std::vector<El
     }
 }
 
+/// The float3 normals of buffer `bind`, read from its data at `data_at`.
+void copy_normals(const Reader& r, OgreMeshVertices& out, const std::vector<Element>& elements,
+                  uint16_t bind, uint16_t vertex_size, size_t data_at) {
+    for (const Element& e : elements) {
+        if (e.semantic != kSemanticNormal || e.source != bind || e.type != kTypeFloat3) continue;
+        if (e.offset + 12u > vertex_size) break;
+        out.normals.resize(static_cast<size_t>(out.count) * 3);
+        for (uint32_t v = 0; v < out.count; ++v) {
+            const size_t at = data_at + static_cast<size_t>(v) * vertex_size + e.offset;
+            out.normals[v * 3 + 0] = r.f32_at(at);
+            out.normals[v * 3 + 1] = r.f32_at(at + 4);
+            out.normals[v * 3 + 2] = r.f32_at(at + 8);
+        }
+    }
+}
+
 /// The first float2 texture coordinates of buffer `bind`.
 void copy_texcoords(const Reader& r, OgreMeshVertices& out, const std::vector<Element>& elements,
                     uint16_t bind, uint16_t vertex_size, size_t data_at) {
@@ -178,6 +202,7 @@ bool read_vertex_buffer(Reader& r, OgreMeshVertices& out, const std::vector<Elem
         return false;
     }
     copy_positions(r, out, elements, bind, vertex_size, data_at);
+    copy_normals(r, out, elements, bind, vertex_size, data_at);
     copy_texcoords(r, out, elements, bind, vertex_size, data_at);
     r.skip(bytes);
     return true;
@@ -215,14 +240,22 @@ bool read_indices(Reader& r, OgreMeshSubmesh& sub, uint32_t index_count) {
     return true;
 }
 
+OgreMeshBoneAssignment read_bone_assignment(Reader& r) {
+    OgreMeshBoneAssignment ba;
+    ba.vertex = r.u32();
+    ba.bone = r.u16();
+    ba.weight = r.f32();
+    return ba;
+}
+
 /// A submesh's operation, bone assignments and texture aliases, until another chunk.
-void skip_submesh_tail(Reader& r) {
+void read_submesh_tail(Reader& r, OgreMeshSubmesh& sub) {
     while (r.ok() && !r.eof()) {
         const uint16_t id = r.chunk();
         if (id == kSubmeshOperation) {
             (void)r.u16();
         } else if (id == kSubmeshBoneAssignment) {
-            r.skip(4 + 2 + 4);  // vertex index, bone index, weight
+            sub.bone_assignments.push_back(read_bone_assignment(r));
         } else if (id == kSubmeshTextureAlias) {
             (void)r.line();
             (void)r.line();
@@ -245,7 +278,7 @@ void read_submesh(Reader& r, OgreMeshSubmesh& sub) {
         if (r.chunk() != kGeometry) return;
         read_geometry(r, sub.vertices);
     }
-    skip_submesh_tail(r);
+    read_submesh_tail(r, sub);
 }
 
 }  // namespace
@@ -277,8 +310,8 @@ OgreMesh parse_ogre_mesh(const uint8_t* data, size_t size) {
             continue;
         }
         (void)r.boolean();  // skeletally animated
-        // The shared geometry and the submeshes come first, then the skeleton link
-        // (`MeshSerializerImpl::writeMesh`); nothing after it is read.
+        // The shared geometry and the submeshes come first, then the skeleton link and shared
+        // bone assignments (`MeshSerializerImpl::writeMesh`); nothing after them is read.
         while (r.ok() && !r.eof()) {
             const uint16_t c_id = r.chunk();
             if (c_id == kGeometry) {
@@ -287,8 +320,11 @@ OgreMesh parse_ogre_mesh(const uint8_t* data, size_t size) {
                 OgreMeshSubmesh sub;
                 read_submesh(r, sub);
                 mesh.submeshes.push_back(std::move(sub));
+            } else if (c_id == kSkeletonLink) {
+                mesh.skeleton = r.line();
+            } else if (c_id == kMeshBoneAssignment) {
+                mesh.bone_assignments.push_back(read_bone_assignment(r));
             } else {
-                if (c_id == kSkeletonLink) mesh.skeleton = r.line();
                 break;
             }
         }

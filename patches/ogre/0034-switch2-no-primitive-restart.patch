@@ -1,0 +1,19 @@
+diff --git a/RenderSystems/GLES2/src/OgreGLES2RenderSystem.cpp b/RenderSystems/GLES2/src/OgreGLES2RenderSystem.cpp
+index 9ab09bee5..227752641 100644
+--- a/RenderSystems/GLES2/src/OgreGLES2RenderSystem.cpp
++++ b/RenderSystems/GLES2/src/OgreGLES2RenderSystem.cpp
+@@ -1354,6 +1392,14 @@ namespace Ogre {
+         if(!getCapabilities()->hasCapability(RSC_PRIMITIVE_RESTART))
+             return;
+ 
++#if defined(__SWITCH2__)
++        // Torchlight patch (Switch 2): primitive restart stays off. The Switch 2's Vulkan driver
++        // has no restart for list topologies, so zink rewrote every indexed draw's indices on the
++        // CPU (util_primconvert), mapping the index buffer and waiting for the GPU each time:
++        // two thirds of a town frame. Torchlight draws triangle lists and never restarts.
++        return;
++#endif
++
+         // Enable primitive restarting with fixed indices depending upon the data type
+         // https://www.khronos.org/registry/webgl/specs/latest/2.0/#NO_PRIMITIVE_RESTART_FIXED_INDEX
+ #if OGRE_PLATFORM != OGRE_PLATFORM_EMSCRIPTEN

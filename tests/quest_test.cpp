@@ -581,6 +581,41 @@ TL_TEST(a_complete_line_closed_twice_completes_the_quest_twice) {
     TL_CHECK(third[0].reward_items);
 }
 
+// `completeQuest` on a `REPEATABLE` quest leaves it free to be offered again: its giver
+// offers the `[INTRO]` once more, not the `[COMPLETE]` line it was just handed in on, as
+// after a save and load.
+TL_TEST(a_repeatable_quest_handed_in_is_offered_again_not_handed_in_again) {
+    QuestDefinition quest = journal_quest("Errand");
+    quest.repeatable = true;
+    tl::core::DialogLine done;
+    done.unit = "SEER";
+    done.texts = {"thank you"};
+    quest.complete.push_back(done);
+    QuestBook book;
+    book.add(quest);
+    QuestLog log;
+    log.set_book(&book);
+    const QuestDefinition* def = book.find("Errand");
+
+    TL_CHECK(log.accept(*def, 1, 1u, reward_graphs()));
+    log.find("Errand")->dialog_interacted = true;  // nothing to do: done once spoken to
+    tl::core::QuestSection section = tl::core::QuestSection::Intro;
+    TL_CHECK_EQ(log.dialog_for(*def, "seer", &section)->texts[0], std::string("thank you"));
+    TL_CHECK_EQ(static_cast<int>(section), static_cast<int>(tl::core::QuestSection::Complete));
+
+    TL_CHECK(log.complete_by_dialog(*def));
+    TL_CHECK_EQ(log.take_completions().size(), size_t{1});
+    TL_CHECK(log.find("Errand") == nullptr);
+    TL_CHECK(!log.is_complete(*def));
+    TL_CHECK_EQ(log.dialog_for(*def, "seer", &section)->texts[0], std::string("take this"));
+    TL_CHECK_EQ(static_cast<int>(section), static_cast<int>(tl::core::QuestSection::Intro));
+
+    // Taken again, it is a quest of its own to finish.
+    TL_CHECK(log.accept(*def, 1, 1u, reward_graphs()));
+    TL_CHECK(log.find("Errand")->status == tl::core::QuestStatus::Active);
+    TL_CHECK_EQ(log.journal_entries().size(), size_t{1});
+}
+
 // `CQuest::questEventUpdate` event 3, `isComplete`: a quest
 // naming another under `[COMPLETE_ON_QUEST_ACCEPT]` completes when that one is taken.
 TL_TEST(complete_on_quest_accept_completes_the_quest_that_names_it) {

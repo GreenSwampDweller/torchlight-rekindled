@@ -1773,9 +1773,11 @@ void World::player_instant_damage(const tl::core::Effect& effect, const float* r
     const std::string from = by_unit ? instant_caster_machine->unit_of(instant_caster_node)
                                      : std::string("its own skill");
     if (hit.blocked) {
-        // "Blocked!" over the character.
+        // "Blocked!" over the character, then its block sample.
         if (subject_node != nullptr) {
-            add_combat_text(tl::core::CombatText::Blocked, view_position(subject_node));
+            const ogre::Vector3 at = view_position(subject_node);
+            add_combat_text(tl::core::CombatText::Blocked, at);
+            play_sound(player_stats.sounds[tl::core::SoundSlot::ShieldBlock], at);
         }
         TL_LOG_INFO("combat: player blocked '%s' from %s", effect.name.c_str(), from.c_str());
         return;

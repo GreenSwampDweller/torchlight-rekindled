@@ -78,6 +78,26 @@ void roll_cloned_effect(tl::core::Effect& effect, const tl::core::StatBook& grap
             effect, tl::core::EffectCalculate::Roll, graphs, source, &tl::core::volatile_random());
     }
 }
+// The value `applyEffectOnUnit` reads (`+0xdc`): an affix's effect comes as the affix rolled it
+// (`CAffix::addEffectsToEffectManager` hands it over with no
+// `calculateBaseValue`); a skill event's is rolled by its caller just before.
+float offered_value(const tl::core::Effect& effect, const tl::core::EffectManager* own,
+                    const tl::core::StatBook& graphs, const tl::core::EffectOwner& source) {
+    if (own == nullptr || !own->offering_affix()) {
+        return tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, graphs, source,
+                                           &tl::core::volatile_random());
+    }
+    if (effect.rolled_value) return *effect.rolled_value;
+    return tl::core::effect_base_value(effect, tl::core::EffectCalculate::Roll, graphs, source);
+}
+
+// The source of an affix's effect: the affix's owner (`CAffix +0x14`, `dynamic_cast` to a
+// character), when the adder named one.
+const tl::core::EffectSource* offered_affix_owner(const tl::core::EffectManager* own) {
+    if (own == nullptr || !own->offering_affix() || !own->applying_source().set) return nullptr;
+    return &own->applying_source();
+}
+
 }  // namespace
 
 tl::core::EffectManager* World::unit_effect_manager(tl::core::LevelScript* machine, int64_t node) {
@@ -180,7 +200,8 @@ bool World::effect_valid_for_placed_unit(tl::core::LevelScript* machine, int64_t
 void World::provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
                                  const tl::core::Effect& effect, bool copy,
                                  const tl::core::EffectManager* own,
-                                 std::vector<tl::core::ScriptEvent>& events) {
+                                 std::vector<tl::core::ScriptEvent>& events,
+                                 const tl::core::EffectSource* affix_owner) {
     // The player applied it: an enemy of the
     // unit's that leaves an idle unit provoked - its friends near it first
     // (`CLevel::reactToAreaDamage`), then the unit
@@ -193,8 +214,18 @@ void World::provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
     // One taken here is already held there (`copyEffect` at the branch); the port adds it on return.
     // The source is the unit whose skill event or proc applied the effect when one did (its own
     // create-event effect provokes nothing: MAIN:19's Ice Wisp, 2026-11-10), else the player.
+    // An affix's effect: the affix's owner, the unit itself for the spawner's `MONSTER_HUNT`,
+    // which is no enemy of its own.
     bool enemy =
-        instant_caster_machine != nullptr
+        affix_owner != nullptr
+            ? machine->unit_is_enemy_of(
+                  node,
+                  affix_owner->player()
+                      ? nullptr
+                      : const_cast<tl::core::LevelScript*>(
+                            static_cast<const tl::core::LevelScript*>(affix_owner->machine)),
+                  affix_owner->node)
+        : instant_caster_machine != nullptr
             ? machine->unit_is_enemy_of(node, instant_caster_machine, instant_caster_node)
         : unit_event_caster.machine != nullptr
             ? machine->unit_is_enemy_of(node, unit_event_caster.machine, unit_event_caster.node)
@@ -205,7 +236,7 @@ void World::provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
         if (side == tl::core::UnitStats::Alignment::Hostile) enemy = false;
         if (side == tl::core::UnitStats::Alignment::Friendly) enemy = true;
     }
-    if (!instant_caster_none && effect.type != kPercentBlind && enemy &&
+    if ((affix_owner != nullptr || !instant_caster_none) && effect.type != kPercentBlind && enemy &&
         (ai_now == tl::core::ai_state::kIdle || ai_now == tl::core::ai_state::kNone)) {
         tl::core::Vec3 at;
         if (machine->unit_position(node, at)) {
@@ -214,7 +245,8 @@ void World::provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
         }
         TL_LOG_DEBUG("effects: %s provoked by '%s' (type %d) from %s",
                      machine->unit_of(node).c_str(), effect.name.c_str(), effect.type,
-                     instant_caster_machine != nullptr      ? "a unit's proc"
+                     affix_owner != nullptr                 ? "its affix's owner"
+                     : instant_caster_machine != nullptr    ? "a unit's proc"
                      : unit_event_caster.machine != nullptr ? "a unit's skill event"
                                                             : "the player");
         machine->provoke_unit(node, quest_log.state(), events);
@@ -306,12 +338,17 @@ void World::unit_instant_damage(tl::core::LevelScript* machine, int64_t node,
         value, type, effect.values[2], effect.values[3], defender,
         instant_caster_none ? nullptr : &attacker, tl::core::volatile_random());
     if (hit.blocked) {
-        // the `Blocked!` text over the target and its block sound.
+        // The `Blocked!` text over the target, then its block sample.
         tl::core::Vec3 at;
         if (machine->unit_position(node, at)) {
             add_combat_text(tl::core::CombatText::Blocked, ogre::Vector3(at.x, at.y, at.z));
         }
         TL_LOG_INFO("combat: %s blocked '%s'", unit.c_str(), effect.name.c_str());
+        std::vector<tl::core::ScriptEvent> heard;
+        machine->play_block_sample(node, heard);
+        if (NodeMap* nodes = nodes_of(machine); nodes != nullptr && !heard.empty()) {
+            apply_script_events(heard, *nodes);
+        }
         return;
     }
     if (hit.interrupts) {
@@ -361,44 +398,57 @@ void World::unit_instant_damage(tl::core::LevelScript* machine, int64_t node,
 
 // `updateEffects`' conversions: each held status into its affix.
 void World::convert_held_statuses(int32_t ai, tl::core::EffectManager* effects,
-                                  const std::string& unit) {
-    // `FREEZE`, `BURN`, `POISON`, `SHOCK` held: the matching
-    // `DAMAGEEFFECT*` affix (its duration refreshed when already held),
-    // and the effect itself spent.
-    const std::pair<int, const char*> conversions[] = {
-        {kBurn, "DAMAGEEFFECTONFIRE"},
-        {kFreeze, "DAMAGEEFFECTFROZEN"},
-        {kShock, "DAMAGEEFFECTELECTRICITY"},
-        {kPoison, "DAMAGEEFFECTPOISONED"},
-    };
-    for (const auto& conversion : conversions) {
-        // Not while the unit is in state 0xc, dying (5), dead (6), 0x29 or 0x10.
-        if (ai == 0xc || ai == tl::core::ai_state::kDying || ai == tl::core::ai_state::kDead ||
-            ai == 0x29 || ai == 0x10)
-            continue;
-        for (;;) {
-            // Asked again each time: the affix's effects go into the same lists.
-            tl::core::LiveEffect* live = nullptr;
-            for (tl::core::LiveEffect* held : effects->live_effects_of_type(conversion.first)) {
-                if (!held->expired()) {
-                    live = held;
+                                  const std::string& unit, bool is_player) {
+    // `CCharacter::updateEffects`, the walk over the passive
+    // and the dynamic list (the count read as each list begins): a live `BURN`,
+    // `FREEZE`, `SHOCK` or `POISON` becomes its `DAMAGEEFFECT*` affix - the `PLAYER` one on the
+    // player (`isPlayer`), its duration refreshed when already held - owned by the
+    // status's owner (`+0x40`), and the effect itself is spent.
+    // Not while the unit is in state 0xc, dying (5), dead (6), 0x29 or 0x10.
+    if (ai == 0xc || ai == tl::core::ai_state::kDying || ai == tl::core::ai_state::kDead ||
+        ai == 0x29 || ai == 0x10) {
+        TL_LOG_DEBUG("effects: %s in state %d converts no status", unit.c_str(), ai);
+        return;
+    }
+    for (const tl::core::EffectActivation list :
+         {tl::core::EffectActivation::Passive, tl::core::EffectActivation::Dynamic}) {
+        const size_t count = effects->effects(list).size();
+        for (size_t i = 0; i < count && i < effects->effects(list).size(); ++i) {
+            const tl::core::LiveEffect& held = effects->effects(list)[i];
+            const char* affix = nullptr;
+            switch (held.effect.type) {
+                case kBurn:
+                    affix = is_player ? "DAMAGEEFFECTONFIREPLAYER" : "DAMAGEEFFECTONFIRE";
                     break;
-                }
+                case kFreeze:
+                    affix = is_player ? "DAMAGEEFFECTFROZENPLAYER" : "DAMAGEEFFECTFROZEN";
+                    break;
+                case kShock:
+                    affix = is_player ? "DAMAGEEFFECTELECTRICITYPLAYER" : "DAMAGEEFFECTELECTRICITY";
+                    break;
+                case kPoison:
+                    affix = is_player ? "DAMAGEEFFECTPOISONEDPLAYER" : "DAMAGEEFFECTPOISONED";
+                    break;
+                default: break;
             }
-            if (live == nullptr) break;
-            const float duration = live->effect.duration;
-            const uint32_t level = live->effect.level;
-            if (duration != tl::core::kDurationInstant && duration != tl::core::kDurationAlways) {
-                live->elapsed = duration;
-            }
-            live->dead = true;
+            if (affix == nullptr || held.expired()) continue;
+            const float duration = held.effect.duration;
+            const uint32_t level = held.effect.level;
+            const tl::core::EffectSource owner = held.source;
             // An `INSTANT` or `ALWAYS` one is spent without an affix.
-            if (duration == tl::core::kDurationInstant || duration == tl::core::kDurationAlways)
-                continue;
-            if (!effects->set_affix_duration(conversion.second, duration)) {
-                effects->add_affix_by_name(conversion.second, level, &affixes, duration);
-                TL_LOG_INFO("effects: %s takes %s for %.2fs", unit.c_str(), conversion.second,
+            const bool timed =
+                duration != tl::core::kDurationInstant && duration != tl::core::kDurationAlways;
+            if (timed && !effects->set_affix_duration(affix, duration)) {
+                // `CBaseUnit::addAffix(duration, name, level, owner)`.
+                const tl::core::EffectSourceScope owned(effects, owner);
+                effects->add_affix_by_name(affix, level, &affixes, duration);
+                TL_LOG_INFO("effects: %s takes %s for %.2fs", unit.c_str(), affix,
                             static_cast<double>(duration));
+            }
+            // The add may have moved the list.
+            if (tl::core::LiveEffect* spent = effects->live_effect_at(list, i)) {
+                if (timed) spent->elapsed = duration;
+                spent->dead = true;
             }
         }
     }
@@ -480,8 +530,7 @@ bool World::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t node,
     };
     const tl::core::EffectOwner source =
         instant_caster_none ? tl::core::EffectOwner{} : skill_effects.owner;
-    const float value = tl::core::effect_base_value(
-        effect, tl::core::EffectCalculate::Roll, stat_graphs, source, &tl::core::volatile_random());
+    const float value = offered_value(effect, own, stat_graphs, source);
     const int32_t ai = machine->unit_ai(node);
     const bool dying = ai == tl::core::ai_state::kDying || ai == tl::core::ai_state::kDead;
     std::vector<tl::core::ScriptEvent> events;
@@ -602,7 +651,9 @@ bool World::unit_effect_on_unit(tl::core::LevelScript* machine, int64_t node,
             }
             break;
     }
-    if (after) provoke_after_effect(machine, node, effect, copy, own, events);
+    if (after) {
+        provoke_after_effect(machine, node, effect, copy, own, events, offered_affix_owner(own));
+    }
     if (NodeMap* nodes = nodes_of(machine); nodes != nullptr && !events.empty()) {
         apply_script_events(events, *nodes);
     }

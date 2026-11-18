@@ -228,16 +228,17 @@ bool Renderer::Impl::selected_unit(std::string& unit, bool& hostile, int64_t& no
 
     auto consider = [&](const Ogre::Entity* entity, const std::string& name, int64_t node_id) {
         if (entity == nullptr || !entity->isVisible() || name.empty()) return;
-        // Asked of the machine that runs it (a room's boss is the room's).
-        if (!node_targetable(node_id, entity->getParentSceneNode())) return;
-        // Never a character whose master is the player (checks `+0x5A4`).
-        if (node_is_player_pet(node_id)) return;
+        // The reach first: the two tests after it ask every machine of the level.
         const Ogre::SceneNode* at = entity->getParentSceneNode();
         if (at == nullptr) return;
         const Ogre::Vector3 where = at->_getDerivedPosition();
         const float ox = where.x - from.x;
         const float oz = where.z - from.z;
         if (ox * ox + oz * oz > (reach + 0.01f) * (reach + 0.01f)) return;
+        // Asked of the machine that runs it (a room's boss is the room's).
+        if (!node_targetable(node_id, at)) return;
+        // Never a character whose master is the player (checks `+0x5A4`).
+        if (node_is_player_pet(node_id)) return;
 
         tl::core::TargetCandidate candidate;
         candidate.x = where.x;
@@ -367,7 +368,7 @@ void Renderer::Impl::update_player_effects(float dt) {
     }
     // `updateEffects`' conversions, as a unit's: the player's state is dead (6) once dead.
     convert_held_statuses(player_health.dead ? tl::core::ai_state::kDead : 0, &player_effects,
-                          "the player");
+                          "the player", /*is_player=*/true);
     player_effects.update_affixes(dt);
     player_effects.calculate_effect_values();
     player_effects.delete_dead_effects();

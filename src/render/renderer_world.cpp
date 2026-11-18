@@ -353,7 +353,7 @@ void Renderer::Impl::step_script(float delta) {
         pending_trigger_loops.erase(pending_trigger_loops.begin() + static_cast<long>(i));
         const auto units = scene_units.equal_range(pending.unit);
         for (auto it = units.first; it != units.second; ++it) {
-            if (it->second.node != pending.node) continue;
+            if (it->second.entity != pending.entity) continue;
             Ogre::AnimationState* next = nullptr;
             if (!play_scene_animation(it->second.entity, it->second.mesh, pending.next,
                                       pending.loops, it->second.rate, /*optional=*/true, &next,
@@ -368,7 +368,7 @@ void Renderer::Impl::step_script(float delta) {
             // A later step waits on *this* animation, not on the one that has
             // just finished: the chain is transition -> state -> loop.
             for (PendingTriggerLoop& later : pending_trigger_loops) {
-                if (later.node == pending.node && later.transition == pending.transition) {
+                if (later.entity == pending.entity && later.transition == pending.transition) {
                     later.transition = next;
                 }
             }

@@ -109,6 +109,12 @@ std::vector<LiveEffect*> EffectManager::live_effects_of_type(int type) {
     return out;
 }
 
+// PORT: a list's entry by index.
+LiveEffect* EffectManager::live_effect_at(EffectActivation activation, size_t index) {
+    std::vector<LiveEffect>& list = list_for(activation);
+    return index < list.size() ? &list[index] : nullptr;
+}
+
 // `CEffectManager::getAffix`, asked only
 // whether it finds one.
 bool EffectManager::has_affix(const std::string& name) const {
@@ -141,8 +147,10 @@ bool EffectManager::offer_effect(const Effect& effect, const std::string& affix,
     Effect copy = effect;
     // An affix of this manager's own is added as it is, unrolled.
     offering_copy_ = affix.empty();
+    offering_affix_ = !affix.empty();
     const bool taken = context_.on_unit(copy);
     offering_copy_ = false;
+    offering_affix_ = false;
     if (!taken) return false;
     add_effect(clone_effect(copy), affix, skill);
     return true;
@@ -268,11 +276,10 @@ void EffectManager::add_affix(const Affix& affix, uint32_t level, float duration
     affixes_.push_back(std::move(live));
     for (size_t slot = 0; slot < scaled.effects.size(); ++slot) {
         const Effect& effect = scaled.effects[slot];
-        // `addEffectsToEffectManager` clones each (`cloneEffect`), sets its affix
-        // owner and activates it (`CBaseUnit::activateEffect`) - never through `applyEffectOnUnit`,
-        // whose value re-roll and provocation are a skill event's (`offer_effect`): a `MONSTER_HUNT`
-        // added to a unit whose manager the World hooks provoked it (MAIN:19, 2026-11-10).
-        add_effect(clone_effect(effect), affix.name, skill);
+        // `addEffectsToEffectManager`: on a unit's manager (`+0x48`) each effect is
+        // tested (`isEffectValidForUnit`), applied (`applyEffectOnUnit`, the affix's owner its source)
+        // and activated only when taken; with no unit it is cloned in.
+        if (!offer_effect(effect, affix.name, skill)) continue;
         LiveEffect& held = list_for(effect.activation).back();
         held.affix_id = id;
         held.affix_slot = static_cast<uint32_t>(slot);

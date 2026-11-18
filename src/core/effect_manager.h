@@ -216,6 +216,10 @@ public:
     /// Inside `Context::on_unit`: whether a take is `cloneEffect`'s new copy (true) or an
     /// effect of this manager's own affix (false).
     bool offering_copy() const { return offering_copy_; }
+    /// Inside `Context::on_unit`: the effect is one of an affix being added
+    /// (`CAffix::addEffectsToEffectManager`): its value stands as rolled, and its source is
+    /// the affix's owner (`applying_source()`).
+    bool offering_affix() const { return offering_affix_; }
     /// Whether the character's manager (`+0x17c`) exists: made by its first affix or effect.
     bool made() const { return made_; }
 
@@ -384,6 +388,8 @@ public:
     /// Every held effect of `type`, in list order, for a unit's
     /// `updateEffects` to act on (and mark spent).
     std::vector<LiveEffect*> live_effects_of_type(int type);
+    /// PORT: the list's entry at `index`, to write through; null past its end.
+    LiveEffect* live_effect_at(EffectActivation activation, size_t index);
     /// `CEffectManager::getAffix(name)` is
     /// not null: an affix of that name is held.
     bool has_affix(const std::string& name) const;
@@ -413,6 +419,8 @@ private:
     uint32_t last_affix_id_ = 0;
     /// PORT: `offering_copy()`.
     bool offering_copy_ = false;
+    /// PORT: `offering_affix()`.
+    bool offering_affix_ = false;
     bool made_ = false;
     /// `+0x80`: the total per effect type.
     std::array<float, kEffectTypeCacheCount> cache_{};

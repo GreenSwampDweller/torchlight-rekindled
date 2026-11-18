@@ -1,0 +1,20 @@
+diff --git a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
+--- a/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
++++ b/RenderSystems/GLSupport/src/EGL/Switch/OgreSwitchEGLWindow.cpp
+@@ -92,8 +92,16 @@
+         }
+ 
+         // Only pin the internal resolution if the caller asked for one.
++#if defined(__SWITCH2__)
++        // Torchlight patch (Switch 2): the game sizes the window itself, for the console's mode
++        // as it starts and as it docks or undocks; the size asked here is left alone, so a new
++        // Root (New Game) keeps the window's current size.
++        (void)width;
++        (void)height;
++#else
+         if (width > 0 && height > 0)
+             nwindowSetDimensions(nw, width, height);
++#endif
+ 
+         mWindow = (EGLNativeWindowType)nw;
+         mEglDisplay = mGLSupport->getGLDisplay();

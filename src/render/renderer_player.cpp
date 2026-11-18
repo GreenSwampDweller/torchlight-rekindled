@@ -2445,7 +2445,7 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                     unit->playing_state = started;
                     unit->last_time = 0.0f;
                     for (size_t step = 1; step < steps.size(); ++step) {
-                        pending_trigger_loops.push_back({started, event.node_id, event.unit,
+                        pending_trigger_loops.push_back({started, unit->entity, event.unit,
                                                          steps[step].first, steps[step].second});
                     }
                 }

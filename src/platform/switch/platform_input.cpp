@@ -2,6 +2,7 @@
 // keyboard for the names on the creation screen. `padConfigureInput(1,
 // HidNpadStyleSet_NpadStandard)` makes handheld, a Joy-Con pair and a Pro Controller one pad.
 #include "core/input.h"
+#include "core/log.h"
 
 #include "core/gamepad.h"
 #include "core/run_config.h"
@@ -48,6 +49,29 @@ float touch_pinch() {
     return delta;
 }
 
+#if defined(__SWITCH2__)
+// The console's mode, the TV's resolution and the controllers' styles, logged as the game starts and
+// whenever one changes: what a report from the dock is read against.
+void log_pad_and_mode() {
+    static int last_mode = -1;
+    static u32 last_handheld = ~0u;
+    static u32 last_first = ~0u;
+    const int mode = static_cast<int>(appletGetOperationMode());
+    const u32 handheld = hidGetNpadStyleSet(HidNpadIdType_Handheld);
+    const u32 first = hidGetNpadStyleSet(HidNpadIdType_No1);
+    if (mode == last_mode && handheld == last_handheld && first == last_first) return;
+    last_mode = mode;
+    last_handheld = handheld;
+    last_first = first;
+    s32 width = 0;
+    s32 height = 0;
+    (void)appletGetDefaultDisplayResolution(&width, &height);
+    TL_LOG_INFO("console: %s, display %dx%d; pad styles: handheld 0x%x, player 1 0x%x",
+                mode == AppletOperationMode_Console ? "docked" : "handheld", width, height,
+                handheld, first);
+}
+#endif
+
 }  // namespace
 
 InputState poll_platform_input() {
@@ -57,6 +81,9 @@ InputState poll_platform_input() {
         g_ready = true;
     }
     padUpdate(&g_pad);
+#if defined(__SWITCH2__)
+    log_pad_and_mode();
+#endif
 
     InputState in;
 
@@ -152,6 +179,11 @@ bool text_entry(const std::string& title, const std::string& guide, std::string&
     swkbdConfigSetGuideText(&keyboard, guide.c_str());
     swkbdConfigSetInitialText(&keyboard, text.c_str());
     swkbdConfigSetStringLenMax(&keyboard, max_chars);
+#if defined(__SWITCH2__)
+    // DIVERGENCE (platform): no dictionary under kaiHEN, so the keyboard learns nothing into
+    // the system's own save.
+    swkbdConfigSetDicFlag(&keyboard, 0);
+#endif
     char out[128] = {};
     const Result shown = swkbdShow(&keyboard, out, sizeof(out));
     swkbdClose(&keyboard);

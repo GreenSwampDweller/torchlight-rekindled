@@ -106,6 +106,12 @@ void LevelScript::play_hit_sample(int64_t id, int damage_type, std::vector<Scrip
     if (const Object* o = find(id)) play_unit_sample(*o, static_cast<int>(slot), out);
 }
 
+void LevelScript::play_block_sample(int64_t id, std::vector<ScriptEvent>& out) {
+    if (const Object* o = find(id)) {
+        play_unit_sample(*o, static_cast<int>(SoundSlot::ShieldBlock), out);
+    }
+}
+
 // `CCharacter::modifyHP` by `-HP`, then
 // `CCharacter::die` with no attacker, direction or force.
 void LevelScript::die_now(Object& o, Character& c, QuestState& quests,

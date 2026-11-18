@@ -1116,8 +1116,7 @@ void Automap::update_viewport_dimensions() {
             apply_zoom();
             return;
         }
-        mViewport->setDimensions(left / second_w, top / second_h, side / second_w,
-                                 side / second_h);
+        mViewport->setDimensions(left / second_w, top / second_h, side / second_w, side / second_h);
         mCamera->setAspectRatio(1.0f);
 
         if (mCullQuad) mCullQuad->setVisible(true);

@@ -538,6 +538,7 @@ public:
                                const ogre::Vector3& origin, const ogre::Quaternion& basis);
     /// A floor's rooms activated after its population, then its triggers' marks.
     void activate_deferred_rooms();
+    void activate_level_particle();
     /// `loaded_path_blockers` onto the map after the floor's bake.
     void lay_loaded_path_blockers();
     /// The floor's LEVELPARTICLE layout, after its population.
@@ -1184,12 +1185,13 @@ public:
     void provoke_after_effect(tl::core::LevelScript* machine, int64_t node,
                               const tl::core::Effect& effect, bool copy,
                               const tl::core::EffectManager* own,
-                              std::vector<tl::core::ScriptEvent>& events);
+                              std::vector<tl::core::ScriptEvent>& events,
+                              const tl::core::EffectSource* affix_owner = nullptr);
     void play_instant_strike(tl::core::LevelScript* machine, int64_t node, const std::string& unit);
     void unit_instant_damage(tl::core::LevelScript* machine, int64_t node,
                              const tl::core::Effect& effect, float value, const std::string& unit);
     void convert_held_statuses(int32_t ai, tl::core::EffectManager* effects,
-                               const std::string& unit);
+                               const std::string& unit, bool is_player = false);
     void update_unit_hp_of(const MachineView& view, int64_t node, tl::core::EffectManager* effects,
                            const std::string& unit, float dt,
                            std::vector<tl::core::ScriptEvent>& events);
@@ -1292,6 +1294,10 @@ public:
     bool find_chunk_marker(const std::string& chunk_cmp_path, const ogre::Vector3& chunk_origin,
                            const std::string& wanted_type, ogre::Vector3& world_position,
                            float& radius, ChunkMarkerExtra* extra = nullptr);
+    bool stand_at_player_start(const std::string& chunk_path, const ogre::Vector3& chunk_origin,
+                               ogre::Vector3& facing, ogre::Vector3& spawn_at, bool& grounded);
+    void close_floor_load(const std::string& level_particle,
+                          std::vector<std::pair<std::string, ogre::Vector3>>& placed_pieces);
     /// Build and place one procedurally-generated dungeon floor.
     bool place_dungeon_floor(const std::string& dungeon_name, int floor_number);
     /// A `CREATEAS: TRIGGER` prop made outside a layout (`populate`'s chests:
