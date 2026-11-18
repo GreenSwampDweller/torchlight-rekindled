@@ -854,8 +854,12 @@ constexpr const char* kLabelButton = "a_button";
 constexpr float kLabelButtonLeft = -20.0f;
 constexpr float kLabelButtonTop = -1.0f;
 constexpr float kLabelButtonSize = 21.0f;
-/// PORT: the space the Stacked Labels mod leaves between two stacked frames.
-constexpr float kStackedLabelGap = 2.0f;
+/// PORT: the Stacked Labels mod stacks frames by their solid part: the tooltip
+/// pieces fade out over the frame's top and bottom, so two stacked frames overlap
+/// by this much (less than the 9 a frame reaches past its text, so no text is
+/// covered) and their dark bars meet with no gap between them.
+constexpr float kStackedLabelFade = 8.0f;
+constexpr float kStackedLabelGap = 0.0f;
 /// A look's `AbsoluteDim`, and every pixel figure, is a
 /// pixel of the console's 720-line output.
 constexpr float kConsoleLines = 720.0f;
@@ -1029,8 +1033,9 @@ void GameHud::layout_labels() {
         });
         std::vector<tl::core::ItemLabelRect> ordered(shown);
         for (size_t i = 0; i < shown; ++i) ordered[i] = rects[by_order[i]];
-        const tl::core::ItemLabelFrame frame{kLabelFrameLeft, kLabelFrameTop, kLabelFrameGrowWide,
-                                             kLabelFrameGrowTall};
+        const tl::core::ItemLabelFrame frame{kLabelFrameLeft, kLabelFrameTop + kStackedLabelFade / 2.0f,
+                                             kLabelFrameGrowWide,
+                                             kLabelFrameGrowTall - kStackedLabelFade};
         tl::core::stack_item_labels(ordered, frame, kStackedLabelGap, kConsoleLines);
         for (size_t i = 0; i < shown; ++i) rects[by_order[i]] = ordered[i];
     }
