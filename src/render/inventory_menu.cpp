@@ -1394,6 +1394,34 @@ void InventoryMenu::set_widget_image(const std::string& widget_name,
     }
 }
 
+// PORT: item compare is the right stick's click, and the console's layout draws the D-pad
+// beside its caption. The console's art has no picture of a stick being pressed, so there the
+// picture goes and the caption, moved into its place, says "R3". The pack's own layout names
+// a picture of its own and is left alone.
+bool InventoryMenu::hide_compare_dpad() {
+    const int parent = find_node_index_by_widget("master/ToggleItemCompare");
+    if (parent < 0) return false;
+    std::vector<int> pictures;
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].parent != parent || nodes_[i].image != "dpad_leftright") continue;
+        pictures.push_back(static_cast<int>(i));
+    }
+    if (pictures.empty()) return false;
+    // The caption is authored 20 to the right of the picture's place, which starts at -9.
+    // Moved once: placing a widget lays the whole menu out again.
+    if (const Node* caption = find_node_by_widget("master/itemcomparetext")) {
+        if (caption->off_x != -6.0f) set_widget_position("master/itemcomparetext", -6.0f, -1.0f);
+    }
+    bool changed = false;
+    for (int index : pictures) {
+        Node& n = nodes_[static_cast<size_t>(index)];
+        changed = changed || !n.runtime_hidden;
+        n.runtime_hidden = true;
+    }
+    if (changed) refresh_node_visibility(pictures);
+    return true;
+}
+
 void InventoryMenu::set_children_visible(const std::string& widget_name, bool visible) {
     // By node rather than by name: not every child has a `WIDGET NAME` (the
     // rows' coin window has none). Shown again, each takes its authored
@@ -2547,8 +2575,9 @@ void InventoryMenu::update(const tl::core::Inventory& inv,
 
         set_widget_visible("master/PetCommands", true);
         set_widget_visible("master/ToggleItemCompare", true);
+        const std::string button = hide_compare_dpad() ? "R3   " : "";
         set_widget_text("master/itemcomparetext",
-                        item_compare_ ? "disable item compare" : "enable item compare");
+                        button + (item_compare_ ? "disable item compare" : "enable item compare"));
     } else if (menu_mode_ == MenuMode::Skills) {
         // The ring's neighbours either side, as the other three tabs name theirs.
         set_widget_text("master/MenuLeft", "Stats");

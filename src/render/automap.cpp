@@ -1006,8 +1006,18 @@ void Automap::show() {
     mViewport->setVisibilityMask(kVisibilityAutomap);
     mViewport->setOverlaysEnabled(false);
     mViewport->setMaterialScheme(Ogre::MSN_SHADERGEN);
+    // Not drawn while the second screen is something else's; the main window's always is.
+    mViewport->setAutoUpdated(!(mSecondCovered && target == mSecond));
 
     update_viewport_dimensions();
+}
+
+void Automap::set_second_screen_covered(bool covered) {
+    if (covered == mSecondCovered) return;
+    mSecondCovered = covered;
+    if (mViewport != nullptr && mSecond != nullptr && mViewport->getTarget() == mSecond) {
+        mViewport->setAutoUpdated(!covered);
+    }
 }
 
 void Automap::set_mode(MapMode mode) {

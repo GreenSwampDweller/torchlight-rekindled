@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "render/automap.h"
 #include "render/game_hud.h"
+#include "render/item_tip.h"
 #include "render/menu_chrome.h"
 #include "render/overlay_set.h"
 
@@ -40,9 +41,23 @@ constexpr float kUnderStrip = 0.012f;
 /// of its 48).
 constexpr const char* kFrameArt = "spells_window";
 constexpr float kFrameInset = 6.0f / 48.0f;
-/// The readout's and the count's sizes, in the interface's points.
-constexpr float kReadoutPoints = 15.0f;
-constexpr float kCountPoints = 14.0f;
+/// The readout's, the count's and a spell's cooling seconds' sizes, in the interface's points.
+/// This is a handheld's second display, held at arm's length: the words are read at a glance,
+/// so they are about twice what the main window's interface would use.
+constexpr float kReadoutPoints = 29.0f;
+constexpr float kCountPoints = 21.0f;
+constexpr float kCoolingPoints = 26.0f;
+/// What the readout's size is kept clear of the map's bezel for: an average glyph is about this
+/// much of the text's height wide, and these are the longest captions each corner is made to
+/// hold ("Ember Mine Floor 12", "12,345,678 gold", "Fame 100"), in characters. A longer one
+/// reaches in over the bezel rather than shrinking the text further.
+constexpr float kGlyphWidth = 0.5f;
+constexpr float kLongestPlace = 20.0f;
+constexpr float kLongestPurse = 16.0f;
+constexpr float kLongestLevel = 10.0f;
+/// How far the bezel reaches past the map's circle, as draw_bezel() draws it, in pixels at 1080
+/// on the shorter side.
+constexpr float kBezelReach = 30.0f;
 
 const Ogre::ColourValue kWordColour(0.92f, 0.86f, 0.70f, 1.0f);
 const Ogre::ColourValue kDimColour(0.55f, 0.52f, 0.45f, 1.0f);
@@ -173,6 +188,8 @@ void SecondScreen::attach(Ogre::RenderWindow* window, GameHud* hud, const Shape&
     build_widgets();
     layout_widgets();
     apply_readout();
+    build_item_overlays();
+    layout_item_tips();
 }
 
 void SecondScreen::detach() {
@@ -188,6 +205,9 @@ void SecondScreen::detach() {
     shown_.clear();
     swapped_ = false;
     destroy_widgets();
+    destroy_item_overlays();
+    item_tips_.clear();
+    item_signature_.clear();
     destroy_backdrop();
 }
 
@@ -208,11 +228,20 @@ void SecondScreen::preViewportUpdate(const Ogre::RenderTargetViewportEvent& evt)
         overlay->show();
         shown_.push_back(overlay);
     };
-    show(backdrop_);
+    // The item windows have the screen to themselves under the strip: no bezel with no map
+    // in it, no readout or buttons under them.
+    const bool items = !item_tips_.empty() && item_plates_ != nullptr;
+    if (!items) show(backdrop_);
     if (hud_ != nullptr && hud_->second_shown()) {
         for (Ogre::Overlay* overlay : hud_->second_overlays()) show(overlay);
-        show(widgets_);
-        show(words_);
+        if (!items) {
+            show(widgets_);
+            show(words_);
+        }
+    }
+    if (items) {
+        show(item_plates_);
+        show(item_words_);
     }
 }
 
@@ -230,7 +259,8 @@ void SecondScreen::set_readout(const Readout& readout) {
         readout.level == readout_.level && readout.fame_level == readout_.fame_level &&
         readout.gold == readout_.gold && readout.floor == readout_.floor &&
         readout.portal_scrolls == readout_.portal_scrolls &&
-        readout.portal_icon == readout_.portal_icon && readout.spells == readout_.spells;
+        readout.skill_set == readout_.skill_set && readout.portal_icon == readout_.portal_icon &&
+        readout.spells == readout_.spells;
     if (same) return;
     // The scroll's picture is kept once seen: the button shows it, dimmed, with none carried.
     const std::string icon =
@@ -242,11 +272,17 @@ void SecondScreen::set_readout(const Readout& readout) {
 
 SecondScreen::Tap SecondScreen::hit(float x, float y, int* spell) const {
     if (window_ == nullptr || hud_ == nullptr || !hud_->second_shown()) return Tap::None;
+    // Under the item windows there is nothing to press: only the strip.
+    if (!item_tips_.empty()) return y > shape_.strip_bottom ? Tap::None : Tap::Strip;
     const auto on = [&](float left, float top) {
         return portal_size_ > 0.0f && x >= left && x <= left + portal_size_ && y >= top &&
                y <= top + portal_size_;
     };
     if (on(portal_left_, portal_top_)) return Tap::Portal;
+    if (set_size_ > 0.0f && x >= set_left_ && x <= set_left_ + set_size_ && y >= set_top_ &&
+        y <= set_top_ + set_size_) {
+        return Tap::SkillSet;
+    }
     for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
         if (!readout_.spells[slot].known ||
             !on(spell_buttons_[slot].left, spell_buttons_[slot].top)) {
@@ -289,6 +325,7 @@ void SecondScreen::build_widgets() {
         };
         // The frame's name sorts before the icon's: a container draws its children by name.
         portal_frame_ = panel("tl/second/portal/0frame");
+        set_frame_ = panel("tl/second/set/0frame");
         portal_icon_ = panel("tl/second/portal/1icon");
         for (size_t slot = 0; slot < spell_buttons_.size(); ++slot) {
             const std::string stem = "tl/second/spell/" + std::to_string(slot);
@@ -307,6 +344,7 @@ void SecondScreen::build_widgets() {
         };
         using Align = Ogre::TextAreaOverlayElement;
         portal_count_ = words("tl/second/portal/count", Align::Right);
+        set_text_ = words("tl/second/set/label", Align::Center);
         portal_label_ = words("tl/second/portal/label", Align::Left);
         level_text_ = words("tl/second/level", Align::Left);
         fame_text_ = words("tl/second/fame", Align::Left);
@@ -341,6 +379,8 @@ void SecondScreen::destroy_widgets() {
             }
         }
         for (Ogre::OverlayElement* element : {static_cast<Ogre::OverlayElement*>(portal_frame_),
+                                              static_cast<Ogre::OverlayElement*>(set_frame_),
+                                              static_cast<Ogre::OverlayElement*>(set_text_),
                                               static_cast<Ogre::OverlayElement*>(portal_icon_),
                                               static_cast<Ogre::OverlayElement*>(portal_count_),
                                               static_cast<Ogre::OverlayElement*>(portal_label_),
@@ -366,6 +406,9 @@ void SecondScreen::destroy_widgets() {
     widget_root_ = nullptr;
     word_root_ = nullptr;
     portal_frame_ = nullptr;
+    set_frame_ = nullptr;
+    set_text_ = nullptr;
+    set_size_ = 0.0f;
     portal_icon_ = nullptr;
     portal_count_ = nullptr;
     portal_label_ = nullptr;
@@ -389,10 +432,35 @@ void SecondScreen::layout_widgets() {
     const float edge = kEdge * down;
     // The interface's own rule for a text's size: its points at 768 lines, scaled to the screen.
     const float scale = down / kNativeHeight;
-    const float line = kReadoutPoints * ui_points_to_pixels() * scale;
+    float line = kReadoutPoints * ui_points_to_pixels() * scale;
     const float count_line = kCountPoints * ui_points_to_pixels() * scale;
+    const float cooling_line = kCoolingPoints * ui_points_to_pixels() * scale;
 
     const float first = shape_.strip_bottom + kUnderStrip * down;
+
+    // The readout is made as large as it can be without reaching the map's bezel. A caption of
+    // `chars` characters on the text height `h`, starting at `top` and hugging the left or the
+    // right edge, is clear when its inner end is outside the circle's widest part at those
+    // heights (which is where the circle is nearest the text's middle).
+    if (shape_.radius > 0.0f) {
+        const float reach = shape_.radius + kBezelReach * std::min(across, down) / 1080.0f;
+        const auto clear = [&](float h, float top, float chars, bool right) {
+            const float nearest = std::min(std::max(shape_.centre_y, top), top + h);
+            const float dy = shape_.centre_y - nearest;
+            if (std::fabs(dy) >= reach) return true;
+            const float half = std::sqrt(reach * reach - dy * dy);
+            const float width = chars * kGlyphWidth * h;
+            return right ? across - edge - width >= shape_.centre_x + half
+                         : edge + width <= shape_.centre_x - half;
+        };
+        const float floor_size = 1.0f;  // never smaller than this: a bound for the loop
+        while (line > floor_size && !(clear(line, first, kLongestPlace, true) &&
+                                      clear(line, first + line * 1.15f, kLongestPurse, true) &&
+                                      clear(line, first, kLongestLevel, false) &&
+                                      clear(line, first + line * 1.15f, kLongestLevel, false))) {
+            line -= 0.5f;
+        }
+    }
     const auto place = [&](Ogre::TextAreaOverlayElement* text, float x, float y, float height) {
         if (text == nullptr) return;
         set_char_height(text, height / down);
@@ -422,6 +490,17 @@ void SecondScreen::layout_widgets() {
     place(portal_label_, portal_left_ + portal_size_ + edge * 0.4f,
           portal_top_ + (portal_size_ - count_line) * 0.5f, count_line);
 
+    // The skill set's button: in the strip's own band, in the room left of its first slot.
+    set_size_ = std::min(portal_size_, shape_.strip_bottom * 0.6f);
+    set_left_ = edge * 0.5f;
+    set_top_ = std::max(0.0f, (shape_.strip_bottom - set_size_) * 0.3f);
+    if (set_frame_ != nullptr) {
+        set_frame_->setPosition(set_left_ / across, set_top_ / down);
+        set_frame_->setDimensions(set_size_ / across, set_size_ / down);
+    }
+    place(set_text_, set_left_ + set_size_ * 0.5f, set_top_ + (set_size_ - count_line) * 0.5f,
+          count_line);
+
     // The spells: the first slot in the bottom right corner, the rest above it. The seconds a
     // spell is cooling for are written across the middle of its picture.
     const float inset = portal_size_ * kFrameInset;
@@ -440,7 +519,7 @@ void SecondScreen::layout_widgets() {
                                        (portal_size_ - inset * 2.0f) / down);
         }
         place(button.cooling, button.left + portal_size_ * 0.5f,
-              button.top + (portal_size_ - line * 1.4f) * 0.5f, line * 1.4f);
+              button.top + (portal_size_ - cooling_line) * 0.5f, cooling_line);
     }
 }
 
@@ -475,6 +554,10 @@ void SecondScreen::apply_readout() {
     };
     if (portal_frame_ != nullptr && portal_frame_->isTransparent())
         picture(portal_frame_, kFrameArt);
+    if (set_frame_ != nullptr && set_frame_->isTransparent()) picture(set_frame_, kFrameArt);
+    if (set_text_ != nullptr) {
+        set_caption(set_text_, readout_.skill_set == 0 ? "Set 1" : "Set 2");
+    }
     if (portal_icon_ != nullptr && readout_.portal_icon != shown_icon_) {
         if (picture(portal_icon_, readout_.portal_icon)) shown_icon_ = readout_.portal_icon;
     }
@@ -505,6 +588,254 @@ void SecondScreen::apply_readout() {
         if (button.cooling != nullptr) {
             set_caption(button.cooling, spell.cooling > 0 ? std::to_string(spell.cooling) : "");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The item windows
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// How far the windows keep from the screen's edges and from each other, and the line round
+/// each, as fractions of the screen's height.
+constexpr float kItemMargin = 0.022f;
+constexpr float kItemGap = 0.016f;
+constexpr float kItemEdge = 0.0025f;
+/// The most a window is drawn over the interface's own size: past it the glyphs, cut for
+/// the main screen, go soft.
+constexpr float kItemMostScale = 3.2f;
+
+/// One colour, as a texture a panel can be given.
+Ogre::TexturePtr colour_texture(const char* name, uint8_t r, uint8_t g, uint8_t b) {
+    Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().createManual(
+        name, Ogre::RGN_DEFAULT, Ogre::TEX_TYPE_2D, 2, 2, 0, Ogre::PF_BYTE_RGBA, Ogre::TU_STATIC);
+    Ogre::HardwarePixelBufferSharedPtr buffer = texture->getBuffer();
+    buffer->lock(Ogre::HardwareBuffer::HBL_DISCARD);
+    const Ogre::PixelBox& box = buffer->getCurrentLock();
+    auto* data = static_cast<uint8_t*>(box.data);
+    for (unsigned y = 0; y < 2; ++y) {
+        uint8_t* row = data + static_cast<size_t>(y) * box.rowPitch * 4;
+        for (unsigned x = 0; x < 2; ++x) {
+            row[x * 4 + 0] = r;
+            row[x * 4 + 1] = g;
+            row[x * 4 + 2] = b;
+            row[x * 4 + 3] = 255;
+        }
+    }
+    buffer->unlock();
+    return texture;
+}
+
+/// Every text of a window, one after another.
+void sign(std::string& into, const tl::core::EquipmentTooltip& tip) {
+    const auto add = [&into](const tl::core::TooltipText& text) {
+        if (text.shown) into += text.text;
+        into += static_cast<char>(31);
+    };
+    add(tip.name);
+    add(tip.type);
+    add(tip.big);
+    add(tip.big_label);
+    add(tip.stats);
+    add(tip.effects);
+    for (const tl::core::TooltipText& requirement : tip.requirements) add(requirement);
+    add(tip.description);
+    add(tip.price);
+    into += static_cast<char>(30);
+}
+
+}  // namespace
+
+void SecondScreen::set_item_tips(std::vector<tl::core::EquipmentTooltip> tips) {
+    if (tips.size() > kItemWindows) tips.resize(kItemWindows);
+    std::string signature;
+    for (const tl::core::EquipmentTooltip& tip : tips) sign(signature, tip);
+    if (signature == item_signature_ && tips.size() == item_tips_.size()) return;
+    item_signature_ = std::move(signature);
+    item_tips_ = std::move(tips);
+    layout_item_tips();
+}
+
+void SecondScreen::build_item_overlays() {
+    if (item_plates_ != nullptr) return;
+    if (!ensure_menu_font()) return;
+    try {
+        auto& overlays = Ogre::OverlayManager::getSingleton();
+        item_plates_ = overlays.create("tl/second/item/plates");
+        item_plates_->setZOrder(477);  // over everything else this screen shows
+        item_words_ = overlays.create("tl/second/item/words");
+        item_words_->setZOrder(478);
+        const auto root = [&](const char* name, Ogre::Overlay* into) {
+            auto* box =
+                static_cast<Ogre::OverlayContainer*>(overlays.createOverlayElement("Panel", name));
+            box->setMetricsMode(Ogre::GMM_RELATIVE);
+            box->setPosition(0.0f, 0.0f);
+            box->setDimensions(1.0f, 1.0f);
+            static_cast<Ogre::PanelOverlayElement*>(box)->setTransparent(true);
+            into->add2D(box);
+            return box;
+        };
+        item_plate_root_ = root("tl/second/item/plateroot", item_plates_);
+        item_word_root_ = root("tl/second/item/wordroot", item_words_);
+        // Nearly black, with a line of the HUD frames' dull gold round it.
+        item_plate_texture_ = colour_texture("tl/second/item/plate_texture", 10, 9, 8);
+        item_edge_texture_ = colour_texture("tl/second/item/edge_texture", 120, 88, 40);
+        item_plate_material_ = build_menu_material("tl/second/item/plate", item_plate_texture_);
+        item_edge_material_ = build_menu_material("tl/second/item/edge", item_edge_texture_);
+        for (size_t index = 0; index < item_windows_.size(); ++index) {
+            const std::string stem = "tl/second/item/" + std::to_string(index);
+            const auto panel = [&](const std::string& name, const Ogre::MaterialPtr& material) {
+                auto* made = static_cast<Ogre::PanelOverlayElement*>(
+                    overlays.createOverlayElement("Panel", name));
+                made->setMetricsMode(Ogre::GMM_RELATIVE);
+                made->setMaterial(material);
+                made->hide();
+                item_plate_root_->addChild(made);
+                return made;
+            };
+            // The edge sorts before the plate by name: a container draws its children by name.
+            item_windows_[index].edge = panel(stem + "/0edge", item_edge_material_);
+            item_windows_[index].plate = panel(stem + "/1plate", item_plate_material_);
+        }
+        // Never shown here: preViewportUpdate() shows them for the second window's viewport.
+    } catch (const Ogre::Exception& e) {
+        TL_LOG_WARN("second screen: no item windows: %s", e.getDescription().c_str());
+        destroy_item_overlays();
+    }
+}
+
+void SecondScreen::destroy_item_overlays() {
+    if (Ogre::OverlayManager* overlays = Ogre::OverlayManager::getSingletonPtr()) {
+        for (Ogre::Overlay* overlay : {item_plates_, item_words_}) {
+            if (overlay != nullptr) overlay->hide();
+        }
+        for (ItemWindow& window : item_windows_) {
+            for (Ogre::OverlayElement* element :
+                 {static_cast<Ogre::OverlayElement*>(window.edge),
+                  static_cast<Ogre::OverlayElement*>(window.plate)}) {
+                if (element == nullptr) continue;
+                if (Ogre::OverlayContainer* parent = element->getParent()) {
+                    parent->removeChild(element->getName());
+                }
+                overlays->destroyOverlayElement(element);
+            }
+            for (Ogre::TextAreaOverlayElement* line : window.lines) {
+                if (line == nullptr) continue;
+                if (Ogre::OverlayContainer* parent = line->getParent()) {
+                    parent->removeChild(line->getName());
+                }
+                overlays->destroyOverlayElement(line);
+            }
+        }
+        if (item_plate_root_ != nullptr && item_plates_ != nullptr) {
+            item_plates_->remove2D(item_plate_root_);
+        }
+        if (item_word_root_ != nullptr && item_words_ != nullptr) {
+            item_words_->remove2D(item_word_root_);
+        }
+        if (item_plate_root_ != nullptr) overlays->destroyOverlayElement(item_plate_root_);
+        if (item_word_root_ != nullptr) overlays->destroyOverlayElement(item_word_root_);
+        if (item_plates_ != nullptr) overlays->destroy(item_plates_);
+        if (item_words_ != nullptr) overlays->destroy(item_words_);
+    }
+    item_windows_ = {};
+    item_plates_ = nullptr;
+    item_words_ = nullptr;
+    item_plate_root_ = nullptr;
+    item_word_root_ = nullptr;
+    for (Ogre::MaterialPtr* material : {&item_plate_material_, &item_edge_material_}) {
+        if (!*material) continue;
+        if (Ogre::MaterialManager* materials = Ogre::MaterialManager::getSingletonPtr()) {
+            materials->remove(*material);
+        }
+        material->reset();
+    }
+    for (Ogre::TexturePtr* texture : {&item_plate_texture_, &item_edge_texture_}) {
+        if (!*texture) continue;
+        if (Ogre::TextureManager* textures = Ogre::TextureManager::getSingletonPtr()) {
+            textures->remove(*texture);
+        }
+        texture->reset();
+    }
+}
+
+// The windows side by side under the strip, the item's own last: all at one size, the
+// largest at which the row fits the screen's width and the tallest fits its height.
+void SecondScreen::layout_item_tips() {
+    for (ItemWindow& window : item_windows_) {
+        if (window.edge != nullptr) window.edge->hide();
+        if (window.plate != nullptr) window.plate->hide();
+        for (Ogre::TextAreaOverlayElement* line : window.lines) line->hide();
+    }
+    if (window_ == nullptr || item_plates_ == nullptr || item_tips_.empty()) return;
+    const float across = static_cast<float>(window_->getWidth());
+    const float down = static_cast<float>(window_->getHeight());
+    if (across <= 0.0f || down <= 0.0f) return;
+
+    std::vector<size_t> shown;
+    for (size_t index = 0; index < item_tips_.size() && index < kItemWindows; ++index) {
+        if (item_tips_[index].name.shown) shown.push_back(index);
+    }
+    if (shown.empty()) return;
+
+    const float margin = kItemMargin * down;
+    const float gap = kItemGap * down;
+    const float gaps = gap * static_cast<float>(shown.size() - 1);
+    const float top = shape_.strip_bottom + margin;
+    const float room_wide = across - margin * 2.0f - gaps;
+    const float room_tall = down - top - margin;
+    if (room_wide <= 0.0f || room_tall <= 0.0f) return;
+
+    // The windows at a scale, and how much of the room they take.
+    std::array<TipBuilt, kItemWindows> built;
+    const auto build = [&](float scale, float& wide, float& tall) {
+        wide = 0.0f;
+        tall = 0.0f;
+        const TipView view{scale, across, down};
+        for (size_t index : shown) {
+            built[index] = build_item_tip(item_tips_[index], kMainTipFonts, view);
+            wide += built[index].wide;
+            tall = std::max(tall, built[index].tall);
+        }
+    };
+    const float native = down / kNativeHeight;
+    float scale = native;
+    float wide = 0.0f, tall = 0.0f;
+    build(scale, wide, tall);
+    if (wide <= 0.0f || tall <= 0.0f) return;
+    // A window's width and height follow its scale closely but not exactly (its lines wrap):
+    // aim for the fit, then come down a little at a time while it is still over.
+    scale = std::min(native * kItemMostScale, scale * std::min(room_wide / wide, room_tall / tall));
+    build(scale, wide, tall);
+    for (int tries = 0; tries < 12 && (wide > room_wide || tall > room_tall); ++tries) {
+        scale *= 0.95f;
+        build(scale, wide, tall);
+    }
+
+    const TipView view{scale, across, down};
+    const float edge = std::max(1.0f, kItemEdge * down);
+    float x = (across - (wide + gaps)) * 0.5f;
+    // The item's own window on the right and the worn ones to its left, as the main
+    // screen's item compare sets them out.
+    for (size_t at = shown.size(); at-- > 0;) {
+        const size_t index = shown[at];
+        ItemWindow& window = item_windows_[index];
+        const TipBuilt& made = built[index];
+        if (window.edge != nullptr) {
+            window.edge->setPosition((x - edge) / across, (top - edge) / down);
+            window.edge->setDimensions((made.wide + edge * 2.0f) / across,
+                                       (made.tall + edge * 2.0f) / down);
+            window.edge->show();
+        }
+        if (window.plate != nullptr) {
+            window.plate->setPosition(x / across, top / down);
+            window.plate->setDimensions(made.wide / across, made.tall / down);
+            window.plate->show();
+        }
+        const std::string prefix = "tl/second/item/" + std::to_string(index) + "/line_";
+        draw_item_tip_text(made, x, top, view, TipTextHome{item_word_root_, prefix, &window.lines});
+        x += made.wide + gap;
     }
 }
 

@@ -158,10 +158,12 @@ InputState poll_platform_input() {
         }
         both_held = both;
     }
-    // The D-pad, which nothing else on the game screen uses: Up cycles the pet's stance and Down
-    // sends it shopping.
-    in.pet_stance = (held & HidNpadButton_Up) != 0;
-    in.pet_town = (held & HidNpadButton_Down) != 0;
+    // The D-pad: Left cycles the pet's stance and Right sends it shopping; Up and Down are
+    // the two skill sets.
+    in.pet_stance = (held & HidNpadButton_Left) != 0;
+    in.pet_town = (held & HidNpadButton_Right) != 0;
+    in.dpad_up = (held & HidNpadButton_Up) != 0;
+    in.dpad_down = (held & HidNpadButton_Down) != 0;
     return in;
 }
 

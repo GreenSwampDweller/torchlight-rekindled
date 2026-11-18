@@ -180,8 +180,10 @@ void map_pad(const PadReading& pad, InputState& in, float& x, float& y) {
     in.map_toggle = (b & kPadThumbR) != 0;
     in.fps_toggle = (b & kPadThumbL) != 0;
     // The same two D-pad jobs the Switch gives it (platform/switch).
-    in.pet_stance = (b & kPadUp) != 0;
-    in.pet_town = (b & kPadDown) != 0;
+    in.pet_stance = (b & kPadLeft) != 0;
+    in.pet_town = (b & kPadRight) != 0;
+    in.dpad_up = (b & kPadUp) != 0;
+    in.dpad_down = (b & kPadDown) != 0;
 }
 
 // The keyboard, as a pad: WASD or the arrows are the stick, Space or Enter is A, Backspace is B,

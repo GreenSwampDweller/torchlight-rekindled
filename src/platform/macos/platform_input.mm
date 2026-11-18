@@ -199,7 +199,8 @@ void map_pad(const PadReading& p, InputState& in, float& x, float& y) {
     in.menu_prev = lt > 0; in.menu_next = rt > 0;
     in.tab_prev = (p.buttons & kLB) != 0; in.tab_next = (p.buttons & kRB) != 0;
     in.map_toggle = (p.buttons & kR3) != 0; in.fps_toggle = (p.buttons & kL3) != 0;
-    in.pet_stance = (p.buttons & kUp) != 0; in.pet_town = (p.buttons & kDown) != 0;
+    in.pet_stance = (p.buttons & kLeft) != 0; in.pet_town = (p.buttons & kRight) != 0;
+    in.dpad_up = (p.buttons & kUp) != 0; in.dpad_down = (p.buttons & kDown) != 0;
 }
 
 void map_keyboard(InputState& in, float& x, float& y) {

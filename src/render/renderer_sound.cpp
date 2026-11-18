@@ -342,6 +342,17 @@ void Renderer::Impl::refresh_game_hud() {
         const int64_t guid = player_skills.second_slots()[i];
         if (guid == -1) continue;
         const tl::core::ItemStats* item = items.find_by_guid(guid);
+        // PORT: a bumper shows the potion it would drink and how many of the kind are
+        // carried, all sizes (`potion_slot_for`).
+        if (slot < 2 && item != nullptr) {
+            const int drunk = tl::core::potion_slot_for(player_inventory, *item);
+            const std::string& icon =
+                drunk >= 0 ? player_inventory.slots()[static_cast<size_t>(drunk)].item.icon
+                           : item->icon;
+            state.slots[i] =
+                tl::core::item_slot_view(icon, tl::core::potion_count_for(player_inventory, *item));
+            continue;
+        }
         state.slots[i] =
             tl::core::item_slot_view(item != nullptr ? item->icon : std::string(),
                                      tl::core::equipment_count_of_guid(player_inventory, guid));

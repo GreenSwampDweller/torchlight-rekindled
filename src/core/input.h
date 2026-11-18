@@ -112,15 +112,20 @@ struct InputState {
     bool map_zoom_in = false;
     bool map_zoom_out = false;
 
-    /// Send the pet to town with its bag: 'P' on the desktop, the D-pad's Down
-    /// on the console (`CGameUI::togglePet`, `handle_TogglePet`). The
+    /// Send the pet to town with its bag: 'P' on the desktop, the D-pad's Right
+    /// on a pad (`CGameUI::togglePet`, `handle_TogglePet`). The
     /// original's toggle also calls a pet back; this only sends.
     bool pet_town = false;
 
     /// Step the pet's stance (Aggressive, Defensive, Passive): 'O' on the
-    /// desktop, the D-pad's Up on the console - one button for the tray of
+    /// desktop, the D-pad's Left on a pad - one button for the tray of
     /// three a pad cannot point at.
     bool pet_stance = false;
+
+    /// PORT: the D-pad's up and down alone: the skills tab's two skill sets (its buttons 1
+    /// and 2), and the same two in play.
+    bool dpad_up = false;
+    bool dpad_down = false;
 
     /// DIVERGENCE (desktop keyboard): the PC's 'K' straight to the skills tab, which the
     /// console reaches only by stepping the master menu's ring.

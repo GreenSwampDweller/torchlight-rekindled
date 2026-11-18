@@ -433,6 +433,10 @@ private:
     int find_node_index_by_widget(const std::string& widget_name) const;
     void set_widget_text(const std::string& widget_name, const std::string& text);
     void set_widget_image(const std::string& widget_name, const std::string& image_name);
+    /// PORT: the console layout's D-pad picture beside the item compare caption taken away,
+    /// the caption moved into its place. True when that layout is the one in use: the
+    /// caption then names the button in words.
+    bool hide_compare_dpad();
     void set_widget_visible(const std::string& widget_name, bool visible);
     /// Each direct child of the widget hidden, or back to its authored
     /// `VISIBLE`.

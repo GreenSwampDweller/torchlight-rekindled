@@ -1,6 +1,8 @@
 // The console's hotbar in play.
 #include "core/hotbar.h"
 
+#include "core/item_use.h"
+
 #include <cmath>
 
 namespace tl::core {
@@ -98,6 +100,38 @@ HotbarSlotView item_slot_view(const std::string& icon, int count) {
     }
     view.text = std::to_string(count);
     return view;
+}
+
+bool same_potion_kind(const ItemStats& bound, const ItemStats& item) {
+    if (item.unit_guid == bound.unit_guid) return true;
+    if (bound.effects.empty() || item.effects.empty()) return false;
+    return item.unittype == bound.unittype && item.effects[0].type == bound.effects[0].type;
+}
+
+int potion_slot_for(const Inventory& inventory, const ItemStats& bound) {
+    const int own = equipment_of_guid(inventory, bound.unit_guid);
+    if (own >= 0) return own;
+    int best = -1;
+    const std::vector<InventorySlot>& slots = inventory.slots();
+    for (size_t i = 0; i < slots.size(); ++i) {
+        const InventorySlot& slot = slots[i];
+        if (slot.count <= 0 || !same_potion_kind(bound, slot.item)) continue;
+        if (best < 0 || slot.item.level < slots[static_cast<size_t>(best)].item.level) {
+            best = static_cast<int>(i);
+        }
+    }
+    // The smallest stack of that unit, as the original takes one.
+    return best < 0 ? -1
+                    : equipment_of_guid(inventory, slots[static_cast<size_t>(best)].item.unit_guid);
+}
+
+int potion_count_for(const Inventory& inventory, const ItemStats& bound) {
+    int count = 0;
+    for (const InventorySlot& slot : inventory.slots()) {
+        if (slot.count <= 0 || !same_potion_kind(bound, slot.item)) continue;
+        count += slot.item.max_stack < 1 ? 1 : slot.count;
+    }
+    return count;
 }
 
 int equipment_count_of_guid(const Inventory& inventory, int64_t guid) {

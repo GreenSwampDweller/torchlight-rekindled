@@ -93,10 +93,10 @@ InputState scripted_frame(const std::string& press) {
     else if (press == "down") in.move_y = in.stick_y = -1.0f;
     else if (press == "left") in.move_x = in.stick_x = -1.0f;
     else if (press == "right") in.move_x = in.stick_x = 1.0f;
-    else if (press == "dleft") in.dpad_x = -1.0f;
-    else if (press == "dright") in.dpad_x = 1.0f;
-    else if (press == "dup") in.pet_stance = true;
-    else if (press == "ddown") in.pet_town = true;
+    else if (press == "dleft") in.dpad_x = -1.0f, in.pet_stance = true;
+    else if (press == "dright") in.dpad_x = 1.0f, in.pet_town = true;
+    else if (press == "dup") in.dpad_up = true;
+    else if (press == "ddown") in.dpad_down = true;
     else if (press == "a") in.confirm = true;
     else if (press == "b") in.skip = true;
     else if (press == "x") in.attack = true;

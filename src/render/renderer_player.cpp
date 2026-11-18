@@ -764,8 +764,19 @@ void Renderer::Impl::drive_player(float delta) {
     // Automap controls: toggle with 'M' / Right Stick click (a turned free camera's reset), zoom
     const bool map_toggle_edge = in.map_toggle && !map_toggle_held && !game_camera.touch.took_r3;
     map_toggle_held = in.map_toggle;
-    if (map_toggle_edge) {
-        automap.cycle_mode();
+    // PORT: on the inventory's own screen the button is item compare instead (below): the
+    // D-pad's left and right, which the console gives that, step the tabs here. And with the
+    // small map on a second display it turns that map between its two views, there: the full
+    // screen map would take the main screen and leave the second one empty.
+    const bool compare_button =
+        inventory_menu.visible() && inventory_menu.menu_mode() == MenuMode::Inventory;
+    const bool compare_button_edge = map_toggle_edge && compare_button;
+    if (map_toggle_edge && !compare_button) {
+        if (automap.on_second_screen()) {
+            if (automap.toggle_second_screen_level_map()) apply_second_screen(true);
+        } else {
+            automap.cycle_mode();
+        }
     }
     if (in.map_zoom_in) {
         automap.zoom_in();
@@ -780,6 +791,11 @@ void Renderer::Impl::drive_player(float delta) {
     const bool pet_town_edge = in.pet_town && !pet_town_held;
     pet_stance_held = in.pet_stance;
     pet_town_held = in.pet_town;
+    // PORT: the D-pad's up and down, the two skill sets on the skills tab and in play.
+    const bool dpad_up_edge = in.dpad_up && !dpad_up_held;
+    const bool dpad_down_edge = in.dpad_down && !dpad_down_held;
+    dpad_up_held = in.dpad_up;
+    dpad_down_held = in.dpad_down;
     // The skills tab gives the D-pad's up and down to the two skill sets
     // (buttons 1 and 2), so the pet's two jobs wait.
     const bool skills_tab_open =
@@ -827,14 +843,15 @@ void Renderer::Impl::drive_player(float delta) {
             edges.start = quit_edge;
             edges.back = back_edge;
             edges.other = menu_next_edge || menu_prev_edge || tab_next_edge || tab_prev_edge ||
-                          pet_stance_edge || pet_town_edge;
+                          pet_stance_edge || pet_town_edge || dpad_up_edge || dpad_down_edge;
             handle_pet_commands(in, edges);
         } else if (inventory_menu.spell_remove_open()) {
             // The replace-spell dialog, the third of `CGameUI`'s modal messages
             // (`+0x1898`), takes the pad the same way.
             handle_spell_remove(in, action_x_edge, action_y_edge, quit_edge, back_edge,
                                 menu_next_edge || menu_prev_edge || tab_next_edge ||
-                                    tab_prev_edge || pet_stance_edge || pet_town_edge);
+                                    tab_prev_edge || pet_stance_edge || pet_town_edge ||
+                                    dpad_up_edge || dpad_down_edge);
             confirm_held = in.confirm;
             skip_held = in.skip;
             tl::core::InputState zero_in = in;
@@ -894,8 +911,8 @@ void Renderer::Impl::drive_player(float delta) {
 
         if (inventory_menu.visible() && skills_tab) {
             SkillsTabPad pad;
-            pad.dpad_up = pet_stance_edge;
-            pad.dpad_down = pet_town_edge;
+            pad.dpad_up = dpad_up_edge;
+            pad.dpad_down = dpad_down_edge;
             pad.lt = menu_prev_edge;
             pad.rt = menu_next_edge;
             pad.y = action_y_edge;
@@ -910,11 +927,15 @@ void Renderer::Impl::drive_player(float delta) {
         if (inventory_menu.menu_mode() == MenuMode::Inventory) {
             const bool vendor_screen = inventory_menu.vendor() != VendorScreen::None;
             const bool vendor_tray = inventory_menu.focused_tray() == InventoryMenu::Tray::Vendor;
+            // PORT: the D-pad's left and right step the tabs as the left stick does. Its
+            // share of `move_x` is what the stick alone does not account for.
+            const float dpad_step = in.move_x - in.stick_x;
+            const float tab_x = std::abs(in.stick_x) > 0.5f ? in.stick_x : dpad_step;
             if (vendor_screen) {
                 tray_bumpers(true, tab_next_edge, tab_prev_edge);
-                if (std::abs(in.stick_x) > 0.5f) {
+                if (std::abs(tab_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
-                        inventory_menu.step_tray_tab(in.stick_x > 0.0f ? 1 : -1);
+                        inventory_menu.step_tray_tab(tab_x > 0.0f ? 1 : -1);
                         play_ui(tl::core::InterfaceSound::Navigate);
                         update_menu();
                     }
@@ -924,9 +945,9 @@ void Renderer::Impl::drive_player(float delta) {
                 }
             } else {
                 tray_bumpers(false, tab_next_edge, tab_prev_edge);
-                if (std::abs(in.stick_x) > 0.5f) {
+                if (std::abs(tab_x) > 0.5f) {
                     if (!inventory_stick_x_held) {
-                        inventory_menu.step_bag_tab(in.stick_x > 0.0f ? 1 : -1);
+                        inventory_menu.step_bag_tab(tab_x > 0.0f ? 1 : -1);
                         play_ui(tl::core::InterfaceSound::Navigate);
                         update_menu();
                     }
@@ -935,10 +956,12 @@ void Renderer::Impl::drive_player(float delta) {
                     inventory_stick_x_held = false;
                 }
             }
-            // The D-pad's left and right (codes 3 and 4) on the focused tray:
-            // item compare.
-            const bool compare_edge = in.dpad_x != 0.0f && !item_compare_held;
-            item_compare_held = in.dpad_x != 0.0f;
+            // Item compare: the console's codes 3 and 4 on the focused tray, the D-pad's
+            // left and right. PORT: the right stick's click here (above), the D-pad stepping
+            // the tabs; a keyboard's C still, which is those codes with no D-pad behind them.
+            const bool key_compare = in.dpad_x != 0.0f && std::abs(dpad_step) < 0.5f;
+            const bool compare_edge = compare_button_edge || (key_compare && !item_compare_held);
+            item_compare_held = key_compare;
             if (compare_edge) toggle_item_compare();
             step_item_tooltips(delta);
 
@@ -1204,6 +1227,24 @@ void Renderer::Impl::drive_player(float delta) {
     }
     // The hotbar: LB/RB potions; Y, B, LT, RT the mapped skills (over
     // CPlayer +0x840/+0x890). Nothing under the letterbox; B stays a cutscene's skip.
+    // PORT: the skill sets in play, as the skills tab has them: the D-pad's up is the first
+    // and its down the second; the second display's button is the other one. `switch_skill_set`
+    // with the skills menu shut refuses a set with nothing on its four buttons, as the console
+    // does.
+    if (free_to_act && !hud.letterboxed() && (dpad_up_edge || dpad_down_edge || second_set_tap)) {
+        const int wanted = dpad_up_edge     ? 0
+                           : dpad_down_edge ? 1
+                                            : (player_skills.skill_set() == 0 ? 1 : 0);
+        const tl::core::SkillSetSwitch switched =
+            tl::core::switch_skill_set(player_skills, wanted, /*skills_menu_open=*/false);
+        if (switched == tl::core::SkillSetSwitch::Switched) {
+            play_ui(tl::core::InterfaceSound::SkillAssign);
+            refresh_game_hud();
+        } else if (switched == tl::core::SkillSetSwitch::Refused) {
+            play_ui(tl::core::InterfaceSound::Error);
+        }
+    }
+    second_set_tap = false;
     if (free_to_act && !hud.letterboxed()) {
         // PORT: the second display's portal button: the first Town Portal Scroll carried, used
         // as the bag's A uses it (and refused where it is: in town, the voice says so).
@@ -1260,18 +1301,22 @@ void Renderer::Impl::drive_player(float delta) {
             second_skill_tap = tl::core::HotbarButton::None;
         }
         release_held_skill(pressed, held, (in.confirm && !confirm_held) || action_x_edge);
-        step_hotbar(pressed, held, in.move_x, in.move_y);
+        step_hotbar(pressed, held, in.stick_x, in.stick_y);
     }
     // After the slot loop: the hold and aim, the press, the
     // handler. attack_held is +0x55; a menu marks X in +0x57 instead,
     // so X still down when a menu goes is a fresh press.
-    step_attack_button(delta, attack_down, attack_down && !attack_held, in.move_x, in.move_y);
+    step_attack_button(delta, attack_down, attack_down && !attack_held, in.stick_x, in.stick_y);
     confirm_held = in.confirm;
     attack_held = attack_down;
 
     // Under the hold the stick aims and does not walk (the walk
     // is called only with `+0x1fe` clear).
     tl::core::InputState walk_in = in;
+    // PORT: the D-pad in play is the skill sets and the pet's commands, and does not walk:
+    // the stick alone does.
+    walk_in.move_x = in.stick_x;
+    walk_in.move_y = in.stick_y;
     if (held_before) {
         walk_in.move_x = 0.0f;
         walk_in.move_y = 0.0f;

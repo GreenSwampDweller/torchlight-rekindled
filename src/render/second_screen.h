@@ -10,9 +10,14 @@
 // carried, and a button for each spell learned from a scroll, which casts it. hit() says what
 // a tap on that screen is on.
 //
+// While the inventory is open on the main screen: the details of the item under its cursor,
+// beside those of the worn items it would replace, large (set_item_tips).
+//
 // The backdrop is drawn, not loaded: a bezel of ticks round the map and a scatter of ember
 // specks in the corners, on black. Nearly every pixel is off, for an OLED panel.
 #pragma once
+
+#include "core/equipment_tooltip.h"
 
 #include <OgreMaterial.h>
 #include <OgreRenderTargetListener.h>
@@ -68,6 +73,7 @@ public:
         int gold = 0;
         std::string floor;        ///< the level's name, as the HUD's own top right has it
         int portal_scrolls = 0;   ///< Town Portal Scrolls carried
+        int skill_set = 0;        ///< the skill set that is up, 0 or 1: what its button says
         std::string portal_icon;  ///< the scroll's icon, while one is carried
         /// The spells learned from scrolls, by their slot: whether there is one, its picture,
         /// and the whole seconds left before it can be cast again (0 when it can).
@@ -84,10 +90,18 @@ public:
     };
     void set_readout(const Readout& readout);
 
+    /// The details of the item the inventory has under its cursor and of the worn items it
+    /// stands against (`CGameUI`'s three item windows), drawn side by side as large as the
+    /// screen under the strip takes them: the main screen's own windows are small on a
+    /// handheld. While any are given they have the screen, in place of the map, the readout
+    /// and the buttons. Empty gives it back.
+    void set_item_tips(std::vector<tl::core::EquipmentTooltip> tips);
+    bool item_tips_shown() const { return !item_tips_.empty(); }
+
     /// What a tap at (`x`, `y`), in the window's pixels, is on. Nothing while the game's HUD
     /// is down; the strip is the HUD's own (GameHud::second_tap_at says what of it); the map is
     /// everything under the strip that is not a button.
-    enum class Tap { None, Map, Portal, Strip, Spell };
+    enum class Tap { None, Map, Portal, Strip, Spell, SkillSet };
     /// `spell` is given the slot of the spell a `Tap::Spell` is on.
     Tap hit(float x, float y, int* spell = nullptr) const;
 
@@ -120,6 +134,11 @@ private:
     Ogre::OverlayContainer* widget_root_ = nullptr;
     Ogre::OverlayContainer* word_root_ = nullptr;
     Ogre::PanelOverlayElement* portal_frame_ = nullptr;
+    /// The button that swaps the skill sets, in the strip's band left of its first slot: its
+    /// frame, the set it names, and where it is in the window's pixels.
+    Ogre::PanelOverlayElement* set_frame_ = nullptr;
+    Ogre::TextAreaOverlayElement* set_text_ = nullptr;
+    float set_left_ = 0.0f, set_top_ = 0.0f, set_size_ = 0.0f;
     Ogre::PanelOverlayElement* portal_icon_ = nullptr;
     Ogre::TextAreaOverlayElement* portal_count_ = nullptr;
     Ogre::TextAreaOverlayElement* portal_label_ = nullptr;
@@ -143,6 +162,27 @@ private:
         float left = 0.0f, top = 0.0f;  ///< in the window's pixels; `portal_size_` a side
     };
     std::array<SpellButton, Readout::kSpells> spell_buttons_{};
+
+    void build_item_overlays();
+    void destroy_item_overlays();
+    void layout_item_tips();
+
+    /// The item windows: a plate each under their words, in two overlays of their own.
+    struct ItemWindow {
+        Ogre::PanelOverlayElement* edge = nullptr;
+        Ogre::PanelOverlayElement* plate = nullptr;
+        std::vector<Ogre::TextAreaOverlayElement*> lines;
+    };
+    static constexpr size_t kItemWindows = 3;
+    std::array<ItemWindow, kItemWindows> item_windows_{};
+    Ogre::Overlay* item_plates_ = nullptr;
+    Ogre::Overlay* item_words_ = nullptr;
+    Ogre::OverlayContainer* item_plate_root_ = nullptr;
+    Ogre::OverlayContainer* item_word_root_ = nullptr;
+    Ogre::TexturePtr item_plate_texture_, item_edge_texture_;
+    Ogre::MaterialPtr item_plate_material_, item_edge_material_;
+    std::vector<tl::core::EquipmentTooltip> item_tips_;
+    std::string item_signature_;  ///< every text of `item_tips_`, to tell a change by
 
     /// Between the two viewport events: the main screen's overlays, hidden for this viewport,
     /// and this screen's, shown for it.
