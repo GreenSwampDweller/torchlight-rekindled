@@ -1,4 +1,5 @@
 // The gameplay half of render/renderer_effects.cpp (core/world.h).
+#include "core/run_config.h"
 #include "core/skill_grid.h"
 #include "core/world.h"
 
@@ -324,13 +325,22 @@ void World::turn_player_toward(const tl::core::Vec3& at, float dt) {
     player.face(tl::core::turn_toward(player.facing(), dx, dz, player_stats.turn_rate, dt));
 }
 
-void World::aim_position_skill(const tl::core::KnownSkill& skill, tl::core::SkillCaster& caster) {
+namespace {
+
+// Target types 1 `POSITION`, 11, 5 `POSITIONRANDOM` and 6 `POSITIONFLEE`: cast at a point.
+bool aims_at_position(const tl::core::KnownSkill& skill) {
     const tl::core::SkillProperty* property = skill.property(skill.effective);
     const int32_t type = property != nullptr
                              ? property->target_type
                              : (skill.def != nullptr ? skill.def->base.target_type : 0);
-    // Target types 1 `POSITION`, 11, 5 `POSITIONRANDOM` and 6 `POSITIONFLEE`.
-    if (type != 1 && type != 0xb && type != 5 && type != 6) return;
+    return type == 1 || type == 0xb || type == 5 || type == 6;
+}
+
+}  // namespace
+
+void World::aim_position_skill(const tl::core::KnownSkill& skill, tl::core::SkillCaster& caster) {
+    if (!aims_at_position(skill)) return;
+    const tl::core::SkillProperty* property = skill.property(skill.effective);
     const tl::core::Vec3 me = player.position();
     // The point stored (x and z, height 0); `--cast` aims at rest.
     tl::core::Vec3 point = pad_skill_target.has_value()
@@ -430,6 +440,12 @@ void World::step_hotbar(const std::array<bool, 7>& pressed, const std::array<boo
     pad_skill_target =
         pad_skill_point(*skill, stick_x, stick_y, down(tl::core::HotbarButton::LT) ? 1.0f : 0.0f,
                         down(tl::core::HotbarButton::RT) ? 1.0f : 0.0f);
+    // INVENTED (`aim_at_target`): a skill cast at a spot lands on the highlighted foe;
+    // aim_position_skill still keeps it within `RANGE`.
+    if (pad_aim_unit.has_value() && tl::core::run_config().aim_at_target &&
+        aims_at_position(*skill)) {
+        pad_skill_target = *pad_aim_unit;
+    }
     set_player_target_direction(*pad_skill_target);
     cast_player_skill(*skill, !press.continuing);
     cast_player_skill(*skill, false);

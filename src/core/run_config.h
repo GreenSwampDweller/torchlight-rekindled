@@ -57,6 +57,9 @@ struct RunConfig {
     bool mods_menu = true;
     /// The PC's mouse and keyboard controls in place of the pad's.
     bool mouse = false;
+    /// INVENTED: a pad skill cast at a spot lands on the highlighted foe, not at a
+    /// fixed distance ahead; off keeps the console's aim.
+    bool aim_at_target = true;
 };
 
 /// The text a new `config.txt` holds: `defaults` written out, with a line

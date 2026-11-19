@@ -97,6 +97,17 @@ TL_TEST(the_mods_menu_line_reads_back) {
     TL_CHECK(parse_run_config("mods_menu = 1\n", off).mods_menu);
 }
 
+TL_TEST(aim_at_target_is_on_by_default_and_written) {
+    TL_CHECK(RunConfig{}.aim_at_target);
+    RunConfig off;
+    off.aim_at_target = false;
+    const std::string text = run_config_text(off);
+    TL_CHECK(text.find("aim_at_target=0") != std::string::npos);
+    TL_CHECK(!parse_run_config(text, RunConfig{}).aim_at_target);
+    // A file from before the key keeps it on.
+    TL_CHECK(parse_run_config("debug=1\n", RunConfig{}).aim_at_target);
+}
+
 /// The free camera is a mod now: a new file has no line for it, and one from before is still read
 /// (it says whether the mod starts on).
 TL_TEST(the_free_camera_line_is_read_not_written) {

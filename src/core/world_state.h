@@ -295,6 +295,9 @@ public:
     /// The point stores before it casts (X360 `CCharacter +0x1c0`,
     /// Linux `+0x228`); unset, `--cast` aims as the pad at rest.
     std::optional<tl::core::Vec3> pad_skill_target;
+    /// INVENTED: where the pad's highlighted foe stands this frame, for `aim_at_target`;
+    /// unset with none or with a harmless one highlighted.
+    std::optional<tl::core::Vec3> pad_aim_unit;
 
     /// The player's `+0x228` (X360 `+0x1c0`): the last aimed-at point, from
     /// `setTargetDirection`, `castSkill` and `turnTowardPosition`;

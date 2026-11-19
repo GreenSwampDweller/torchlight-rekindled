@@ -61,7 +61,10 @@ std::string run_config_text(const RunConfig& defaults) {
         << "debug=" << (defaults.debug ? 1 : 0) << "\n"
         << "logs=" << (defaults.logs ? 1 : 0) << "\n"
         << "# fps_limit: the most frames a second the game draws; 0 for no limit.\n"
-        << "fps_limit=" << defaults.fps_limit << "\n";
+        << "fps_limit=" << defaults.fps_limit << "\n"
+        << "# aim_at_target: 1 puts a pad skill cast at a spot (Ember Strike, say) on the\n"
+        << "# highlighted foe; 0 casts it a set distance ahead, as the console did.\n"
+        << "aim_at_target=" << (defaults.aim_at_target ? 1 : 0) << "\n";
     if (kModsPage) {
         out << "# mods_menu: 1 shows the mods page before the game; 0 skips it and starts\n"
             << "# without any mods.\n"
@@ -96,6 +99,7 @@ RunConfig parse_run_config(const std::string& text, const RunConfig& defaults) {
         if (key == "free_camera") config.free_camera = on;
         if (key == "mods_menu") config.mods_menu = on;
         if (key == "mouse") config.mouse = on;
+        if (key == "aim_at_target") config.aim_at_target = on;
         if (key == "fps_limit") {
             const long number = std::strtol(value.c_str(), nullptr, 10);
             if (number >= 0 && number <= 1000) config.fps_limit = static_cast<unsigned>(number);

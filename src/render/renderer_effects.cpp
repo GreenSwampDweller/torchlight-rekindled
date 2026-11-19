@@ -323,6 +323,11 @@ bool Renderer::Impl::update_pad_selection(bool active) {
     pad_selected = selected;
     pad_selected_hostile = hostile;
     pad_selected_node = node;
+    pad_aim_unit.reset();
+    if (have && hostile && entity != nullptr && entity->getParentSceneNode() != nullptr) {
+        const Ogre::Vector3 at = entity->getParentSceneNode()->_getDerivedPosition();
+        pad_aim_unit = tl::core::Vec3{at.x, at.y, at.z};
+    }
     return have;
 }
 
