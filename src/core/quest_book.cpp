@@ -1854,6 +1854,20 @@ void QuestLog::populate_level(const std::string& level_dungeon, int level_depth,
     }
 }
 
+// PORT: see the header.
+bool QuestLog::unplace(const QuestUnitTag& tag) {
+    QuestEntry* entry = find(tag.quest);
+    if (entry == nullptr) return false;
+    for (std::vector<QuestObjective>* list : {&entry->acquire, &entry->defeat, &entry->populate}) {
+        for (QuestObjective& objective : *list) {
+            if (objective.id != tag.objective || objective.done || !objective.populated) continue;
+            objective.populated = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 // PORT: the active quests the journal lists (`shows_in_journal`).
 // `CQuestMenuXenon`'s rows and `CQuestDialogMenu::onClick`'s count: the held
 // quests in their held order that have journal details.

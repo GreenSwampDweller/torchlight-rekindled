@@ -945,8 +945,8 @@ tl::core::QuestDungeonSource World::quest_dungeon_source() {
         out.clear_history = [this, upper_name]() {
             if (config.travel == nullptr) return;
             tl::core::clear_dungeon_history(*config.travel, upper_name);
-            tl::core::update_stored_levels(*config.travel, level_dungeon, level_depth, {},
-                                           level_memory_rules());
+            tl::core::update_stored_levels(*config.travel, level_dungeon, level_depth,
+                                           quest_level_claims(), level_memory_rules());
         };
         return out;
     };

@@ -1773,8 +1773,8 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // on the player.
                 if (config.travel == nullptr) break;
                 tl::core::clear_dungeon_history(*config.travel, event.name);
-                tl::core::update_stored_levels(*config.travel, level_dungeon, level_depth, {},
-                                               level_memory_rules());
+                tl::core::update_stored_levels(*config.travel, level_dungeon, level_depth,
+                                               quest_level_claims(), level_memory_rules());
                 TL_LOG_INFO("script: the player's history of '%s' is cleared", event.name.c_str());
                 break;
             }

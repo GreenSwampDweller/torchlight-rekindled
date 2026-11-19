@@ -1452,6 +1452,34 @@ TL_TEST(a_quest_places_its_unit_on_its_own_floor_once) {
     TL_CHECK_EQ(placed, 1);
 }
 
+// PORT: an objective whose unit could not be made is unmarked and made on the next load.
+TL_TEST(an_unplaced_quest_unit_is_made_on_the_next_load) {
+    QuestDefinition quest;
+    TL_CHECK(parse_quest_definition(vasman_quest_one(), quest));
+    QuestBook book;
+    book.add(quest);
+    QuestLog log;
+    log.set_book(&book);
+    TL_CHECK(log.accept(*book.find("Vasman_Quest1"), 2, 1u, reward_graphs()));
+
+    int tried = 0;
+    tl::core::QuestUnitTag last;
+    auto fail = [&](const tl::core::QuestEntry&, const QuestObjective&,
+                    const tl::core::QuestUnitTag& tag) {
+        ++tried;
+        last = tag;
+    };
+    log.populate_level("MAIN", 0, fail);
+    TL_CHECK_EQ(tried, 1);
+    TL_CHECK(log.unplace(last));
+    TL_CHECK(!log.find("Vasman_Quest1")->acquire.at(0).populated);
+    TL_CHECK(!log.unplace(last));  // nothing placed to take back
+    log.populate_level("MAIN", 0, fail);
+    TL_CHECK_EQ(tried, 2);
+    TL_CHECK(log.find("Vasman_Quest1")->acquire.at(0).populated);
+    TL_CHECK(!log.unplace(tl::core::QuestUnitTag{"NoSuchQuest", last.objective}));
+}
+
 // `unitPickedUp`: an objective that creates its unit counts only the one it tagged.
 TL_TEST(a_created_objective_counts_only_its_own_tagged_unit) {
     QuestDefinition quest;
