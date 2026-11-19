@@ -240,13 +240,34 @@ void World::sync_equipped_weapon() {
 // PORT: the level's quest units placed through `QuestLog::populate_level`.
 void World::populate_quests() {
     load_quest_book();
+    // An objective is marked placed before its units are made (`CQuestUnitData::populate`
+    // sets `+0xb9` first). The original's `createUnit` always finds a place; where this
+    // port's could not place even one, the mark is taken back so the next load tries again
+    // instead of leaving a quest that can never be finished.
+    struct Tries {
+        tl::core::QuestUnitTag tag;
+        int placed = 0;
+    };
+    std::vector<Tries> tries;
     quest_log.populate_level(
         level_dungeon, level_depth,
-        [this](const tl::core::QuestEntry& entry, const tl::core::QuestObjective& objective,
-               const tl::core::QuestUnitTag& tag) {
-            create_quest_unit(objective, tag,
-                              entry.definition != nullptr ? entry.definition->guid : -1);
+        [this, &tries](const tl::core::QuestEntry& entry, const tl::core::QuestObjective& objective,
+                       const tl::core::QuestUnitTag& tag) {
+            const bool placed = create_quest_unit(
+                objective, tag, entry.definition != nullptr ? entry.definition->guid : -1);
+            auto found = std::find_if(tries.begin(), tries.end(), [&](const Tries& t) {
+                return t.tag.quest == tag.quest && t.tag.objective == tag.objective;
+            });
+            if (found == tries.end()) found = tries.insert(tries.end(), Tries{tag, 0});
+            if (placed) ++found->placed;
         });
+    for (const Tries& t : tries) {
+        if (t.placed != 0) continue;
+        if (quest_log.unplace(t.tag)) {
+            TL_LOG_WARN("quest '%s': objective %d placed nothing; it is tried again on the next load",
+                        t.tag.quest.c_str(), t.tag.objective);
+        }
+    }
 }
 
 // PORT: an item's quest tag from its quest GUID, through the port's quest book.
@@ -1155,14 +1176,14 @@ ogre::Vector3 World::dropped_to_ground(const ogre::Vector3& at) const {
     return place;
 }
 
-void World::create_quest_unit(const tl::core::QuestObjective& objective,
+bool World::create_quest_unit(const tl::core::QuestObjective& objective,
                               const tl::core::QuestUnitTag& tag, int64_t quest_guid) {
     // `spawnUnit` places nothing without the resolved
     // unit (`getBaseUnitDataGroup`).
     if (objective.resolved.empty()) {
         TL_LOG_WARN("quest '%s': objective '%s' resolved to no unit; nothing placed",
                     tag.quest.c_str(), objective.unit_name().c_str());
-        return;
+        return false;
     }
 
     // `createUnit`: kind 0 the `Quest Boss` markers, kind
@@ -1190,10 +1211,20 @@ void World::create_quest_unit(const tl::core::QuestObjective& objective,
                 }
             }
         }
+        // PORT: a remembered floor's characters are put back after the quests populate
+        // (`restore_level_state`), so where they stood stands in for them.
+        if (near.empty() && config.travel != nullptr && !level_dungeon.empty()) {
+            if (const tl::formats::LevelSaveState* remembered =
+                    tl::core::get_level_saved_state(*config.travel, level_dungeon, level_depth)) {
+                for (const tl::formats::CharacterSaveState& c : remembered->characters) {
+                    near.emplace_back(c.position.x, c.position.y, c.position.z);
+                }
+            }
+        }
         if (near.empty() || !nav.ready()) {
             TL_LOG_WARN("quest '%s': nowhere to place '%s'", tag.quest.c_str(),
                         objective.unit_name().c_str());
-            return;
+            return false;
         }
         const int pick =
             tl::core::game_random().integer_between(0, static_cast<int>(near.size()) - 1);
@@ -1208,7 +1239,8 @@ void World::create_quest_unit(const tl::core::QuestObjective& objective,
     }
 
     const int64_t node = spawn_quest_unit(objective, tag, quest_guid, at, facing);
-    if (node == 0) return;
+    // An item is placed with no node to answer; only a character's 0 is a failure.
+    if (node == 0) return items.find(objective.resolved) != nullptr;
     // `createUnit`: `UNIQUE_MONSTER_NAME` names the character (`+0x4c0`).
     if (!objective.unique_monster_name.empty()) unit_names[node] = objective.unique_monster_name;
     const auto named = unit_names.find(node);
@@ -1217,6 +1249,7 @@ void World::create_quest_unit(const tl::core::QuestObjective& objective,
                 named != unit_names.end() ? named->second.c_str() : "", static_cast<double>(at.x),
                 static_cast<double>(at.y), static_cast<double>(at.z),
                 objective.make_champion ? ", a champion" : "");
+    return true;
 }
 
 int64_t World::spawn_quest_unit(const tl::core::QuestObjective& objective,

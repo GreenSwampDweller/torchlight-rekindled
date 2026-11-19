@@ -37,6 +37,23 @@ tl::core::LevelMemoryRules World::level_memory_rules() const {
     return rules;
 }
 
+// `CPlayer::updateStoredLevels` walks the player's quests (`CPlayer+0x868`), each with
+// whether it has details (`getQuestDetails`), its dungeon (+0x30) and its floor (+0x20).
+// A random quest's floor kept this way keeps its placed unit: forgotten, the floor is made
+// again without it while the objective stays placed, and the quest cannot be finished.
+std::vector<tl::core::QuestLevelClaim> World::quest_level_claims() const {
+    std::vector<tl::core::QuestLevelClaim> claims;
+    for (const tl::core::QuestEntry& entry : quest_log.entries()) {
+        if (entry.definition == nullptr) continue;
+        tl::core::QuestLevelClaim claim;
+        claim.has_details = tl::core::QuestLog::shows_in_journal(*entry.definition);
+        claim.dungeon = entry.definition->dungeon;
+        claim.depth = entry.depth;
+        claims.push_back(std::move(claim));
+    }
+    return claims;
+}
+
 std::optional<tl::core::ItemStats> World::item_from_save(const tl::formats::ItemSaveState& item) {
     ensure_item_index();
     ensure_effect_data();
@@ -766,11 +783,10 @@ void World::store_level_state() {
     const size_t items = state.items.size();
     const size_t logic = state.logic.size();
 
-    // Step 11. The quests `updateStoredLevels` asks about (`CPlayer+0x868`) are
-    // the random quests bound to a dungeon level, which this engine does not
-    // generate, so none holds a level.
+    // Step 11. A level one of the player's quests is bound to is kept.
     step(tl::core::StoreStep::Kept);
-    tl::core::update_stored_levels(*travel, level_dungeon, level_depth, {}, level_memory_rules());
+    tl::core::update_stored_levels(*travel, level_dungeon, level_depth, quest_level_claims(),
+                                   level_memory_rules());
     step(tl::core::StoreStep::Done);
     TL_LOG_INFO(
         "level: %s depth %d remembered (%zu character(s), %zu item(s), %zu logic "

@@ -931,6 +931,11 @@ public:
                         const std::function<void(const QuestEntry&, const QuestObjective&,
                                                  const QuestUnitTag&)>& create_unit);
 
+    /// PORT: a held quest's objective that `populate_level` marked placed but whose units
+    /// could not be made, unmarked so the next `populate_level` makes them. False when the
+    /// tag names no such unfinished, placed objective.
+    bool unplace(const QuestUnitTag& tag);
+
     /// The events the original raises on the quest manager
     /// (`CBaseUnit::questEventFire` -> `CQuestManager::questEventUpdate`
     /// > `CQuest::questEventUpdate`),

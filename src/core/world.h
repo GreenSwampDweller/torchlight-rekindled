@@ -611,6 +611,9 @@ public:
     bool player_motion_held();
     /// `CGameGlobals +0x2c0 .. +0x2c8` (`reload`).
     tl::core::LevelMemoryRules level_memory_rules() const;
+    /// The player's quests as `updateStoredLevels` asks about them (`CPlayer+0x868`): a level
+    /// one of them is bound to is never forgotten.
+    std::vector<tl::core::QuestLevelClaim> quest_level_claims() const;
     /// Increment a journal statistic on the player and log it (except steps).
     void count_journal(tl::core::JournalStatistic stat, int32_t amount = 1);
     std::string rules_path_for(const std::string& layout_path);
@@ -1132,7 +1135,8 @@ public:
     ogre::Vector3 character_to_ground(const ogre::Vector3& at, float collision_radius);
     /// The sound tables a gold pile's bank reads and `g_Rand` (`make_gold_pile`).
     tl::core::GoldPileSounds gold_sounds();
-    void create_quest_unit(const tl::core::QuestObjective& objective,
+    /// PORT: false when nothing could be placed.
+    bool create_quest_unit(const tl::core::QuestObjective& objective,
                            const tl::core::QuestUnitTag& tag, int64_t quest_guid);
     /// `CQuestUnitData::spawnUnit` past its checks; the
     /// character's node, or 0.
