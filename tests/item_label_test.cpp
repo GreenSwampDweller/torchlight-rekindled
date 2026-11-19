@@ -140,6 +140,74 @@ TL_TEST(item_label_is_sized_and_kept_on_screen) {
     TL_CHECK(near(left.x, 0.0f) && near(left.y, 0.0f));
 }
 
+namespace {
+
+// The HUD's frame: (-24, -9), grown by (48, 18).
+constexpr tl::core::ItemLabelFrame kFrame{-24.0f, -9.0f, 48.0f, 18.0f};
+
+bool frames_overlap(const tl::core::ItemLabelRect& a, const tl::core::ItemLabelRect& b) {
+    const float a_left = a.x + kFrame.left, a_right = a_left + a.width + kFrame.wide;
+    const float b_left = b.x + kFrame.left, b_right = b_left + b.width + kFrame.wide;
+    const float a_top = a.y + kFrame.top, a_bottom = a_top + a.height + kFrame.tall;
+    const float b_top = b.y + kFrame.top, b_bottom = b_top + b.height + kFrame.tall;
+    return a_left < b_right && b_left < a_right && a_top < b_bottom && b_top < a_bottom;
+}
+
+}  // namespace
+
+/// Stacked Labels: a label on another's spot goes just above it, the next just below the first
+/// (the nearer free spot); the first keeps its own. Labels side by side are left alone.
+TL_TEST(item_labels_stack_without_overlap) {
+    const tl::core::ItemLabelRect size = tl::core::item_label_size(60.0f, 15.0f, 1.0f);
+    const tl::core::ItemLabelRect spot =
+        tl::core::place_item_label(size, 640.0f, 360.0f, 1280.0f, 720.0f);
+    std::vector<tl::core::ItemLabelRect> pile{spot, spot, spot};
+    tl::core::stack_item_labels(pile, kFrame, 2.0f, 720.0f);
+    // A frame is 19 + 18 = 37 tall; 2 apart, a step is 39.
+    TL_CHECK(near(pile[0].y, 350.5f));
+    TL_CHECK(near(pile[1].y, 350.5f - 39.0f));
+    TL_CHECK(near(pile[2].y, 350.5f + 39.0f));
+    TL_CHECK(near(pile[1].x, spot.x) && near(pile[2].x, spot.x));
+
+    tl::core::ItemLabelRect beside = spot;
+    beside.x += 200.0f;
+    std::vector<tl::core::ItemLabelRect> apart{spot, beside};
+    tl::core::stack_item_labels(apart, kFrame, 2.0f, 720.0f);
+    TL_CHECK(near(apart[0].y, spot.y) && near(apart[1].y, spot.y));
+}
+
+/// At the top of the screen there is no room above: the second label goes below.
+TL_TEST(item_labels_stack_inside_the_screen) {
+    const tl::core::ItemLabelRect size = tl::core::item_label_size(60.0f, 15.0f, 1.0f);
+    const tl::core::ItemLabelRect top =
+        tl::core::place_item_label(size, 640.0f, 2.0f, 1280.0f, 720.0f);
+    std::vector<tl::core::ItemLabelRect> pile{top, top};
+    tl::core::stack_item_labels(pile, kFrame, 2.0f, 720.0f);
+    TL_CHECK(near(pile[0].y, 0.0f));
+    TL_CHECK(near(pile[1].y, 39.0f));
+}
+
+/// A heap of loot - labels of several widths, anchors a few pixels apart - ends with no two
+/// frames overlapping, every label still near its item.
+TL_TEST(item_labels_stack_a_heap) {
+    std::vector<tl::core::ItemLabelRect> heap;
+    // 14: a column of 39-pixel steps around the middle of a 720-line screen holds 17.
+    for (int i = 0; i < 14; ++i) {
+        const tl::core::ItemLabelRect size =
+            tl::core::item_label_size(40.0f + 13.0f * static_cast<float>(i % 5), 15.0f, 1.0f);
+        heap.push_back(tl::core::place_item_label(size, 600.0f + 7.0f * static_cast<float>(i % 4),
+                                                  360.0f + 5.0f * static_cast<float>(i % 3),
+                                                  1280.0f, 720.0f));
+    }
+    const std::vector<tl::core::ItemLabelRect> before = heap;
+    tl::core::stack_item_labels(heap, kFrame, 2.0f, 720.0f);
+    for (size_t i = 0; i < heap.size(); ++i) {
+        TL_CHECK(near(heap[i].x, before[i].x));
+        TL_CHECK(std::fabs(heap[i].y - before[i].y) < 20.0f * 39.0f);
+        for (size_t j = i + 1; j < heap.size(); ++j) TL_CHECK(!frames_overlap(heap[i], heap[j]));
+    }
+}
+
 TL_TEST(drop_particle_by_kind) {
     TL_CHECK_EQ(tl::core::drop_particle_name("GLYPH_PARTICLE", true, true, true),
                 std::string("GLYPH_PARTICLE"));
