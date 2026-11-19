@@ -1290,6 +1290,9 @@ public:
     size_t trigger_count() const;
     size_t timeline_count() const;
     bool timelines_playing() const;
+    /// PORT: the layout has `LAYOUT CONTROL` timelines and none has ever run: each is
+    /// stopped at or before its beginning.
+    bool layout_timelines_unstarted() const;
 
     /// Whether anything is running: a timeline playing, a camera taken or a
     /// dialog up.

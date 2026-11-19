@@ -107,6 +107,8 @@ struct ScriptEvent {
     std::string name;
 
     bool on = false;  ///< SetVisible / SetEnabled / GameState / PlayerEnabled
+    /// SetEnabled: the node is a plain `Layout Link` (not a particle or timeline link).
+    bool plain_link = false;
     Vec3 position;    ///< MoveNode, CameraLookAt, MoveUnit, WalkPlayer, Spawn
 
     /// CameraOn: the node the camera follows, or 0.

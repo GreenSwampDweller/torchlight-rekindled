@@ -1166,6 +1166,17 @@ bool LevelScript::timelines_playing() const {
     return false;
 }
 
+// PORT: see the header.
+bool LevelScript::layout_timelines_unstarted() const {
+    bool any = false;
+    for (const Object& o : objects_) {
+        if (o.timeline == nullptr || !o.tl_layout_control) continue;
+        if (o.tl_playing || 0.0f < o.tl_time) return false;
+        any = true;
+    }
+    return any;
+}
+
 // PORT: the level machine's own bookkeeping: an accessor.
 bool LevelScript::busy() const {
     if (!dialogs_.empty() || camera_holder_ != 0) return true;
@@ -1430,10 +1441,14 @@ void LevelScript::input(int64_t to, uint32_t in, QuestState& quests,
         case type::kLayoutLink:
         case type::kParticleLink:
             switch (in) {
-                case kEnable: emit_enabled(true); return;
+                case kEnable:
+                    emit_enabled(true);
+                    out.back().plain_link = o.type == type::kLayoutLink;
+                    return;
                 case kDisable: emit_enabled(false); return;
                 case kEnableAndShow:
                     emit_enabled(true);
+                    out.back().plain_link = o.type == type::kLayoutLink;
                     emit_visible(true);
                     return;
                 case kDisableAndHide:

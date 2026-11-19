@@ -1476,6 +1476,28 @@ void Renderer::Impl::apply_script_events(const std::vector<tl::core::ScriptEvent
                 // and the town's cutscene opens the way to the mine by
                 // switching two of them off.
                 apply_path_blocker(event.node_id, event.on, &nodes, /*live=*/true);
+                // INVENTED: a plain `Layout Link` authored disabled and switched on by the
+                // script starts its layout (`CLayout::start`, its `LAYOUT CONTROL` timelines
+                // from the beginning) if they have never run. The port stops a plain link's
+                // timelines on load and steps a disabled link's layout like any other, so
+                // without this a layout meant to come alive when enabled never does: the
+                // crypt lever puzzle's last bridge (`EXTEND_BRIDGE_01`) kept the path
+                // blocker its `ResetProperties` timeline lifts, and could not be crossed.
+                if (event.on && event.plain_link) {
+                    const size_t machines = nested_scripts.size();
+                    for (size_t i = 0; i < machines; ++i) {
+                        NestedScript& machine = nested_scripts[i];
+                        if (machine.owner != event.node_id || machine.owner_nodes != &nodes) continue;
+                        if (machine.particle || !machine.script.layout_timelines_unstarted()) continue;
+                        std::vector<tl::core::ScriptEvent> inner;
+                        machine.running = true;
+                        machine.script.play_layout_timelines(quest_log.state(), inner,
+                                                             /*backwards=*/false, /*restart=*/true);
+                        if (!inner.empty()) apply_script_events(inner, machine.nodes);
+                        TL_LOG_INFO("script: enabling '%s' starts its linked layout",
+                                    event.name.c_str());
+                    }
+                }
                 // Otherwise enabling is the script object's own state (a trigger stops
                 // testing, a timer counting), not the scene's.
                 break;
