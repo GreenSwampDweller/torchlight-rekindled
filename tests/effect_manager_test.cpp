@@ -4,6 +4,7 @@
 #include "core/combat.h"
 
 #include <cmath>
+#include "core/random.h"
 #include "core/skills.h"
 #include "test_support.h"
 
@@ -422,6 +423,34 @@ TL_TEST(add_affix_by_name_clones_from_the_book_and_needs_one) {
     TL_CHECK(manager.add_affix_by_name("set_bonus", 1, &book));  // the book upper-cases
     TL_CHECK_EQ(manager.affixes().size(), 1u);
     TL_CHECK(std::fabs(manager.effect_value(0x34) - 3.0f) < 0.001f);
+}
+
+// A bag carried across a level change: its set bonuses were added with the old level's
+// graphs, freed with it, and clearing them out rolls each effect again.
+TL_TEST(rebind_graphs_points_the_held_affixes_at_the_new_tables) {
+    const EffectTypeTable types = shipped_types();
+    const tl::core::StatBook fresh;
+    tl::core::AffixBook book;
+    book.add(make_affix("SET_BONUS", -1.0f, {make_effect("ONE", 0x34, 3.0f, kDurationAlways)}));
+    book.add(make_affix("PLAIN", -1.0f, {make_effect("TWO", 0x34, 1.0f, kDurationAlways)}));
+    EffectManager manager;
+    {
+        const tl::core::StatBook left;
+        manager.set_context(context(types, left));
+        tl::core::EffectRolls rolls;
+        rolls.graphs = &left;
+        rolls.rng = &tl::core::volatile_random();
+        TL_CHECK(manager.add_affix_by_name("SET_BONUS", 1, &book, -1.0f, rolls));
+        TL_CHECK(manager.add_affix_by_name("PLAIN", 1, &book));
+    }
+    manager.set_context(context(types, fresh));
+    manager.rebind_graphs(&fresh);
+    TL_CHECK(manager.affixes()[0].rolls.graphs == &fresh);
+    // One added without a roll stream keeps none.
+    TL_CHECK(manager.affixes()[1].rolls.graphs == nullptr);
+    manager.clear_out_affix_effects();
+    manager.calculate_effect_values();
+    TL_CHECK(std::fabs(manager.effect_value(0x34)) < 0.001f);
 }
 
 // `CAffix::addEffectsToEffectManager`: each effect cloned,

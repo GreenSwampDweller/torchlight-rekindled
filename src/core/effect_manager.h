@@ -271,6 +271,11 @@ public:
     /// affixes stay, and the cache is not touched.
     void clear_out_affix_effects();
 
+    /// PORT: the stat graphs every held affix rolls with, from now on. A manager carried
+    /// across a level change still points at the tables of the renderer that was left,
+    /// which are freed; the console keeps one set of tables for the whole run.
+    void rebind_graphs(const StatBook* graphs);
+
     /// `CEffectManager::clearEffects(bool)`.
     /// `remove_effects` true (`CEnchantMenu::performInteraction`) swap-removes
     /// from all three lists every effect whose type is not 0x3e (`PERCENT BLOCK

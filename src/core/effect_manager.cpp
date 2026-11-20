@@ -476,6 +476,13 @@ void EffectManager::clear_out_affix_effects() {
     for (LiveAffix& affix : affixes_) clear_effects_from_owner(affix);
 }
 
+void EffectManager::rebind_graphs(const StatBook* graphs) {
+    // An affix added without a roll stream keeps none.
+    for (LiveAffix& affix : affixes_) {
+        if (affix.rolls.graphs != nullptr) affix.rolls.graphs = graphs;
+    }
+}
+
 void EffectManager::clear_effects(bool remove_effects) {
     // `CEffectManager::clearEffects(bool)`.
     if (remove_effects) {

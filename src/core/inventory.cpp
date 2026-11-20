@@ -1027,6 +1027,9 @@ void Inventory::set_owner(const UnitTypeHierarchy* unit_types,
 // PORT: the effect half handed its tables, and the values worked out again.
 void Inventory::set_effect_context(const InventoryEffectContext& context) {
     effect_context_ = context;
+    // A bag carried across a level change: its set bonuses roll with the old level's graphs,
+    // freed with it, as they are cleared out. They take the new ones first.
+    effects_.rebind_graphs(context.graphs);
     calculate_effect_values();
 }
 
